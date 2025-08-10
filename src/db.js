@@ -31,10 +31,6 @@ export default class DB {
     new Cron().register('save', this.save.bind(this), saveInterval);
   }
 
-  get rawData() {
-    return JSON.stringify(this.data, null, "\t");
-  }
-
   async create() {
     const { rootPath } = config;
     const { file, schema } = config.orm.db;
@@ -49,16 +45,18 @@ export default class DB {
       dbSchema = {};
       log.db('Unable to load DB schema from file, using empty schema instead');
     }
+
+    const data = deepCopy(dbSchema);
     
-    this.data = deepCopy(dbSchema);
-    
-    createFile(`${rootPath}/${file}`, this.rawData);
+    createFile(`${rootPath}/${file}`, data, { json: true });
+
+    return data;
   }
   
   async save() {
     const { file } = config.orm.db;
 
-    await updateFile(file, this.rawData);
+    await updateFile(file, this.data, { json: true });
 
     log.db(`DB has been successfully saved to ${file}`);
   }
@@ -66,9 +64,7 @@ export default class DB {
   async retrieve() {
     const { file } = config.orm.db;
 
-    const data = await readFile(file, { json: true, missingFileCallback: this.create.bind(this) });
-
-    if (data) this.data = data;
+    this.data = await readFile(file, { json: true, missingFileCallback: this.create.bind(this) });
   }
 
   /** TODO: We need ORM specific reload logic that replaces models attributes when loading from DB */
