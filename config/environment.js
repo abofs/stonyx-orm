@@ -9,10 +9,12 @@ const {
 } = process;
 
 export default {
+  logColor: 'white',
+  logMethod: 'db',
+  
   db: {
     autosave: DB_AUTO_SAVE ?? 'false',
     file: DB_FILE ?? 'db.json',
-    logColor: 'white',
     saveInterval: DB_SAVE_INTERVAL ?? 60 * 60, // 1 hour
     schema: DB_SCHEMA_PATH ?? './config/db-schema.js'
   },
