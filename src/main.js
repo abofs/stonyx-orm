@@ -26,7 +26,6 @@ import { kebabCaseToPascalCase, pluralize } from "@stonyx/utils/string";
 import baseTransforms from "./transforms.js";
 
 export default class Orm {
-  ready = this.loadDependencies();
   initialized = false;
   
   models = {};
@@ -35,13 +34,13 @@ export default class Orm {
 
   constructor() {
     if (Orm.instance) return Orm.instance;
+
     Orm.instance = this;
   }
 
-  async loadDependencies() {
+  async init() {
     const { paths } = config.orm;
-
-    await Promise.all(['Model', 'Serializer', 'Transform'].map(type => {
+    const promises = ['Model', 'Serializer', 'Transform'].map(type => {
       const lowerCaseType = type.toLowerCase();
       const path = paths[lowerCaseType];
       if (!path) throw new Error(`Configuration Error: ORM path for "${type}" must be defined.`);
@@ -52,9 +51,12 @@ export default class Orm {
 
         return this[pluralize(lowerCaseType)][alias] = exported;
       }, { ignoreAccessFailure: true, rawName: true });
-    }));
+    });
 
-    await new DB().init();
+    promises.push(new DB().init());
+
+    await Promise.all(promises);
+    
     this.initialized = true;
   }
 

@@ -22,7 +22,7 @@ export default class DB {
   }
 
   async init() {
-    this.data = await this.retrieve();
+    await this.retrieve();
 
     const { autosave, saveInterval } = config.orm.db;
 
@@ -36,6 +36,7 @@ export default class DB {
   }
 
   async create() {
+    const { rootPath } = config;
     const { file, schema } = config.orm.db;
 
     if (!file) throw new Error('Configuration Error: ORM DB file path must be defined.');
@@ -43,16 +44,15 @@ export default class DB {
     let dbSchema;
 
     try {
-      dbSchema = await import(schema);
+      dbSchema = (await import(`${rootPath}/${schema}`)).default;
     } catch (error) {
       dbSchema = {};
       log.db('Unable to load DB schema from file, using empty schema instead');
     }
     
-    const data = deepCopy(schema);
-    createFile(file, this.rawData);
+    this.data = deepCopy(dbSchema);
     
-    return data;
+    createFile(`${rootPath}/${file}`, this.rawData);
   }
   
   async save() {
@@ -66,7 +66,9 @@ export default class DB {
   async retrieve() {
     const { file } = config.orm.db;
 
-    return readFile(file, { json: true, missingFileCallback: this.create.bind(this) });
+    const data = await readFile(file, { json: true, missingFileCallback: this.create.bind(this) });
+
+    if (data) this.data = data;
   }
 
   /** TODO: We need ORM specific reload logic that replaces models attributes when loading from DB */
