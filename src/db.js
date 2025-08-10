@@ -56,7 +56,7 @@ export default class DB {
   async save() {
     const { file } = config.orm.db;
 
-    await updateFile(file, this.data, { json: true });
+    await updateFile(`${config.rootPath}/${file}`, this.data, { json: true });
 
     log.db(`DB has been successfully saved to ${file}`);
   }
