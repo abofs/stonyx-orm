@@ -1,0 +1,7 @@
+# dependencies
+/node_modules/
+
+# os / IDE
+.vscode/*
+*.vsix%
+*DS_Store*
