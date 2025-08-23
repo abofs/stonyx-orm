@@ -65,7 +65,6 @@ export default class BaseSerializer {
     const keys = Object.keys(model).filter(key => !RESERVED_KEYS.includes(key));
     const pathPrefix = path ? `${path}.` : '';
     const { __data:parsedData, __relationships:relatedRecords } = record;
-    const { postTransform } = model;
 
     for (const key of keys) {
       const subPath = this.map[key] || key;
@@ -89,21 +88,24 @@ export default class BaseSerializer {
         continue;
       }
 
-      // We access modelProperty.value twice due to getter/setter in ModelProperty class
-      handler.value = data;
-      let transformedValue = handler.value;
+      Object.defineProperty(record, key, {
+        enumerable: true,
+        configurable: true,
+        get: () => handler.value,
+        set(newValue) {
+          handler.value = newValue;
+          parsedData[key] = handler.value;
+        }
+      });
 
-      if (postTransform) transformedValue = postTransform(transformedValue);
-
-      parsedData[key] = transformedValue;
-      record[key] = handler;
+      record[key] = data;
     }
 
     // Serialize computed properties
     for (const [key, getter] of getComputedProperties(this.model)) {
       Object.defineProperty(record, key, {
-        get: () => getter.call(record),
         enumerable: true,
+        get: () => getter.call(record)
       });
     }
 

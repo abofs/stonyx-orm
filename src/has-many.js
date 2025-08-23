@@ -5,7 +5,7 @@ import { makeArray } from '@stonyx/utils/object';
 export default function hasMany(modelName) {
   return (sourceRecord, rawData) => {
     const { __name: sourceModelName } = sourceRecord.__model;
-    const relationshipId = sourceRecord.id._value;
+    const relationshipId = sourceRecord.id;
     const relationship = getRelationshipInfo('hasMany', sourceModelName, modelName, relationshipId);    
     const modelStore = store.get(modelName);
     const output = !rawData ? [] : makeArray(rawData).map(elementData => {
@@ -20,7 +20,7 @@ export default function hasMany(modelName) {
       }
 
       // Populate belongTo side if the relationship is defined
-      const otherSide = relationships.get('belongsTo').get(modelName)?.get(sourceModelName)?.get(record.id._value);
+      const otherSide = relationships.get('belongsTo').get(modelName)?.get(sourceModelName)?.get(record.id);
 
       if (otherSide) Object.assign(otherSide, sourceRecord);
 

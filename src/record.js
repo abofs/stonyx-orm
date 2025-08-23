@@ -18,7 +18,7 @@ export default class Record {
 
       for (const [ key, childRecord ] of Object.entries(this.__relationships)) {
         relatedIds[key] = Array.isArray(childRecord) 
-        ? childRecord.map(r => r.id._value)
+        ? childRecord.map(r => r.id)
         : childRecord?.id?._value ?? null;
       }
 
@@ -31,9 +31,10 @@ export default class Record {
     return data;
   }
 
-  save() {
+  // TODO: Determine how DB saving will work for orm, may bring this back
+  /* save() {
     const { __name:key } = this.__model;
     
     new DB().data[key] = this.serialize();
-  }
+  } */
 }

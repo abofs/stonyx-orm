@@ -19,7 +19,7 @@ export default function createRecord(modelName, rawData={}) {
   const record = new Record(model, serializer);
 
   record.serialize(rawData);
-  modelStore.set(record.id._value, record);
+  modelStore.set(record.id, record);
   
   return record;
 }
