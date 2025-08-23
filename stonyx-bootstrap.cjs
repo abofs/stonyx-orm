@@ -5,7 +5,7 @@ const { default:Stonyx } = require('stonyx');
 const { default:config } = require('./config/environment.js');
 
 // Override paths for tests
-Object.assign(config.paths { 
+Object.assign(config.paths, { 
   model: './test/sample/models',
   serializer: './test/sample/serializers',
   transform: './test/sample/transforms'

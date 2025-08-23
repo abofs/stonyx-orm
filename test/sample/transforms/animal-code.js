@@ -1,13 +1,12 @@
 /**
  * Sample custom transform
  */
-const codeEnumMap = {
-  unknown: 0,
-  dog: 1,
-  cat: 2,
-  goat: 3,
-  horse: 4
-};
+
+import { ANIMAL_CODES } from '../constants.js';
+
+const codeEnumMap = {}
+
+for (let i = 0; i < ANIMAL_CODES.length; i++) codeEnumMap[ANIMAL_CODES[i]] = i;
 
 export default function(value) {
   return codeEnumMap[value] || 0;
