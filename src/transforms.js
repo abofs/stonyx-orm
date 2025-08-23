@@ -11,7 +11,7 @@ const transforms = {
 
 // Math Proxies
 ['ceil', 'floor', 'round'].forEach(method => {
-  transforms[method] = value => Math[method](value)();
+  transforms[method] = value => Math[method](value);
 });
 
 export default transforms;

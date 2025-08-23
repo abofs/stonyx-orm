@@ -1,6 +1,5 @@
 import config from 'stonyx/config';
-import { makeArray } from '@stonyx/utils/object';
-import { get, getComputedProperties } from '@stonyx/orm/utils';
+import { get, makeArray } from '@stonyx/utils/object';
 
 const RESERVED_KEYS = ['__name'];
 
@@ -65,7 +64,7 @@ export default class BaseSerializer {
     const { path, model } = this;
     const keys = Object.keys(model).filter(key => !RESERVED_KEYS.includes(key));
     const pathPrefix = path ? `${path}.` : '';
-    const { __data:parsedData } = record;
+    const { __data:parsedData, __relationships:relatedRecords } = record;
     const { postTransform } = model;
 
     for (const key of keys) {
@@ -75,11 +74,10 @@ export default class BaseSerializer {
 
       // Relationship handling
       if (typeof handler === 'function') {
-        const childRecord = handler(data);
+        const childRecord = handler(record, data);
+
         record[key] = childRecord
-        parsedData[key] = Array.isArray(childRecord) 
-          ? childRecord.map(record => record.serialize())
-          : childRecord.serialize();
+        relatedRecords[key] = childRecord;
 
         continue;
       }
@@ -102,11 +100,11 @@ export default class BaseSerializer {
     }
 
     // Serialize computed properties
-    for (const [key, method] of getComputedProperties(this.model)) {
-      const value = method.bind(parsedData)();
-      
-      parsedData[key] = value;
-      record[key] = value;
+    for (const [key, getter] of getComputedProperties(this.model)) {
+      Object.defineProperty(record, key, {
+        get: () => getter.call(record),
+        enumerable: true,
+      });
     }
 
     record.__serialized = true;
@@ -118,4 +116,13 @@ export default class BaseSerializer {
   normalize(data) {
     return data;
   }
+}
+
+export function getComputedProperties(classInstance) {
+  const proto = Object.getPrototypeOf(classInstance);
+  if (!proto || proto === Object.prototype) return [];
+  
+  return Object.entries(Object.getOwnPropertyDescriptors(proto))
+    .filter(([key, descriptor]) => key !== 'constructor' && descriptor.get)
+    .map(([key, descriptor]) => [key, descriptor.get]);
 }

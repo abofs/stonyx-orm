@@ -2,6 +2,7 @@ import DB from "@stonyx/orm/db";
 
 export default class Record {
   __data = {};
+  __relationships = {};
   __serialized = false;
 
   constructor(model, serializer) {
@@ -12,7 +13,17 @@ export default class Record {
   serialize(rawData) {
     const { __data:data } = this;
     
-    if (this.__serialized)  return data;
+    if (this.__serialized) {
+      const relatedIds = {};
+
+      for (const [ key, childRecord ] of Object.entries(this.__relationships)) {
+        relatedIds[key] = Array.isArray(childRecord) 
+        ? childRecord.map(r => r.id._value)
+        : childRecord?.id?._value ?? null;
+      }
+
+      return { ...data, ...relatedIds };
+    }
 
     const normalizedData = this.__serializer.normalize(rawData);
     this.__serializer.setProperties(normalizedData, this);

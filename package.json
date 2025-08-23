@@ -9,12 +9,11 @@
   "main": "src/main.js",
   "type": "module",
   "exports": {
-    ".": "./src/main.js",
-    "./db": "./src/db.js",
-    "./utils": "./src/utils.js"
+    ".": "./src/index.js",
+    "./db": "./src/db.js"
   },
   "scripts": {
-    "test": "qunit"
+    "test": "qunit --require ./stonyx-bootstrap.cjs"
   },
   "repository": {
     "type": "git",
@@ -30,11 +29,12 @@
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "stonyx": "^0.1.0"
+    "stonyx": "file:../stonyx"
   },
   "devDependencies": {
-    "@stonyx/cron": "^0.1.0",
-    "@stonyx/utils": "^0.1.0",
-    "qunit": "^2.24.1"
+    "@stonyx/cron": "file:../stonyx-cron",
+    "@stonyx/utils": "file:../stonyx-utils",
+    "qunit": "^2.24.1",
+    "sinon": "^21.0.0"
   }
 }
