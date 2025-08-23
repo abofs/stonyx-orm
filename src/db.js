@@ -42,8 +42,7 @@ export default class DB {
     try {
       dbSchema = (await import(`${rootPath}/${schema}`)).default;
     } catch (error) {
-      dbSchema = {};
-      log.db('Unable to load DB schema from file, using empty schema instead');
+      throw new Error('Configuration Error: ORM DB schema must be defined.');
     }
 
     const data = deepCopy(dbSchema);
@@ -66,41 +65,4 @@ export default class DB {
 
     this.data = await readFile(file, { json: true, missingFileCallback: this.create.bind(this) });
   }
-
-  /** TODO: We need ORM specific reload logic that replaces models attributes when loading from DB */
-  // _tempORMSerializeMeta(data) {
-  //   const { meta } = data;
-
-  //   // HACK: Create map to ensure we have no duplicate references
-  //   // This will no longer be necessary once once gatherer method prevents duplicates
-  //   const referenceIds = {};
-  //   const { shipmentReportReferences } = meta;
-
-  //   // Fix reference dates & remove duplicates
-  //   for (let i = shipmentReportReferences.length - 1; i >= 0; i--) {
-  //     const record = shipmentReportReferences[i];
-
-  //     if (!referenceIds[record.id]) {
-  //       referenceIds[record.id] = record;
-  //     } else {
-  //       shipmentReportReferences.splice(i, 1);
-  //     }
-
-  //     if (!record.date) continue;
-
-  //     record.date = new Date(record.date);
-  //   }
-
-  //   // Re-compute
-  //   const metaModel = new MODELS.MetaModel();
-
-  //   // Serialize computed properties
-  //   for (const [key, method] of getComputedProperties(metaModel)) {
-  //      const value = method.bind(meta)();
-      
-  //      meta[key] = value;
-  //   }
-
-  //   return data;
-  // }
 }
