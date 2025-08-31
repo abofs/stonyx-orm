@@ -17,6 +17,7 @@ export default class Relationships {
   }
 }
 
+// TODO: Refactor mapping to remove a level of iteration
 export function getRelationshipInfo(type, sourceModel, targetModel, relationshipId) {
   const allRelationships = relationships.get(type);
   
@@ -29,7 +30,13 @@ export function getRelationshipInfo(type, sourceModel, targetModel, relationship
 
   const relationship = modelRelationship.get(targetModel);
 
-  if (relationship.has(relationshipId)) throw new Error(`record to model relationships cannot be registered more than once`);
+  if (relationship.has(relationshipId)) return;
 
   return relationship;
 }
+
+export function getHasManyRelationships(sourceModel, targetModel) {
+  return relationships.get('hasMany').get(sourceModel)?.get(targetModel);
+}
+
+export const TYPES = ['global', 'hasMany', 'belongsTo'];

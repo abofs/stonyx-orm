@@ -47,7 +47,7 @@ function query(rawData, pathPrefix, subPath) {
   }
 }
 
-export default class BaseSerializer {
+export default class Serializer {
   map = {};
   path = '';
 
@@ -60,20 +60,20 @@ export default class BaseSerializer {
    * the ModelProperty object, while setting parsed values to the record's
    * __data property, which represents the serialized version of the data
    */
-  setProperties(rawData, record) {
+  setProperties(rawData, record, options) {
     const { path, model } = this;
     const keys = Object.keys(model).filter(key => !RESERVED_KEYS.includes(key));
     const pathPrefix = path ? `${path}.` : '';
     const { __data:parsedData, __relationships:relatedRecords } = record;
 
     for (const key of keys) {
-      const subPath = this.map[key] || key;
+      const subPath = options.serialize ? (this.map[key] || key) : key;
       const handler = model[key];
       const data = query(rawData, pathPrefix, subPath);
 
       // Relationship handling
       if (typeof handler === 'function') {
-        const childRecord = handler(record, data);
+        const childRecord = handler(record, data, options);
 
         record[key] = childRecord
         relatedRecords[key] = childRecord;
@@ -93,6 +93,7 @@ export default class BaseSerializer {
         configurable: true,
         get: () => handler.value,
         set(newValue) {
+          handler.ignoreFirstTransform = !options.transform;
           handler.value = newValue;
           parsedData[key] = handler.value;
         }

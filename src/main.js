@@ -1,31 +1,44 @@
-import DB from '@stonyx/orm/db';
+import DB from './db.js';
 import config from 'stonyx/config';
+import log from 'stonyx/log';
 import { forEachFileImport } from '@stonyx/utils/file';
 import { kebabCaseToPascalCase, pluralize } from '@stonyx/utils/string';
+import setupRestServer from './setup-rest-server.js';
 import baseTransforms from './transforms.js';
 import Store from './store.js';
+import Serializer from './serializer.js';
+
+const defaultOptions = {
+  dbType: 'json'
+}
 
 export default class Orm {
-  initialized = false;
+  static initialized = false;
+  static relationships = new Map();
+  static store = new Store();
   
   models = {};
   serializers = {};
   transforms = { ...baseTransforms };
-  static relationships = new Map();
-  static store = new Store();
+  warnings = new Set();
 
-  constructor() {
+  constructor(options={}) {
     if (Orm.instance) return Orm.instance;
 
     const { relationships } = Orm;
-    relationships.set('hasMany', new Map());
-    relationships.set('belongsTo', new Map());
+
+    // Declare relationship maps
+    for (const key of ['hasMany', 'belongsTo', 'global', 'pending']) {
+      relationships.set(key, new Map());
+    }
+
+    this.options = { ...defaultOptions, ...options };
 
     Orm.instance = this;
   }
 
   async init() {
-    const { paths } = config.orm;
+    const { paths, restServer } = config.orm;
     const promises = ['Model', 'Serializer', 'Transform'].map(type => {
       const lowerCaseType = type.toLowerCase();
       const path = paths[lowerCaseType];
@@ -42,11 +55,26 @@ export default class Orm {
       }, { ignoreAccessFailure: true, rawName: true });
     });
 
-    promises.push(new DB().init());
+    if (this.options.dbType !== 'none') {
+      const db = new DB();
+      this.db = db;
+      
+      promises.push(db.init());
+    }
 
-    await Promise.all(promises);
-    
-    this.initialized = true;
+    if (restServer.enabled === 'true') {
+      await Promise.all(promises); // Wait for models to be registered
+      promises.push(setupRestServer(restServer.route, paths.access));
+    }
+
+    Orm.ready = await Promise.all(promises);
+    Orm.initialized = true;
+  }
+
+  static get db() {
+    if (!Orm.initialized) throw new Error('ORM has not been initialized yet');
+
+    return Orm.instance.db;
   }
 
   getRecordClasses(modelName) {
@@ -54,8 +82,18 @@ export default class Orm {
   
     return {
       modelClass: this.models[`${modelClassPrefix}Model`],
-      serializerClass: this.serializers[`${modelClassPrefix}Serializer`] || BaseSerializer
+      serializerClass: this.serializers[`${modelClassPrefix}Serializer`] || Serializer
     };
+  }
+
+  // Queue warnings to avoid the same error from being logged in the same iteration
+  warn(message) {
+    this.warnings.add(message);
+
+    setTimeout(() => {
+      this.warnings.forEach(warning => log.warn(warning));
+      this.warnings.clear();
+    }, 0);
   }
 }
 

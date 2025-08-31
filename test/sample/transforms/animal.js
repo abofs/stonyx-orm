@@ -2,11 +2,11 @@
  * Sample custom transform
  */
 
-import { ANIMAL_CODES } from '../constants.js';
+import { ANIMALS } from '../constants.js';
 
 const codeEnumMap = {}
 
-for (let i = 0; i < ANIMAL_CODES.length; i++) codeEnumMap[ANIMAL_CODES[i]] = i;
+for (let i = 0; i < ANIMALS.length; i++) codeEnumMap[ANIMALS[i]] = i;
 
 export default function(value) {
   return codeEnumMap[value] || 0;

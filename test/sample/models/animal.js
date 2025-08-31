@@ -1,8 +1,8 @@
-import { BaseModel, attr, belongsTo } from '@stonyx/orm';
-import { ANIMAL_CODES } from '../constants.js';
+import { Model, attr, belongsTo } from '@stonyx/orm';
+import { ANIMALS } from '../constants.js';
 
-export default class AnimalModel extends BaseModel {
-  type = attr('animal-code');
+export default class AnimalModel extends Model {
+  type = attr('animal');
   age = attr('number');
   size = attr('string');
   owner = belongsTo('owner');
@@ -10,6 +10,6 @@ export default class AnimalModel extends BaseModel {
   get tag() {
     const { owner, size } = this;
 
-    return `${owner.id}'s ${size} ${ANIMAL_CODES[this.type]}`;
+    return `${owner.id}'s ${size} ${ANIMALS[this.type]}`;
   }
 }

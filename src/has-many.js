@@ -1,13 +1,18 @@
 import { createRecord, relationships, store } from '@stonyx/orm';
 import { getRelationshipInfo } from './relationships.js';
-import { makeArray } from '@stonyx/utils/object';
+import { getOrSet, makeArray } from '@stonyx/utils/object';
+import { dbKey } from './db.js';
 
 export default function hasMany(modelName) {
-  return (sourceRecord, rawData) => {
+  const globalRelationships = relationships.get('global');
+  const pendingRelationships = relationships.get('pending');
+
+  return (sourceRecord, rawData, options) => {
     const { __name: sourceModelName } = sourceRecord.__model;
     const relationshipId = sourceRecord.id;
-    const relationship = getRelationshipInfo('hasMany', sourceModelName, modelName, relationshipId);    
+    const relationship = getRelationshipInfo('hasMany', sourceModelName, modelName, relationshipId); 
     const modelStore = store.get(modelName);
+    const pendingRelationshipQueue = [];
     const output = !rawData ? [] : makeArray(rawData).map(elementData => {
       let record;
 
@@ -16,7 +21,16 @@ export default function hasMany(modelName) {
 
         if (!record) return null;
       } else {
-        record = createRecord(modelName, elementData);
+        if (Number.isInteger(elementData)) {
+          pendingRelationshipQueue.push({
+            pendingRelationship: getOrSet(pendingRelationships, modelName, new Map()),
+            id: elementData 
+          });
+
+          return null;
+        }
+
+        record = createRecord(modelName, elementData, options);
       }
 
       // Populate belongTo side if the relationship is defined
@@ -25,9 +39,15 @@ export default function hasMany(modelName) {
       if (otherSide) Object.assign(otherSide, sourceRecord);
 
       return record;
-    });
+    }).filter(value => value);
 
     relationship.set(relationshipId, output);
+        
+    // Assign global relationship
+    if (options.global || sourceModelName === dbKey) getOrSet(globalRelationships, modelName, []).push(output);
+
+    // Assign pending relationships
+    for (const { pendingRelationship, id } of pendingRelationshipQueue) getOrSet(pendingRelationship, id, []).push(output);
 
     return output;
   }

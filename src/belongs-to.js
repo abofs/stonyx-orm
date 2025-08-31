@@ -2,21 +2,31 @@ import { createRecord, relationships, store } from '@stonyx/orm';
 import { getRelationshipInfo } from './relationships.js';
 
 export default function belongsTo(modelName) {
-  return (sourceRecord, rawData) => {
+  const hasManyRelationships = relationships.get('hasMany');
+  const pendingRelationships = relationships.get('pending');
+
+  return (sourceRecord, rawData, options) => {
     if (!rawData) return null;
 
     const { __name: sourceModelName } = sourceRecord.__model;
     const relationshipId = sourceRecord.id;
     const relationship = getRelationshipInfo('belongsTo', sourceModelName, modelName, relationshipId);
     const modelStore = store.get(modelName);
-    const output = (typeof rawData !== 'object' ? modelStore.get(rawData) : null) || createRecord(modelName, rawData);
+    const output = (typeof rawData !== 'object' ? modelStore.get(rawData) : null) || createRecord(modelName, rawData, options);
 
     relationship.set(relationshipId, output || {});
 
     // Populate belongTo side if the relationship is defined
-    const otherSide = relationships.get('hasMany').get(modelName)?.get(sourceModelName)?.get(output?.id);
+    const otherSide = hasManyRelationships.get(modelName)?.get(sourceModelName)?.get(output?.id);
 
-    if (otherSide) otherSide.push(sourceRecord);
+    if (otherSide) {
+      otherSide.push(sourceRecord);
+
+      // Remove pending queue if it was just fulfilled
+      const pendingModelRelationships = pendingRelationships.get(sourceModelName);
+      
+      if (pendingModelRelationships) pendingModelRelationships.delete(relationshipId);
+    }
 
     return output;
   }

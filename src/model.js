@@ -1,6 +1,6 @@
 import { attr } from '@stonyx/orm';
 
-export default class BaseModel {
+export default class Model {
   id = attr('number');
 
   constructor(name) {

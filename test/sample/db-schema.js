@@ -1,4 +1,11 @@
 /**
  * Sample db schema for storage
+ * Note: Schema definitions follow the same convention as the models as under the hood it is basically a model
  */
-export default {}
+
+import { Model, hasMany } from '@stonyx/orm';
+
+export default class DBModel extends Model {
+  owners = hasMany('owner');
+  animals = hasMany('animal');
+}

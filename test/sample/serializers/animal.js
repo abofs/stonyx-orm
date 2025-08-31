@@ -1,6 +1,6 @@
-import { BaseSerializer } from '@stonyx/orm';
+import { Serializer } from '@stonyx/orm';
 
-export default class AnimalSerializer extends BaseSerializer {
+export default class AnimalSerializer extends Serializer {
   map = {
     age: 'details.age',
     size: 'details.c',

@@ -1,7 +1,6 @@
+import { Model, attr, hasMany } from '@stonyx/orm';
 
-import { BaseModel, attr, hasMany } from '@stonyx/orm';
-
-export default class OwnerModel extends BaseModel {
+export default class OwnerModel extends Model {
   id = attr('string');
   gender = attr('string');
   age = attr('number');

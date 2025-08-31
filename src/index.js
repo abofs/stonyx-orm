@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import BaseModel from './model.js';
-import BaseSerializer from './serializer.js';
+import Model from './model.js';
+import Serializer from './serializer.js';
 
 import Orm, { store, relationships } from './main.js';
 import attr from './attr.js';
@@ -24,5 +24,5 @@ import hasMany from './has-many.js';
 import createRecord from './create-record.js';
 
 export default Orm;
-export { BaseModel, BaseSerializer }; // base classes
+export { Model, Serializer }; // base classes
 export { attr, belongsTo, hasMany, createRecord, store, relationships }; // helpers
