@@ -38,11 +38,10 @@ export default class DB {
   async create() {
     const { rootPath } = config;
     const { file } = config.orm.db;
-    const data = {};
 
-    createFile(`${rootPath}/${file}`, data, { json: true });
+    createFile(`${rootPath}/${file}`, {}, { json: true });
 
-    return data;
+    return {};
   }
   
   async save() {

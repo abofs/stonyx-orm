@@ -6,6 +6,7 @@ import { dbKey } from '../../src/db.js';
 import { readFile, deleteFile } from '@stonyx/utils/file';
 import config from 'stonyx/config';
 import fetch from "node-fetch";
+import RestServer from '@stonyx/rest-server';
 
 const { module, test } = QUnit;
 let endpoint;
@@ -54,7 +55,7 @@ module('[Integration] ORM', function(hooks) {
   });
 
   hooks.after(function() {
-    //RestServer.close();
+    RestServer.close();
   });
   
   module('Db', function() {

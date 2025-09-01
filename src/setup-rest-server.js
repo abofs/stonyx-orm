@@ -4,23 +4,29 @@ import OrmRequest from './orm-request.js';
 import RestServer from '@stonyx/rest-server';
 import { forEachFileImport } from '@stonyx/utils/file';
 import { kebabCaseToPascalCase } from '@stonyx/utils/string';
+import log from 'stonyx/log';
 
 export default async function(route, accessPath) {
   let accessFiles = {};
   
-  await forEachFileImport(accessPath, accessClass => {
-    const accessInstance = new accessClass();
+  try {
+    await forEachFileImport(accessPath, accessClass => {
+      const accessInstance = new accessClass();
 
-    if (!accessInstance.models) throw new Error(`Access class "${accessClass.name}" must define a "models" list`);
-    if (typeof accessInstance.access !== 'function') throw new Error(`Access class "${accessClass.name}" must declare an "access" method`);
+      if (!accessInstance.models) throw new Error(`Access class "${accessClass.name}" must define a "models" list`);
+      if (typeof accessInstance.access !== 'function') throw new Error(`Access class "${accessClass.name}" must declare an "access" method`);
 
-    for (const model of accessInstance.models) {
-      if (!Orm.instance.models[`${kebabCaseToPascalCase(model)}Model`]) throw new Error(`Unable to define access for Invalid Model "${model}". Model does not exist`);
-      if (accessFiles[model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
+      for (const model of accessInstance.models) {
+        if (!Orm.instance.models[`${kebabCaseToPascalCase(model)}Model`]) throw new Error(`Unable to define access for Invalid Model "${model}". Model does not exist`);
+        if (accessFiles[model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
 
-      accessFiles[model] = accessInstance.access;
-    }
-  });  
+        accessFiles[model] = accessInstance.access;
+      }
+    });
+  } catch (error) {
+    log.error(error.message);
+    log.warn('You must define a valid access configuration file in order to access ORM generated REST endpoints.');
+  }
 
   // Configure endpoints for models with access configuration
   for (const [model, access] of Object.entries(accessFiles)) {
