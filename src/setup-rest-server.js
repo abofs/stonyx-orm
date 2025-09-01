@@ -1,9 +1,9 @@
 import { waitForModule } from 'stonyx';
-import Orm from '@stonyx/orm';
+import { store } from '@stonyx/orm';
 import OrmRequest from './orm-request.js';
 import RestServer from '@stonyx/rest-server';
 import { forEachFileImport } from '@stonyx/utils/file';
-import { kebabCaseToPascalCase } from '@stonyx/utils/string';
+import { dbKey } from './db.js';
 import log from 'stonyx/log';
 
 export default async function(route, accessPath) {
@@ -16,8 +16,12 @@ export default async function(route, accessPath) {
       if (!accessInstance.models) throw new Error(`Access class "${accessClass.name}" must define a "models" list`);
       if (typeof accessInstance.access !== 'function') throw new Error(`Access class "${accessClass.name}" must declare an "access" method`);
 
-      for (const model of accessInstance.models) {
-        if (!Orm.instance.models[`${kebabCaseToPascalCase(model)}Model`]) throw new Error(`Unable to define access for Invalid Model "${model}". Model does not exist`);
+      const { models } = accessInstance;
+      const availableModels = Array.from(store.data.keys());
+
+      for (const model of models === '*' ? availableModels : models) {
+        if (model === dbKey) continue;
+        if (!store.data.has(model)) throw new Error(`Unable to define access for Invalid Model "${model}". Model does not exist`);
         if (accessFiles[model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
 
         accessFiles[model] = accessInstance.access;
