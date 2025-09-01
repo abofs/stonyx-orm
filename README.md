@@ -5,11 +5,12 @@ A lightweight ORM for Stonyx projects, featuring model definitions, serializers,
 
 ## Highlights
 
+- **Automatic Loading**: Models, serializers, transforms, and access classes are auto-registered from their configured directories.
 - **Models**: Define attributes with type-safe proxies (`attr`) and relationships (`hasMany`, `belongsTo`).
 - **Serializers**: Map raw data into model-friendly structures, including nested properties.
-- **Transforms**: Apply custom transforms on data values.
+- **Transforms**: Apply custom transformations on data values automatically.
 - **DB Integration**: Optional file-based persistence with auto-save support.
-- **REST Server Integration**: Automatically generate endpoints with customizable access control.
+- **REST Server Integration**: Automatic route setup with customizable access control.
 
 ## Installation
 
@@ -90,6 +91,17 @@ export default class OwnerModel extends Model {
 ```
 
 ## Serializers
+
+Based on the following sample payload structure which represents a poorly structure third-party data source:
+
+```js
+export default {
+  animals: [
+    { id: 1, type: 'dog', details: { age: 2, c: 'small', x: 'black', location: { type: 'farm', owner: 'angela' }}},
+    //...
+  ]
+}
+```
 
 Map raw data to model fields:
 
