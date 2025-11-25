@@ -8,4 +8,5 @@ import { Model, hasMany } from '@stonyx/orm';
 export default class DBModel extends Model {
   owners = hasMany('owner');
   animals = hasMany('animal');
+  traits = hasMany('trait');
 }

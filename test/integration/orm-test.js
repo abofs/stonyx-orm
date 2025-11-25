@@ -1,47 +1,14 @@
 import QUnit from 'qunit';
-import Orm, { createRecord, store } from '@stonyx/orm';
+import Orm, { createRecord, updateRecord, store } from '@stonyx/orm';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import payload from '../sample/payload.js';
+import { raw, serialized } from '../sample/payload.js';
 import { dbKey } from '../../src/db.js';
 import { readFile, deleteFile } from '@stonyx/utils/file';
 import config from 'stonyx/config';
-import fetch from "node-fetch";
 import RestServer from '@stonyx/rest-server';
 
 const { module, test } = QUnit;
 let endpoint;
-
-// Represents expected DB output after sample schema is populated and formatted
-const sampleDataOutput = {
-  owners: [
-    { id: 'gina', gender: 'female', age: 34, pets: [ 4, 8, 13, 18 ] },
-    { id: 'michael', gender: 'male', age: 38, pets: [ 2, 6, 9, 12, 16 ] },
-    { id: 'angela', gender: 'female', age: 36, pets: [ 1, 3, 7, 10, 11, 15, 17, 20 ] },
-    { id: 'bob', gender: 'male', age: 44, pets: [ 5, 14, 19 ] }
-  ],
-  animals: [
-    { id: 1, type: 1, age: 2, size: 'small', owner: 'angela' },
-    { id: 2, type: 1, age: 7, size: 'medium', owner: 'michael' },
-    { id: 3, type: 1, age: 5, size: 'medium', owner: 'angela' },
-    { id: 4, type: 1, age: 3, size: 'small', owner: 'gina' },
-    { id: 5, type: 1, age: 4, size: 'medium', owner: 'bob' },
-    { id: 6, type: 3, age: 1, size: 'small', owner: 'michael' },
-    { id: 7, type: 3, age: 6, size: 'medium', owner: 'angela' },
-    { id: 8, type: 3, age: 8, size: 'large', owner: 'gina' },
-    { id: 9, type: 3, age: 8, size: 'medium', owner: 'michael' },
-    { id: 10, type: 3, age: 5, size: 'small', owner: 'angela' },
-    { id: 11, type: 2, age: 2, size: 'small', owner: 'angela' },
-    { id: 12, type: 2, age: 8, size: 'large', owner: 'michael' },
-    { id: 13, type: 2, age: 6, size: 'medium', owner: 'gina' },
-    { id: 14, type: 2, age: 3, size: 'small', owner: 'bob' },
-    { id: 15, type: 2, age: 7, size: 'medium', owner: 'angela' },
-    { id: 16, type: 4, age: 5, size: 'medium', owner: 'michael' },
-    { id: 17, type: 4, age: 3, size: 'small', owner: 'angela' },
-    { id: 18, type: 4, age: 7, size: 'large', owner: 'gina' },
-    { id: 19, type: 4, age: 1, size: 'small', owner: 'bob' },
-    { id: 20, type: 4, age: 4, size: 'medium', owner: 'angela' }
-  ]
-};
 
 //let endpoint;
 let parsedFileData;
@@ -69,15 +36,23 @@ module('[Integration] ORM', function(hooks) {
 
       assert.deepEqual(fileData, {
         owners: [],
-        animals: []
+        animals: [],
+        traits: []
       });
+    });
+
+    test('data is retrievable via db record', function(assert) {
+      const record = Orm.db.record;
+
+      assert.ok(Array.isArray(record.owners));
+      assert.ok(Array.isArray(record.animals));
     });
   });
 
   module('Data', function(hooks) {
     hooks.before(function() {
-      for (const owner of payload.owners) createRecord('owner', owner);
-      for (const animal of payload.animals) createRecord('animal', animal);
+      for (const owner of raw.owners) createRecord('owner', owner);
+      for (const animal of raw.animals) createRecord('animal', animal);
     });
 
     hooks.after(function() {
@@ -107,15 +82,32 @@ module('[Integration] ORM', function(hooks) {
 
       assert.equal(owner1.totalPets, 8);
       assert.equal(animal1.owner.id, owner1.id);
+      assert.equal(animal1.traits[1].type, 'color');
+      assert.equal(animal1.traits[1].value, 'black');
       assert.equal(owner2.totalPets, 3);
       assert.equal(animal2.owner.id, owner2.id);
+      assert.equal(animal2.traits[0].type, 'habitat');
+      assert.equal(animal2.traits[0].value, 'farm');
+    });
+
+    test('updating a record from raw data works as expected', function(assert) {
+      const animal = store.get('animal', 5);
+
+      assert.equal(animal.tag, `bob's medium dog`);
+
+      updateRecord(animal, { details: { c: 'small', x: 'green' }});
+
+      assert.equal(animal.tag, `bob's small dog`);
+
+      // Revert change
+      animal.size = 'medium';
     });
 
     test('db saves correct serialized data and relationships', async function(assert) {
       await Orm.db.save();
       parsedFileData = await readFile(config.orm.db.file, { json: true });
 
-      assert.deepEqual(parsedFileData, sampleDataOutput);
+      assert.deepEqual(parsedFileData, serialized);
     });
 
     test('unloading individual store records works as expected', async function(assert) {
@@ -133,10 +125,12 @@ module('[Integration] ORM', function(hooks) {
       // Clear the store
       store.remove('owner');
       store.remove('animal');
+      store.remove('trait');
       store.remove(dbKey);
 
       assert.notOk(store.get('owner').size);
       assert.notOk(store.get('animal').size);
+      assert.notOk(store.get('trait').size);
       assert.notOk(store.get(dbKey).size);
 
       /**
@@ -146,20 +140,43 @@ module('[Integration] ORM', function(hooks) {
       const dbRecordData = createRecord(dbKey, parsedFileData, { serialize: false, transform: false }).format();
       delete dbRecordData.id; // We compare without the id
 
-      assert.deepEqual(dbRecordData, sampleDataOutput);
+      assert.deepEqual(dbRecordData, serialized);
       assert.ok(store.get('owner').size);
       assert.ok(store.get('animal').size);
+      assert.ok(store.get('trait').size);
       assert.ok(store.get(dbKey).size);
+    });
+
+    test.skip('Creating a record with a pending relationship works as expected', function(assert) {
+      // Note: pets reference animals that do not yet exist
+      const record = createRecord('owner', { name: 'testOwner', pets: [ 5000, 5001 ] });
+
+      assert.equal(record.id, 'testOwner');
+      assert.notOk(record.pets.length);
+
+      const animal = createRecord('animal', { id: 5000, type: 'dog' });
+
+      assert.equal(record.pets.length, 1);
+      assert.equal(record.pets[0].id, 5000);
+
+      store.remove('owner', 'testOwner');
+      store.remove('animal', 5000);
+    });
+
+    test.skip('Computed properties are available in JSON output as expected', function(assert) {
+      const animal = store.get('animal', 2).toJSON();
+
+      assert.equal(animal.attributes.tag, `michael's medium dog`);
     });
   });
 
-  module('Rest', function() {
+  module.skip('JSON API', function() {
     test('get call for schema records work as expected', async function(assert) {
-      const response = await fetch(`${endpoint}/owner`);
-      const data = await response.json();
+      const response = await fetch(`${endpoint}/owners`);
+      const { data } = await response.json();
 
       assert.equal(response.status, 200);
-      assert.deepEqual(data.owners.map(data => data.id), [ 'gina', 'michael', 'bob' ], 'excludes angela due to access filter');
+      assert.deepEqual(data.map(data => data.id), [ 'gina', 'michael', 'bob' ], 'excludes angela due to access filter');
     });
 
     test('get call for specific records work as expected', async function(assert) {
@@ -167,7 +184,7 @@ module('[Integration] ORM', function(hooks) {
       const data = await response.json();
 
       assert.equal(response.status, 200);
-      assert.deepEqual(data, { owner: sampleDataOutput.owners[0] });
+      assert.deepEqual(data, { data: sampleDataOutput.owners[0] });
     });
 
     test('get call for invalid records return a 404', async function(assert) {

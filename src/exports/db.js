@@ -1,3 +1,7 @@
 import Orm from '@stonyx/orm';
 
-export default Orm.db;
+const { db } = Orm;
+
+export default db;
+export const data = db.record;
+export const saveDB = db.save.bind(db);

@@ -30,7 +30,8 @@ export function getRelationshipInfo(type, sourceModel, targetModel, relationship
 
   const relationship = modelRelationship.get(targetModel);
 
-  if (relationship.has(relationshipId)) return;
+  // TODO: Determine whether already having id should be handled differently
+  //if (relationship.has(relationshipId)) return;
 
   return relationship;
 }

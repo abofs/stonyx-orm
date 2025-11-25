@@ -1,3 +1,4 @@
+import { getComputedProperties } from "./serializer.js";
 export default class Record {
   __data = {};
   __relationships = {};
@@ -8,10 +9,10 @@ export default class Record {
     this.__serializer = serializer;
   }
 
-  serialize(rawData, options) {
+  serialize(rawData, options={}) {
     const { __data:data } = this;
     
-    if (this.__serialized) {
+    if (this.__serialized && !options.update) {
       const relatedIds = {};
 
       for (const [ key, childRecord ] of Object.entries(this.__relationships)) {
@@ -43,6 +44,35 @@ export default class Record {
     }
 
     return { ...data, ...records };
+  }
+
+  // Formats record for JSON API output
+  toJSON() {
+    if (!this.__serialized) throw new Error('Record must be serialized before being converted to JSON');
+    
+    const { __data:data } = this;
+    const relationships = {};
+    const attributes = { ...data };
+    delete attributes.id;
+
+    for (const [key, getter] of getComputedProperties(this.__model)) {
+      attributes[key] = getter.call(this);
+    }
+
+    for (const [ key, childRecord ] of Object.entries(this.__relationships)) {
+      relationships[key] = {
+        data: Array.isArray(childRecord) 
+        ? childRecord.map(r => ({ type: r.__model.__name, id: r.id }))
+        : childRecord ? { type: childRecord.__model.__name, id: childRecord.id } : null
+      };
+    }
+
+    return {
+      attributes,
+      relationships,
+      id: data.id,
+      type: this.__model.__name,
+    };
   }
 
   // Delete every key to prevent memory leaks from loose references

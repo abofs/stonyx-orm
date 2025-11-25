@@ -7,7 +7,7 @@ const defaultOptions = {
   transform: true
 };
 
-export default function createRecord(modelName, rawData={}, userOptions={}) {
+export function createRecord(modelName, rawData={}, userOptions={}) {
   const orm = Orm.instance;
   const { initialized } = Orm;
   const options = { ...defaultOptions, ...userOptions };
@@ -44,6 +44,14 @@ export default function createRecord(modelName, rawData={}, userOptions={}) {
   }
 
   return record;
+}
+
+export function updateRecord(record, rawData, userOptions={}) {
+  if (!rawData) throw new Error('rawData must be passed in to updateRecord call');
+
+  const options = { ...defaultOptions, ...userOptions, update:true };
+
+  record.serialize(rawData, options);
 }
 
 /**

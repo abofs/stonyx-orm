@@ -52,8 +52,11 @@ export default class Orm {
         if (type === 'Model') Orm.store.set(name, new Map());
 
         return this[pluralize(lowerCaseType)][alias] = exported;
-      }, { ignoreAccessFailure: true, rawName: true });
+      }, { ignoreAccessFailure: true, rawName: true, recursive: true, recursiveNaming: true });
     });
+
+    // Wait for imports before db & rest server setup
+    await Promise.all(promises);
 
     if (this.options.dbType !== 'none') {
       const db = new DB();
@@ -63,8 +66,7 @@ export default class Orm {
     }
 
     if (restServer.enabled === 'true') {
-      await Promise.all(promises); // Wait for models to be registered
-      promises.push(setupRestServer(restServer.route, paths.access));
+      promises.push(setupRestServer(restServer.route, paths.access, restServer.metaRoute));
     }
 
     Orm.ready = await Promise.all(promises);

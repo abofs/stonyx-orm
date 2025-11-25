@@ -71,6 +71,9 @@ export default class Serializer {
       const handler = model[key];
       const data = query(rawData, pathPrefix, subPath);
 
+      // Ignore null values on updates (TODO: What if we want it set to null?)
+      if (data === null && options.update) continue;
+
       // Relationship handling
       if (typeof handler === 'function') {
         const childRecord = handler(record, data, options);
@@ -101,6 +104,8 @@ export default class Serializer {
 
       record[key] = data;
     }
+
+    if (options.update) return;
 
     // Serialize computed properties
     for (const [key, getter] of getComputedProperties(this.model)) {

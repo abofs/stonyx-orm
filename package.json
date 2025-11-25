@@ -35,7 +35,6 @@
     "@stonyx/cron": "file:../stonyx-cron",
     "@stonyx/rest-server": "file:../stonyx-rest-server",
     "@stonyx/utils": "file:../stonyx-utils",
-    "node-fetch": "^3.3.2",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
   }

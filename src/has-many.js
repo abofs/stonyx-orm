@@ -16,12 +16,12 @@ export default function hasMany(modelName) {
     const output = !rawData ? [] : makeArray(rawData).map(elementData => {
       let record;
 
-      if (typeof rawData !== 'object') {
-        record = modelStore.get(rawData);
+      if (typeof elementData !== 'object') {
+        record = modelStore.get(elementData);
 
         if (!record) return null;
       } else {
-        if (Number.isInteger(elementData)) {
+        if (elementData !== Object(elementData)) {
           pendingRelationshipQueue.push({
             pendingRelationship: getOrSet(pendingRelationships, modelName, new Map()),
             id: elementData 

@@ -1,5 +1,5 @@
 import { Request } from '@stonyx/rest-server';
-import { createRecord, store } from '@stonyx/orm';
+import Orm, { createRecord, store } from '@stonyx/orm';
 import { pluralize } from '@stonyx/utils/string';
 
 const methodAccessMap = {
@@ -18,28 +18,30 @@ function getId({ id }) {
 export default class OrmRequest extends Request {
   constructor({ model, access }) {
     super(...arguments);
+
     this.access = access;
+    const pluralizedModel = pluralize(model);
 
     this.handlers = {
       get: {
-        [`/${model}`]: (_request, { filter }) => {
-          const records = Array.from(store.get(model).values()).map(record => record.serialize());
+        [`/${pluralizedModel}`]: (_request, { filter }) => {
+          const records = Array.from(store.get(model).values()).map(record => record.toJSON());
           const response = filter ? records.filter(filter) : records;
 
-          return { [ pluralize(model) ]: response };
+          return { data: response };
         },
 
-        [`/${model}/:id`]: ({ params }) => {
+        [`/${pluralizedModel}/:id`]: ({ params }) => {
           const record = store.get(model, getId(params));
 
           if (!record) return 404; // Record not found
 
-          return { [model]: record.serialize() };
+          return { data: record.toJSON() };
         }
       },
 
       patch: {
-        [`/${model}/:id`]: ({ body, params }) => {
+        [`/${pluralizedModel}/:id`]: async ({ body, params }) => {
           const record = store.get(model, getId(params));
 
           // Apply updates 1 by 1 to utilize built-in transform logic, ignore id key
@@ -47,23 +49,28 @@ export default class OrmRequest extends Request {
             if (key !== 'id') record[key] = value
           }); 
 
-          return { [model]: record.serialize() };
+          Orm.db.save();
+
+          return { data: record.toJSON() };
         }
       },
 
       post: {
-        [`/${model}`]: ({ body }) => {
+        [`/${pluralizedModel}`]: ({ body }) => {
           const record = createRecord(model, body, { serialize: false });
+          Orm.db.save();
 
-          return { [model]: record.serialize() };
+          return { data: record.toJSON() };
         }
       },
 
       delete: {
-        [`/${model}/:id`]: ({ params }) => {
+        [`/${pluralizedModel}/:id`]: ({ params }) => {
+
+          Orm.db.save();
           store.remove(model, getId(params));
         }
-      },
+      }
     }
   }
 

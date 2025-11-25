@@ -21,8 +21,8 @@ import Orm, { store, relationships } from './main.js';
 import attr from './attr.js';
 import belongsTo from './belongs-to.js';
 import hasMany from './has-many.js';
-import createRecord from './create-record.js';
+import { createRecord, updateRecord } from './manage-record.js';
 
 export default Orm;
 export { Model, Serializer }; // base classes
-export { attr, belongsTo, hasMany, createRecord, store, relationships }; // helpers
+export { attr, belongsTo, hasMany, createRecord, updateRecord, store, relationships }; // helpers
