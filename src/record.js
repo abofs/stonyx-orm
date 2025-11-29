@@ -76,19 +76,10 @@ export default class Record {
     };
   }
 
-  /**
-   * Unloads this record from the store, cleaning up all relationships
-   * @param {Object} options - Options to pass to store.unloadRecord
-   */
   unload(options={}) {
     store.unloadRecord(this.__model.__name, this.id, options);
   }
 
-  /**
-   * Cleans up memory by deleting all properties on this record instance
-   * This prevents memory leaks from loose references
-   * @private - Should only be called by store.unloadRecord
-   */
   clean() {
     try {
       for (const key of Object.keys(this)) {
