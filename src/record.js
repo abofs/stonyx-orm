@@ -1,4 +1,4 @@
-import { store } from './main.js';
+import { store } from './index.js';
 import { getComputedProperties } from "./serializer.js";
 export default class Record {
   __data = {};
