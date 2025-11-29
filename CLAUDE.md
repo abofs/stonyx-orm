@@ -26,6 +26,8 @@
 5. **Serializer** ([src/serializer.js](src/serializer.js)) - Maps raw data to model format
 6. **DB** ([src/db.js](src/db.js)) - JSON file persistence layer
 7. **Relationships** ([src/has-many.js](src/has-many.js), [src/belongs-to.js](src/belongs-to.js)) - Relationship handlers
+8. **Include Parser** ([src/include-parser.js](src/include-parser.js)) - Parses include query params
+9. **Include Collector** ([src/include-collector.js](src/include-collector.js)) - Collects and deduplicates included records
 
 ### Project Structure
 
@@ -229,6 +231,37 @@ export default class GlobalAccess {
 // PATCH  /animals/:id      - Update
 // DELETE /animals/:id      - Delete
 ```
+
+### 9. Include Parameter (Sideloading)
+
+GET endpoints support sideloading related records:
+
+```javascript
+// Request with includes
+GET /animals/1?include=owner,traits
+
+// Response structure
+{
+  data: { type: 'animal', id: 1, attributes: {...}, relationships: {...} },
+  included: [
+    { type: 'owner', id: 'angela', attributes: {...}, relationships: {...} },
+    { type: 'trait', id: 1, attributes: {...}, relationships: {...} },
+    { type: 'trait', id: 2, attributes: {...}, relationships: {...} }
+  ]
+}
+```
+
+**How It Works:**
+1. Query param parsed by `parseInclude()` → `['owner', 'traits']`
+2. `collectIncludedRecords()` traverses `record.__relationships`
+3. Deduplication by type+id using Map<type, Set<id>>
+4. Each included record converted via `toJSON()`
+5. Response built with `{ data, included }` structure
+
+**Key Files:**
+- [src/include-parser.js](src/include-parser.js) - Parsing logic
+- [src/include-collector.js](src/include-collector.js) - Collection and deduplication
+- [src/orm-request.js](src/orm-request.js) - Request handler integration
 
 ---
 

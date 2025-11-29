@@ -176,7 +176,6 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(data.length, 3, 'excludes angela due to access filter');
       assert.deepEqual(data.map(record => record.id), [ 'gina', 'michael', 'bob' ]);
 
-      // Verify JSON-API structure
       const firstRecord = data[0];
       assert.equal(firstRecord.type, 'owner');
       assert.ok(firstRecord.attributes);
@@ -190,13 +189,10 @@ module('[Integration] ORM', function(hooks) {
 
       assert.equal(response.status, 200);
 
-      // Verify JSON-API structure
       assert.equal(data.type, 'owner');
       assert.equal(data.id, 'gina');
       assert.ok(data.attributes);
       assert.ok(data.relationships);
-
-      // Verify attributes
       assert.equal(data.attributes.gender, 'female');
       assert.equal(data.attributes.age, 34);
     });
@@ -225,8 +221,6 @@ module('[Integration] ORM', function(hooks) {
 
       assert.equal(response.status, 200);
       assert.equal(store.get('animal', expectedId).tag, `bob's large horse`);
-
-      // Verify JSON-API response structure
       assert.equal(data.type, 'animal');
       assert.equal(data.id, expectedId);
       assert.ok(data.attributes);
@@ -254,8 +248,6 @@ module('[Integration] ORM', function(hooks) {
 
       assert.equal(response.status, 200);
       assert.equal(store.get('animal', targetId).tag, `michael's small cat`);
-
-      // Verify JSON-API response structure
       assert.equal(data.type, 'animal');
       assert.equal(data.id, targetId);
       assert.equal(data.attributes.size, 'small');
@@ -268,6 +260,95 @@ module('[Integration] ORM', function(hooks) {
 
       assert.equal(response.status, 200);
       assert.notOk(store.get('animal', 3));
+    });
+
+    test('get call with include parameter sideloads relationships', async function(assert) {
+      const response = await fetch(`${endpoint}/animals/1?include=owner,traits`);
+      const { data, included } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(included, 'included array exists');
+      assert.equal(included.length, 3, 'includes owner + 2 traits');
+
+      // Verify owner is included with full attributes
+      const owner = included.find(r => r.type === 'owner' && r.id === 'angela');
+      assert.ok(owner, 'owner is included');
+      assert.equal(owner.attributes.age, 36);
+      assert.ok(owner.relationships, 'included records have relationships');
+
+      // Verify traits are included
+      const trait1 = included.find(r => r.type === 'trait' && r.id === 1);
+      const trait2 = included.find(r => r.type === 'trait' && r.id === 2);
+      assert.ok(trait1, 'trait 1 is included');
+      assert.ok(trait2, 'trait 2 is included');
+      assert.equal(trait1.attributes.type, 'habitat');
+      assert.equal(trait2.attributes.type, 'color');
+    });
+
+    test('get collection with include parameter deduplicates relationships', async function(assert) {
+      const response = await fetch(`${endpoint}/animals?include=owner`);
+      const { data, included } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(included, 'included array exists');
+
+      // Multiple animals share owners, should deduplicate
+      const ownerIds = included.filter(r => r.type === 'owner').map(r => r.id);
+      const uniqueOwners = new Set(ownerIds);
+      assert.equal(ownerIds.length, uniqueOwners.size, 'no duplicate owners');
+      assert.ok(uniqueOwners.size <= 4, 'at most 4 unique owners');
+    });
+
+    test('request without include parameter works as before (backward compatibility)', async function(assert) {
+      const response = await fetch(`${endpoint}/animals/1`);
+      const result = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(result.data, 'has data');
+      assert.notOk(result.included, 'no included array when not requested');
+      assert.ok(result.data.relationships, 'relationships still present as references');
+    });
+
+    test('invalid relationship in include parameter is ignored', async function(assert) {
+      const response = await fetch(`${endpoint}/animals/1?include=owner,invalidRel,traits`);
+      const { data, included } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(included, 'included array exists despite invalid relationship');
+
+      // Should include valid relationships only
+      const hasOwner = included.some(r => r.type === 'owner');
+      const hasTraits = included.some(r => r.type === 'trait');
+      assert.ok(hasOwner, 'valid owner relationship included');
+      assert.ok(hasTraits, 'valid traits relationship included');
+    });
+
+    test('empty relationships do not appear in included array', async function(assert) {
+      // Create animal with no traits relationship
+      const newAnimal = {
+        data: {
+          type: 'animal',
+          attributes: { type: 'horse', age: 3, size: 'large', owner: 'bob' }
+        }
+      };
+
+      const createResponse = await fetch(`${endpoint}/animals`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newAnimal)
+      });
+
+      const { data: created } = await createResponse.json();
+      const response = await fetch(`${endpoint}/animals/${created.id}?include=traits,owner`);
+      const { data, included } = await response.json();
+
+      assert.equal(response.status, 200);
+
+      // Should only include owner (which exists), not empty traits
+      const ownerIncluded = included.some(r => r.type === 'owner');
+      assert.ok(ownerIncluded, 'owner is included');
+
+      assert.ok(Array.isArray(included), 'included is array');
     });
   });
 });

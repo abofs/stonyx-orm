@@ -188,13 +188,90 @@ Access classes define models and provide custom filtering/authorization logic:
 ```js
 export default class GlobalAccess {
   models = ['owner', 'animal'];
-  
+
   access(request) {
     if (request.url.endsWith('/owner/angela')) return false;
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
+
+### Include Parameter (Sideloading Relationships)
+
+The ORM supports JSON API-compliant relationship sideloading via the `include` query parameter. This reduces the need for multiple API requests by embedding related records in a single response.
+
+#### Basic Usage
+
+```javascript
+// Fetch animal with owner and traits included
+GET /animals/1?include=owner,traits
+
+// Response:
+{
+  "data": {
+    "type": "animal",
+    "id": 1,
+    "attributes": { "age": 2, "size": "small" },
+    "relationships": {
+      "owner": { "data": { "type": "owner", "id": "angela" } },
+      "traits": { "data": [
+        { "type": "trait", "id": 1 },
+        { "type": "trait", "id": 2 }
+      ]}
+    }
+  },
+  "included": [
+    {
+      "type": "owner",
+      "id": "angela",
+      "attributes": { "age": 36, "gender": "female" },
+      "relationships": { "pets": { "data": [...] } }
+    },
+    {
+      "type": "trait",
+      "id": 1,
+      "attributes": { "type": "habitat", "value": "farm" },
+      "relationships": {}
+    },
+    {
+      "type": "trait",
+      "id": 2,
+      "attributes": { "type": "color", "value": "black" },
+      "relationships": {}
+    }
+  ]
+}
+```
+
+#### Features
+
+- **Comma-separated relationship names:** `?include=owner,traits`
+- **Works with collections and single records:** Both GET endpoints support includes
+- **Automatic deduplication:** Each unique record (by type+id) appears only once in included array
+- **Invalid relationships ignored:** Invalid relationship names are silently skipped
+- **Backward compatible:** Omit the include parameter for original behavior (no included array)
+
+#### Examples
+
+```javascript
+// Single resource with single include
+GET /owners/gina?include=pets
+
+// Single resource with multiple includes
+GET /animals/1?include=owner,traits
+
+// Collection with includes (deduplicates automatically)
+GET /animals?include=owner
+
+// No include parameter (backward compatible)
+GET /animals/1
+// Returns: { data: {...} } // No included array
+```
+
+#### Limitations
+
+- Nested includes not yet supported (e.g., `?include=owner.pets`)
+- Only available on GET endpoints (not POST/PATCH)
 
 ## Exported Helpers
 
