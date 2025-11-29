@@ -144,7 +144,7 @@ module('[Integration] ORM', function(hooks) {
       assert.deepEqual(dbRecordData, serialized);
     });
 
-    test('Creating a record with a pending relationship works as expected', function(assert) {
+    test('creating a record with a pending relationship works as expected', function(assert) {
       // Note: pets reference animals that do not yet exist
       const record = createRecord('owner', { name: 'testOwner', pets: [ 5000, 5001 ] });
 
@@ -160,7 +160,7 @@ module('[Integration] ORM', function(hooks) {
       store.remove('animal', 5000);
     });
 
-    test('Computed properties are available in JSON output as expected', function(assert) {
+    test('computed properties are available in JSON output as expected', function(assert) {
       const animal = store.get('animal', 2).toJSON();
 
       assert.equal(animal.attributes.tag, `michael's medium dog`);
