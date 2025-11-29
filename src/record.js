@@ -1,3 +1,4 @@
+import { store } from './main.js';
 import { getComputedProperties } from "./serializer.js";
 export default class Record {
   __data = {};
@@ -75,12 +76,26 @@ export default class Record {
     };
   }
 
-  // Delete every key to prevent memory leaks from loose references
-  unload() {
+  /**
+   * Unloads this record from the store, cleaning up all relationships
+   * @param {Object} options - Options to pass to store.unloadRecord
+   */
+  unload(options={}) {
+    store.unloadRecord(this.__model.__name, this.id, options);
+  }
+
+  /**
+   * Cleans up memory by deleting all properties on this record instance
+   * This prevents memory leaks from loose references
+   * @private - Should only be called by store.unloadRecord
+   */
+  clean() {
     try {
-      for (const key of Object.keys(this)) delete this[key];
+      for (const key of Object.keys(this)) {
+        delete this[key];
+      }
     } catch {
-      // Ignore errors during unload, as some keys may not be deletable
+      // Ignore errors during cleanup, as some keys may not be deletable
     }
   }
 }

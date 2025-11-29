@@ -40,4 +40,4 @@ export function getHasManyRelationships(sourceModel, targetModel) {
   return relationships.get('hasMany').get(sourceModel)?.get(targetModel);
 }
 
-export const TYPES = ['global', 'hasMany', 'belongsTo'];
+export const TYPES = ['global', 'hasMany', 'belongsTo', 'pending'];

@@ -12,7 +12,7 @@ export default function belongsTo(modelName) {
     const relationshipId = sourceRecord.id;
     const relationship = getRelationshipInfo('belongsTo', sourceModelName, modelName, relationshipId);
     const modelStore = store.get(modelName);
-    const output = (typeof rawData !== 'object' ? modelStore.get(rawData) : null) || createRecord(modelName, rawData, options);
+    const output = typeof rawData === 'object' ? createRecord(modelName, rawData, options) : modelStore.get(rawData) || null;
 
     relationship.set(relationshipId, output || {});
 

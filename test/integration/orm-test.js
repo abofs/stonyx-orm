@@ -122,11 +122,8 @@ module('[Integration] ORM', function(hooks) {
 
     // Note: This test relies on the one above to prevent re-assigning parsedFileData
     test('removing records and recreating them from db storage returns the same record output', async function(assert) {
-      // Clear the store
-      store.remove('owner');
-      store.remove('animal');
-      store.remove('trait');
-      store.remove(dbKey);
+      // Clear the store by unloading the db record with includeChildren
+      store.unloadAllRecords(dbKey, { includeChildren: true });
 
       assert.notOk(store.get('owner').size);
       assert.notOk(store.get('animal').size);
@@ -137,14 +134,18 @@ module('[Integration] ORM', function(hooks) {
        * Re-populate entire store from db file data
        * Note: the isDbRecord usage warning is expected
        */
+      console.log('Does parsedFileData have traits?', 'traits' in parsedFileData);
+      console.log('parsedFileData.traits:', parsedFileData.traits);
+
       const dbRecordData = createRecord(dbKey, parsedFileData, { serialize: false, transform: false }).format();
       delete dbRecordData.id; // We compare without the id
 
-      assert.deepEqual(dbRecordData, serialized);
       assert.ok(store.get('owner').size);
       assert.ok(store.get('animal').size);
       assert.ok(store.get('trait').size);
       assert.ok(store.get(dbKey).size);
+
+      assert.deepEqual(dbRecordData, serialized);
     });
 
     test.skip('Creating a record with a pending relationship works as expected', function(assert) {

@@ -43,11 +43,17 @@ export default class OrmRequest extends Request {
       patch: {
         [`/${pluralizedModel}/:id`]: async ({ body, params }) => {
           const record = store.get(model, getId(params));
+          const { attributes } = body?.data || {};
+          
+          if (!attributes) return 400; // Bad request
 
           // Apply updates 1 by 1 to utilize built-in transform logic, ignore id key
-          Object.entries(body).forEach(([key, value]) => {
-            if (key !== 'id') record[key] = value
-          }); 
+          for (const [key, value] of Object.entries(attributes)) {
+            if (!record.hasOwnProperty(key)) continue;
+            if (key === 'id') continue;
+            
+            record[key] = value
+          };
 
           Orm.db.save();
 

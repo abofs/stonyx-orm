@@ -3,6 +3,15 @@ import { getRelationshipInfo } from './relationships.js';
 import { getOrSet, makeArray } from '@stonyx/utils/object';
 import { dbKey } from './db.js';
 
+function queuePendingRelationship(pendingRelationshipQueue, pendingRelationships, modelName, id) {
+  pendingRelationshipQueue.push({
+    pendingRelationship: getOrSet(pendingRelationships, modelName, new Map()),
+    id
+  });
+
+  return null;
+}
+
 export default function hasMany(modelName) {
   const globalRelationships = relationships.get('global');
   const pendingRelationships = relationships.get('pending');
@@ -10,24 +19,22 @@ export default function hasMany(modelName) {
   return (sourceRecord, rawData, options) => {
     const { __name: sourceModelName } = sourceRecord.__model;
     const relationshipId = sourceRecord.id;
-    const relationship = getRelationshipInfo('hasMany', sourceModelName, modelName, relationshipId); 
+    const relationship = getRelationshipInfo('hasMany', sourceModelName, modelName, relationshipId);
     const modelStore = store.get(modelName);
     const pendingRelationshipQueue = [];
+
     const output = !rawData ? [] : makeArray(rawData).map(elementData => {
       let record;
 
       if (typeof elementData !== 'object') {
         record = modelStore.get(elementData);
 
-        if (!record) return null;
+        if (!record) {
+          return queuePendingRelationship(pendingRelationshipQueue, pendingRelationships, modelName, elementData);
+        }
       } else {
         if (elementData !== Object(elementData)) {
-          pendingRelationshipQueue.push({
-            pendingRelationship: getOrSet(pendingRelationships, modelName, new Map()),
-            id: elementData 
-          });
-
-          return null;
+          return queuePendingRelationship(pendingRelationshipQueue, pendingRelationships, modelName, elementData);
         }
 
         record = createRecord(modelName, elementData, options);
