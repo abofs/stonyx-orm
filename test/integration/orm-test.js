@@ -167,64 +167,104 @@ module('[Integration] ORM', function(hooks) {
     });
   });
 
-  module.skip('JSON API', function() {
+  module('JSON API', function() {
     test('get call for schema records work as expected', async function(assert) {
       const response = await fetch(`${endpoint}/owners`);
       const { data } = await response.json();
 
       assert.equal(response.status, 200);
-      assert.deepEqual(data.map(data => data.id), [ 'gina', 'michael', 'bob' ], 'excludes angela due to access filter');
+      assert.equal(data.length, 3, 'excludes angela due to access filter');
+      assert.deepEqual(data.map(record => record.id), [ 'gina', 'michael', 'bob' ]);
+
+      // Verify JSON-API structure
+      const firstRecord = data[0];
+      assert.equal(firstRecord.type, 'owner');
+      assert.ok(firstRecord.attributes);
+      assert.ok(firstRecord.relationships);
+      assert.equal(firstRecord.id, 'gina');
     });
 
     test('get call for specific records work as expected', async function(assert) {
-      const response = await fetch(`${endpoint}/owner/gina`);
-      const data = await response.json();
+      const response = await fetch(`${endpoint}/owners/gina`);
+      const { data } = await response.json();
 
       assert.equal(response.status, 200);
-      assert.deepEqual(data, { data: sampleDataOutput.owners[0] });
+
+      // Verify JSON-API structure
+      assert.equal(data.type, 'owner');
+      assert.equal(data.id, 'gina');
+      assert.ok(data.attributes);
+      assert.ok(data.relationships);
+
+      // Verify attributes
+      assert.equal(data.attributes.gender, 'female');
+      assert.equal(data.attributes.age, 34);
     });
 
     test('get call for invalid records return a 404', async function(assert) {
-      const response = await fetch(`${endpoint}/owner/rex`);
+      const response = await fetch(`${endpoint}/owners/rex`);
       
       assert.equal(response.status, 404);
     });
 
     test('post call for schema records create a new record expected', async function(assert) {
-      const newAnimal = { type: 'horse', age: 3, size: 'large', owner: 'bob' };
-      const response = await fetch(`${endpoint}/animal`, {
+      const newAnimal = {
+        data: {
+          type: 'animal',
+          attributes: { type: 'horse', age: 3, size: 'large', owner: 'bob' }
+        }
+      };
+      const response = await fetch(`${endpoint}/animals`, {
         method: 'post',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newAnimal)
       });
 
-      const data = await response.json();
+      const { data } = await response.json();
       const expectedId = 21; // Based on sample data
 
+      assert.equal(response.status, 200);
       assert.equal(store.get('animal', expectedId).tag, `bob's large horse`);
-      assert.equal(data.animal.id, expectedId);
+
+      // Verify JSON-API response structure
+      assert.equal(data.type, 'animal');
+      assert.equal(data.id, expectedId);
+      assert.ok(data.attributes);
     });
 
     test('patch call for schema records work as expected', async function(assert) {
       const targetId = 12; // Based on michael's large cat from sample data
-      const updates = { size: 'small' };
+      const updates = {
+        data: {
+          type: 'animal',
+          id: targetId,
+          attributes: { size: 'small' }
+        }
+      };
 
       assert.equal(store.get('animal', targetId).tag, `michael's large cat`);
 
-      const response = await fetch(`${endpoint}/animal/${targetId}`, {
-        method: 'patch',
+      const response = await fetch(`${endpoint}/animals/${targetId}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
       });
 
+      const { data } = await response.json();
+
       assert.equal(response.status, 200);
       assert.equal(store.get('animal', targetId).tag, `michael's small cat`);
+
+      // Verify JSON-API response structure
+      assert.equal(data.type, 'animal');
+      assert.equal(data.id, targetId);
+      assert.equal(data.attributes.size, 'small');
     });
 
     test('delete call for schema records work as expected', async function(assert) {
       assert.ok(store.get('animal', 3));
 
-      const response = await fetch(`${endpoint}/animal/3`, { method: 'delete' });
+      const response = await fetch(`${endpoint}/animals/3`, { method: 'delete' });
 
       assert.equal(response.status, 200);
       assert.notOk(store.get('animal', 3));

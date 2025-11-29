@@ -1,5 +1,5 @@
 import { Request } from '@stonyx/rest-server';
-import Orm, { createRecord, store } from '@stonyx/orm';
+import { createRecord, store } from '@stonyx/orm';
 import { pluralize } from '@stonyx/utils/string';
 
 const methodAccessMap = {
@@ -44,18 +44,16 @@ export default class OrmRequest extends Request {
         [`/${pluralizedModel}/:id`]: async ({ body, params }) => {
           const record = store.get(model, getId(params));
           const { attributes } = body?.data || {};
-          
+
           if (!attributes) return 400; // Bad request
 
           // Apply updates 1 by 1 to utilize built-in transform logic, ignore id key
           for (const [key, value] of Object.entries(attributes)) {
             if (!record.hasOwnProperty(key)) continue;
             if (key === 'id') continue;
-            
+
             record[key] = value
           };
-
-          Orm.db.save();
 
           return { data: record.toJSON() };
         }
@@ -63,8 +61,11 @@ export default class OrmRequest extends Request {
 
       post: {
         [`/${pluralizedModel}`]: ({ body }) => {
-          const record = createRecord(model, body, { serialize: false });
-          Orm.db.save();
+          const { attributes } = body?.data || {};
+
+          if (!attributes) return 400; // Bad request
+
+          const record = createRecord(model, attributes, { serialize: false });
 
           return { data: record.toJSON() };
         }
@@ -72,8 +73,6 @@ export default class OrmRequest extends Request {
 
       delete: {
         [`/${pluralizedModel}/:id`]: ({ params }) => {
-
-          Orm.db.save();
           store.remove(model, getId(params));
         }
       }
