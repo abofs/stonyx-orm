@@ -28,7 +28,7 @@ export default class Orm {
     const { relationships } = Orm;
 
     // Declare relationship maps
-    for (const key of ['hasMany', 'belongsTo', 'global', 'pending']) {
+    for (const key of ['hasMany', 'belongsTo', 'global', 'pending', 'pendingBelongsTo']) {
       relationships.set(key, new Map());
     }
 

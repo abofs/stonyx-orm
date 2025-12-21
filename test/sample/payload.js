@@ -62,8 +62,12 @@ export const serialized = {
     { id: 20, type: 4, age: 4, size: 'medium', owner: 'angela', traits: [ 1 ] }
   ],
   traits: [
-    { id: 1, type: 'habitat', value: 'farm' },
-    { id: 2, type: 'color', value: 'black' },
-    { id: 3, type: 'color', value: 'white' },
+    { id: 1, type: 'habitat', value: 'farm', category: 'physical' },
+    { id: 2, type: 'color', value: 'black', category: 'appearance' },
+    { id: 3, type: 'color', value: 'white', category: 'appearance' },
+  ],
+  categories: [
+    { id: 'physical', name: 'Physical Attributes' },
+    { id: 'appearance', name: 'Appearance Attributes' }
   ]
 };

@@ -246,6 +246,7 @@ GET /animals/1?include=owner,traits
 #### Features
 
 - **Comma-separated relationship names:** `?include=owner,traits`
+- **Nested relationship traversal:** `?include=owner.pets,owner.company` (supports multi-level nesting)
 - **Works with collections and single records:** Both GET endpoints support includes
 - **Automatic deduplication:** Each unique record (by type+id) appears only once in included array
 - **Invalid relationships ignored:** Invalid relationship names are silently skipped
@@ -260,17 +261,32 @@ GET /owners/gina?include=pets
 // Single resource with multiple includes
 GET /animals/1?include=owner,traits
 
+// Nested includes (NEW!)
+GET /animals/1?include=owner.pets
+
+// Deep nesting (3+ levels)
+GET /scenes/e001-s001?include=slides.dialogue.character
+
 // Collection with includes (deduplicates automatically)
 GET /animals?include=owner
+
+// Combining nested and non-nested includes
+GET /owners?include=pets.traits,company
 
 // No include parameter (backward compatible)
 GET /animals/1
 // Returns: { data: {...} } // No included array
 ```
 
+**How Nested Includes Work:**
+1. Query param parsed into path segments: `owner.pets` → `['owner', 'pets']`
+2. Recursively traverses relationships depth-first
+3. Deduplication still by type+id (no duplicates in included array)
+4. Gracefully handles null/missing relationships at any depth
+5. Each included record gets full `toJSON()` representation
+
 #### Limitations
 
-- Nested includes not yet supported (e.g., `?include=owner.pets`)
 - Only available on GET endpoints (not POST/PATCH)
 
 ## Exported Helpers

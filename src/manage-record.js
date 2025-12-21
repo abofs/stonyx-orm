@@ -43,6 +43,40 @@ export function createRecord(modelName, rawData={}, userOptions={}) {
     pendingHasMany.splice(0);
   }
 
+  // Fulfill pending belongsTo relationships
+  const pendingBelongsToQueue = relationships.get('pendingBelongsTo');
+  const pendingBelongsTo = pendingBelongsToQueue.get(modelName)?.get(record.id);
+
+  if (pendingBelongsTo) {
+    const belongsToReg = relationships.get('belongsTo');
+    const hasManyReg = relationships.get('hasMany');
+
+    for (const { sourceRecord, sourceModelName, relationshipKey, relationshipId } of pendingBelongsTo) {
+      // Update the belongsTo relationship on the source record
+      sourceRecord.__relationships[relationshipKey] = record;
+      sourceRecord[relationshipKey] = record; // Also update the direct property
+
+      // Update the belongsTo relationship registry
+      const sourceModelReg = belongsToReg.get(sourceModelName);
+      if (sourceModelReg) {
+        const targetModelReg = sourceModelReg.get(modelName);
+        if (targetModelReg) {
+          targetModelReg.set(relationshipId, record);
+        }
+      }
+
+      // Wire inverse hasMany if it exists
+      const inverseHasMany = hasManyReg.get(modelName)?.get(sourceModelName)?.get(record.id);
+
+      if (inverseHasMany && !inverseHasMany.includes(sourceRecord)) {
+        inverseHasMany.push(sourceRecord);
+      }
+    }
+
+    // Clear the pending queue
+    pendingBelongsTo.length = 0;
+  }
+
   return record;
 }
 

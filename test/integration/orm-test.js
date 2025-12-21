@@ -37,7 +37,8 @@ module('[Integration] ORM', function(hooks) {
       assert.deepEqual(fileData, {
         owners: [],
         animals: [],
-        traits: []
+        traits: [],
+        categories: []
       });
     });
 
@@ -51,6 +52,12 @@ module('[Integration] ORM', function(hooks) {
 
   module('Data', function(hooks) {
     hooks.before(function() {
+      // Create categories first so traits can reference them
+      for (const category of serialized.categories) {
+        createRecord('category', category);
+      }
+
+      // Use original raw data approach (goes through serializers)
       for (const owner of raw.owners) createRecord('owner', owner);
       for (const animal of raw.animals) createRecord('animal', animal);
     });
@@ -167,7 +174,14 @@ module('[Integration] ORM', function(hooks) {
     });
   });
 
-  module('JSON API', function() {
+  module('JSON API', function(hooks) {
+    hooks.before(function() {
+      // Create categories for trait->category relationship testing
+      for (const category of serialized.categories) {
+        createRecord('category', category);
+      }
+    });
+
     test('get call for schema records work as expected', async function(assert) {
       const response = await fetch(`${endpoint}/owners`);
       const { data } = await response.json();
@@ -349,6 +363,95 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(ownerIncluded, 'owner is included');
 
       assert.ok(Array.isArray(included), 'included is array');
+    });
+
+    test('get call with nested include parameter sideloads deep relationships', async function(assert) {
+      // Request animal with owner AND owner's pets (nested)
+      const response = await fetch(`${endpoint}/animals/1?include=owner,owner.pets`);
+      const { data, included } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(included, 'included array exists');
+
+      // Should include: owner + all of owner's pets (other animals)
+      const owner = included.find(r => r.type === 'owner' && r.id === 'angela');
+      assert.ok(owner, 'owner is included');
+
+      // Angela owns multiple animals, those should be in included
+      const angelaPets = included.filter(r => r.type === 'animal' && r.relationships.owner?.data?.id === 'angela');
+      assert.ok(angelaPets.length > 1, 'owner pets are included via nested relationship');
+    });
+
+    test('get call with deeply nested include parameter (3 levels)', async function(assert) {
+      // Test 2-level depth with collection endpoint: owners -> pets -> traits
+      const response = await fetch(`${endpoint}/owners?include=pets.traits`);
+      const { data, included } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(included, 'included array exists');
+
+      // Should include all pets and all traits of those pets
+      const pets = included.filter(r => r.type === 'animal');
+      const traits = included.filter(r => r.type === 'trait');
+
+      assert.ok(pets.length > 0, 'pets are included');
+      assert.ok(traits.length > 0, 'traits of pets are included via nested traversal');
+    });
+
+    test('nested includes handle null relationships gracefully', async function(assert) {
+      // Create an animal without traits
+      const createResponse = await fetch(`${endpoint}/animals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { attributes: { id: 999, type: 1, age: 1, size: 'tiny', owner: 'bob' } } })
+      });
+
+      const { data: created } = await createResponse.json();
+
+      // Try to include traits.metadata (traits doesn't exist, metadata doesn't exist)
+      const response = await fetch(`${endpoint}/animals/${created.id}?include=traits,traits.metadata`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      // Should not crash even if traits.metadata doesn't exist
+    });
+
+    test('verify trait->category relationships are established in store', function(assert) {
+      // Verify that traits have their category relationships populated
+      const trait1 = store.get('trait', 1);
+      const trait2 = store.get('trait', 2);
+      const trait3 = store.get('trait', 3);
+
+      assert.ok(trait1, 'trait 1 exists');
+      assert.ok(trait2, 'trait 2 exists');
+      assert.ok(trait3, 'trait 3 exists');
+
+      assert.ok(trait1.category, 'trait 1 has category relationship');
+      assert.ok(trait2.category, 'trait 2 has category relationship');
+      assert.ok(trait3.category, 'trait 3 has category relationship');
+
+      assert.equal(trait1.category.id, 'physical', 'trait 1 category is physical');
+      assert.equal(trait2.category.id, 'appearance', 'trait 2 category is appearance');
+      assert.equal(trait3.category.id, 'appearance', 'trait 3 category is appearance');
+    });
+
+    test('get call with 3-level hasMany->hasMany->belongsTo nested includes', async function(assert) {
+      // This tests the specific pattern: owners -> pets (hasMany) -> traits (hasMany) -> category (belongsTo)
+      // This mimics the this-is-it pattern: scene -> slides -> dialogue -> character
+      const response = await fetch(`${endpoint}/owners?include=pets.traits.category`);
+      const { data, included } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(included, 'included array exists');
+
+      // Should include pets, traits, and categories
+      const pets = included.filter(r => r.type === 'animal');
+      const traits = included.filter(r => r.type === 'trait');
+      const categories = included.filter(r => r.type === 'category');
+
+      assert.ok(pets.length > 0, 'pets are included via first level nesting');
+      assert.ok(traits.length > 0, 'traits are included via second level nesting');
+      assert.ok(categories.length > 0, 'categories are included via third level nesting (belongsTo from trait)');
     });
   });
 });

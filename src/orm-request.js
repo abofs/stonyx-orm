@@ -31,6 +31,61 @@ function buildResponse(data, includeParam, recordOrRecords) {
   return response;
 }
 
+/**
+ * Recursively traverse an include path and collect related records
+ * @param {Array<Record>} currentRecords - Records to process at current depth
+ * @param {Array<string>} includePath - Full path array (e.g., ['owner', 'pets', 'traits'])
+ * @param {number} depth - Current depth in the path
+ * @param {Map} seen - Deduplication map
+ * @param {Array} included - Accumulator for included records
+ */
+function traverseIncludePath(currentRecords, includePath, depth, seen, included) {
+  if (depth >= includePath.length) return; // Reached end of path
+
+  const relationshipName = includePath[depth];
+  const nextRecords = [];
+
+  for (const record of currentRecords) {
+    if (!record.__relationships) continue;
+    if (!(relationshipName in record.__relationships)) continue;
+
+    const relatedRecords = record.__relationships[relationshipName];
+    if (!relatedRecords) continue;
+
+    // Handle both belongsTo (single) and hasMany (array)
+    const recordsToProcess = Array.isArray(relatedRecords)
+      ? relatedRecords
+      : [relatedRecords];
+
+    for (const relatedRecord of recordsToProcess) {
+      if (!relatedRecord) continue;
+
+      const type = relatedRecord.__model.__name;
+      const id = relatedRecord.id;
+
+      // Initialize Set for this type if needed
+      if (!seen.has(type)) {
+        seen.set(type, new Set());
+      }
+
+      // Check if we've already seen this type+id combination
+      if (!seen.get(type).has(id)) {
+        seen.get(type).add(id);
+        included.push(relatedRecord);
+        nextRecords.push(relatedRecord); // Prepare for next depth level
+      } else if (depth < includePath.length - 1) {
+        // Even if we've seen this record, we might need it for deeper traversal
+        nextRecords.push(relatedRecord);
+      }
+    }
+  }
+
+  // If there are more segments in the path, recursively process
+  if (depth < includePath.length - 1 && nextRecords.length > 0) {
+    traverseIncludePath(nextRecords, includePath, depth + 1, seen, included);
+  }
+}
+
 function collectIncludedRecords(data, includes) {
   if (!includes || includes.length === 0) return [];
   if (!data) return [];
@@ -41,42 +96,9 @@ function collectIncludedRecords(data, includes) {
   // Normalize to array for consistent processing
   const records = Array.isArray(data) ? data : [data];
 
-  for (const record of records) {
-    if (!record.__relationships) continue;
-
-    // Only process includes that are valid for this record
-    const validIncludes = includes.filter(
-      relationshipName => relationshipName in record.__relationships
-    );
-
-    for (const relationshipName of validIncludes) {
-      const relatedRecords = record.__relationships[relationshipName];
-
-      if (!relatedRecords) continue;
-
-      // Handle both belongsTo (single) and hasMany (array)
-      const recordsToProcess = Array.isArray(relatedRecords)
-        ? relatedRecords
-        : [relatedRecords];
-
-      for (const relatedRecord of recordsToProcess) {
-        if (!relatedRecord) continue;
-
-        const type = relatedRecord.__model.__name;
-        const id = relatedRecord.id;
-
-        // Initialize Set for this type if needed
-        if (!seen.has(type)) {
-          seen.set(type, new Set());
-        }
-
-        // Check if we've already seen this type+id combination
-        if (!seen.get(type).has(id)) {
-          seen.get(type).add(id);
-          included.push(relatedRecord);
-        }
-      }
-    }
+  // Process each include path
+  for (const includePath of includes) {
+    traverseIncludePath(records, includePath, 0, seen, included);
   }
 
   return included;
@@ -88,7 +110,8 @@ function parseInclude(includeParam) {
   return includeParam
     .split(',')
     .map(rel => rel.trim())
-    .filter(rel => rel.length > 0);
+    .filter(rel => rel.length > 0)
+    .map(rel => rel.split('.')); // Parse nested paths: "owner.pets" → ["owner", "pets"]
 }
 
 export default class OrmRequest extends Request {

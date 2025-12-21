@@ -76,7 +76,9 @@ export default class Serializer {
 
       // Relationship handling
       if (typeof handler === 'function') {
-        const childRecord = handler(record, data, options);
+        // Pass relationship key name to handler for pending fulfillment
+        const handlerOptions = { ...options, _relationshipKey: key };
+        const childRecord = handler(record, data, handlerOptions);
 
         record[key] = childRecord
         relatedRecords[key] = childRecord;

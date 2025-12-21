@@ -234,34 +234,42 @@ export default class GlobalAccess {
 
 ### 9. Include Parameter (Sideloading)
 
-GET endpoints support sideloading related records:
+GET endpoints support sideloading related records with **nested relationship traversal**:
 
 ```javascript
-// Request with includes
+// Single-level includes
 GET /animals/1?include=owner,traits
 
-// Response structure
+// Nested includes (NEW!)
+GET /animals/1?include=owner.pets,owner.company
+
+// Deep nesting (3+ levels)
+GET /scenes/e001-s001?include=slides.dialogue.character
+
+// Response structure (unchanged)
 {
   data: { type: 'animal', id: 1, attributes: {...}, relationships: {...} },
   included: [
-    { type: 'owner', id: 'angela', attributes: {...}, relationships: {...} },
-    { type: 'trait', id: 1, attributes: {...}, relationships: {...} },
-    { type: 'trait', id: 2, attributes: {...}, relationships: {...} }
+    { type: 'owner', id: 'angela', ... },
+    { type: 'animal', id: 7, ... },    // owner's other pets
+    { type: 'animal', id: 11, ... },   // owner's other pets
+    { type: 'company', id: 'acme', ... } // owner's company (if requested)
   ]
 }
 ```
 
-**How It Works:**
-1. Query param parsed by `parseInclude()` → `['owner', 'traits']`
-2. `collectIncludedRecords()` traverses `record.__relationships`
-3. Deduplication by type+id using Map<type, Set<id>>
-4. Each included record converted via `toJSON()`
-5. Response built with `{ data, included }` structure
+**How Nested Includes Work:**
+1. Query param parsed into path segments: `owner.pets` → `[['owner'], ['owner', 'pets'], ['traits']]`
+2. `traverseIncludePath()` recursively traverses relationships depth-first
+3. Deduplication still by type+id (no duplicates in included array)
+4. Gracefully handles null/missing relationships at any depth
+5. Each included record gets full `toJSON()` representation
 
-**Key Files:**
-- [src/include-parser.js](src/include-parser.js) - Parsing logic
-- [src/include-collector.js](src/include-collector.js) - Collection and deduplication
-- [src/orm-request.js](src/orm-request.js) - Request handler integration
+**Key Functions:**
+- `parseInclude()` - Splits comma-separated includes and parses nested paths
+- `traverseIncludePath()` - Recursively traverses relationship paths
+- `collectIncludedRecords()` - Orchestrates traversal and deduplication
+- All implemented in [src/orm-request.js](src/orm-request.js)
 
 ---
 
