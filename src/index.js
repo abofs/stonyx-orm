@@ -17,12 +17,12 @@
 import Model from './model.js';
 import Serializer from './serializer.js';
 
-import Orm, { store, relationships } from './main.js';
 import attr from './attr.js';
 import belongsTo from './belongs-to.js';
 import hasMany from './has-many.js';
 import { createRecord, updateRecord } from './manage-record.js';
 
-export default Orm;
+export { default } from './main.js';
+export { store, relationships } from './main.js';
 export { Model, Serializer }; // base classes
-export { attr, belongsTo, hasMany, createRecord, updateRecord, store, relationships }; // helpers
+export { attr, belongsTo, hasMany, createRecord, updateRecord }; // helpers

@@ -6,7 +6,7 @@
   ],
   "version": "0.1.0",
   "description": "",
-  "main": "src/index.js",
+  "main": "src/main.js",
   "type": "module",
   "exports": {
     ".": "./src/index.js",
