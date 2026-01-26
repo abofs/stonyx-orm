@@ -4,7 +4,7 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "",
   "main": "src/main.js",
   "type": "module",
@@ -24,17 +24,20 @@
   "contributors": [
     "Stone Costa <stone.costa@synamicd.com>"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bugs": {
     "url": "https://github.com/abofs/stonyx-orm/issues"
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "stonyx": "file:../stonyx"
+    "stonyx": "^0.2.2"
   },
   "devDependencies": {
-    "@stonyx/cron": "file:../stonyx-cron",
-    "@stonyx/rest-server": "file:../stonyx-rest-server",
-    "@stonyx/utils": "file:../stonyx-utils",
+    "@stonyx/cron": "^0.2.0",
+    "@stonyx/rest-server": "^0.2.0",
+    "@stonyx/utils": "^0.2.2",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
   }
