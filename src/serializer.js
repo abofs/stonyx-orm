@@ -1,6 +1,5 @@
 import config from 'stonyx/config';
-import { makeArray } from '@stonyx/utils/object';
-import { get, getComputedProperties } from '@stonyx/orm/utils';
+import { get, makeArray } from '@stonyx/utils/object';
 
 const RESERVED_KEYS = ['__name'];
 
@@ -48,7 +47,7 @@ function query(rawData, pathPrefix, subPath) {
   }
 }
 
-export default class BaseSerializer {
+export default class Serializer {
   map = {};
   path = '';
 
@@ -61,25 +60,28 @@ export default class BaseSerializer {
    * the ModelProperty object, while setting parsed values to the record's
    * __data property, which represents the serialized version of the data
    */
-  setProperties(rawData, record) {
+  setProperties(rawData, record, options) {
     const { path, model } = this;
     const keys = Object.keys(model).filter(key => !RESERVED_KEYS.includes(key));
     const pathPrefix = path ? `${path}.` : '';
-    const { __data:parsedData } = record;
-    const { postTransform } = model;
+    const { __data:parsedData, __relationships:relatedRecords } = record;
 
     for (const key of keys) {
-      const subPath = this.map[key] || key;
+      const subPath = options.serialize ? (this.map[key] || key) : key;
       const handler = model[key];
       const data = query(rawData, pathPrefix, subPath);
 
+      // Ignore null values on updates (TODO: What if we want it set to null?)
+      if (data === null && options.update) continue;
+
       // Relationship handling
       if (typeof handler === 'function') {
-        const childRecord = handler(data);
+        // Pass relationship key name to handler for pending fulfillment
+        const handlerOptions = { ...options, _relationshipKey: key };
+        const childRecord = handler(record, data, handlerOptions);
+
         record[key] = childRecord
-        parsedData[key] = Array.isArray(childRecord) 
-          ? childRecord.map(record => record.serialize())
-          : childRecord.serialize();
+        relatedRecords[key] = childRecord;
 
         continue;
       }
@@ -91,22 +93,28 @@ export default class BaseSerializer {
         continue;
       }
 
-      // We access modelProperty.value twice due to getter/setter in ModelProperty class
-      handler.value = data;
-      let transformedValue = handler.value;
+      Object.defineProperty(record, key, {
+        enumerable: true,
+        configurable: true,
+        get: () => handler.value,
+        set(newValue) {
+          handler.ignoreFirstTransform = !options.transform;
+          handler.value = newValue;
+          parsedData[key] = handler.value;
+        }
+      });
 
-      if (postTransform) transformedValue = postTransform(transformedValue);
-
-      parsedData[key] = transformedValue;
-      record[key] = handler;
+      record[key] = data;
     }
 
+    if (options.update) return;
+
     // Serialize computed properties
-    for (const [key, method] of getComputedProperties(this.model)) {
-      const value = method.bind(parsedData)();
-      
-      parsedData[key] = value;
-      record[key] = value;
+    for (const [key, getter] of getComputedProperties(this.model)) {
+      Object.defineProperty(record, key, {
+        enumerable: true,
+        get: () => getter.call(record)
+      });
     }
 
     record.__serialized = true;
@@ -118,4 +126,13 @@ export default class BaseSerializer {
   normalize(data) {
     return data;
   }
+}
+
+export function getComputedProperties(classInstance) {
+  const proto = Object.getPrototypeOf(classInstance);
+  if (!proto || proto === Object.prototype) return [];
+  
+  return Object.entries(Object.getOwnPropertyDescriptors(proto))
+    .filter(([key, descriptor]) => key !== 'constructor' && descriptor.get)
+    .map(([key, descriptor]) => [key, descriptor.get]);
 }

@@ -4,17 +4,16 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "",
   "main": "src/main.js",
   "type": "module",
   "exports": {
-    ".": "./src/main.js",
-    "./db": "./src/db.js",
-    "./utils": "./src/utils.js"
+    ".": "./src/index.js",
+    "./db": "./src/exports/db.js"
   },
   "scripts": {
-    "test": "qunit"
+    "test": "qunit --require ./stonyx-bootstrap.cjs"
   },
   "repository": {
     "type": "git",
@@ -25,16 +24,21 @@
   "contributors": [
     "Stone Costa <stone.costa@synamicd.com>"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bugs": {
     "url": "https://github.com/abofs/stonyx-orm/issues"
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "stonyx": "^0.1.0"
+    "stonyx": "^0.2.2"
   },
   "devDependencies": {
-    "@stonyx/cron": "^0.1.0",
-    "@stonyx/utils": "^0.1.0",
-    "qunit": "^2.24.1"
+    "@stonyx/cron": "^0.2.0",
+    "@stonyx/rest-server": "^0.2.0",
+    "@stonyx/utils": "^0.2.2",
+    "qunit": "^2.24.1",
+    "sinon": "^21.0.0"
   }
 }

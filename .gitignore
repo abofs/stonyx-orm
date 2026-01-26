@@ -5,3 +5,6 @@
 .vscode/*
 *.vsix%
 *DS_Store*
+
+# db files
+*.json

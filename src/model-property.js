@@ -17,6 +17,11 @@ export default class ModelProperty {
   }
 
   set value(newValue) {
+    if (this.ignoreFirstTransform) {
+      delete this.ignoreFirstTransform;
+      return this._value = newValue;
+    }
+
     this._value = Orm.instance.transforms[this.type](newValue);
   }
 }

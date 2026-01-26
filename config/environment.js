@@ -1,7 +1,10 @@
 const {
+  ORM_ACCESS_PATH,
   ORM_MODEL_PATH,
+  ORM_REST_ROUTE,
   ORM_SERIALIZER_PATH,
   ORM_TRANSFORM_PATH,
+  ORM_USE_REST_SERVER,
   DB_AUTO_SAVE,
   DB_FILE,
   DB_SCHEMA_PATH,
@@ -19,8 +22,13 @@ export default {
     schema: DB_SCHEMA_PATH ?? './config/db-schema.js'
   },
   paths: {
+    access: ORM_ACCESS_PATH ?? './access', // Optional for restServer access hooks
     model: ORM_MODEL_PATH ?? './models',
     serializer: ORM_SERIALIZER_PATH ?? './serializers',
     transform: ORM_TRANSFORM_PATH ?? './transforms'
+  },
+  restServer: {
+    enabled: ORM_USE_REST_SERVER ?? 'true', // Whether to load restServer for automatic route setup or 
+    route: ORM_REST_ROUTE ?? '/',
   }
 }
