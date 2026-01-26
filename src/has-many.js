@@ -1,5 +1,5 @@
 import { createRecord, relationships, store } from '@stonyx/orm';
-import { getRelationshipInfo } from './relationships.js';
+import { getRelationships } from './relationships.js';
 import { getOrSet, makeArray } from '@stonyx/utils/object';
 import { dbKey } from './db.js';
 
@@ -19,7 +19,7 @@ export default function hasMany(modelName) {
   return (sourceRecord, rawData, options) => {
     const { __name: sourceModelName } = sourceRecord.__model;
     const relationshipId = sourceRecord.id;
-    const relationship = getRelationshipInfo('hasMany', sourceModelName, modelName, relationshipId);
+    const relationship = getRelationships('hasMany', sourceModelName, modelName, relationshipId);
     const modelStore = store.get(modelName);
     const pendingRelationshipQueue = [];
 

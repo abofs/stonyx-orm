@@ -30,8 +30,8 @@ export default class MetaRequest extends Request {
                 if (property?.constructor?.name === 'ModelProperty') {
                   properties[key] = { type: property.type };
                 } else if (typeof property === 'function') {
-                  const isBelongsTo = property.toString().includes(`getRelationshipInfo('belongsTo',`);
-                  const isHasMany = property.toString().includes(`getRelationshipInfo('hasMany',`);
+                  const isBelongsTo = property.toString().includes(`getRelationships('belongsTo',`);
+                  const isHasMany = property.toString().includes(`getRelationships('hasMany',`);
 
                   if (isBelongsTo || isHasMany) properties[key] = { [isBelongsTo ? 'belongsTo' : 'hasMany']: name };
                 }

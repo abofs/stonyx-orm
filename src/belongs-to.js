@@ -1,5 +1,5 @@
 import { createRecord, relationships, store } from '@stonyx/orm';
-import { getRelationshipInfo } from './relationships.js';
+import { getRelationships } from './relationships.js';
 
 function getOrSet(map, key, defaultValue) {
   if (!map.has(key)) map.set(key, defaultValue);
@@ -17,7 +17,7 @@ export default function belongsTo(modelName) {
     const { __name: sourceModelName } = sourceRecord.__model;
     const relationshipId = sourceRecord.id;
     const relationshipKey = options._relationshipKey;
-    const relationship = getRelationshipInfo('belongsTo', sourceModelName, modelName, relationshipId);
+    const relationship = getRelationships('belongsTo', sourceModelName, modelName, relationshipId);
     const modelStore = store.get(modelName);
 
     // Try to get existing record

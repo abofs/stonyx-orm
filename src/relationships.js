@@ -18,7 +18,7 @@ export default class Relationships {
 }
 
 // TODO: Refactor mapping to remove a level of iteration
-export function getRelationshipInfo(type, sourceModel, targetModel, relationshipId) {
+export function getRelationships(type, sourceModel, targetModel, relationshipId) {
   const allRelationships = relationships.get(type);
   
   // create relationship map for this type of it doesn't already exist
