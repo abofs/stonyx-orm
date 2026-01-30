@@ -68,6 +68,7 @@ export default class Record {
     }
 
     for (const [key, childRecord] of Object.entries(this.__relationships)) {
+      if (fields && !fields.has(key)) continue;
       relationships[key] = {
         data: Array.isArray(childRecord)
         ? childRecord.map(r => ({ type: r.__model.__name, id: r.id }))

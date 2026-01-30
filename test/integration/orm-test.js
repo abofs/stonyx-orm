@@ -497,6 +497,27 @@ module('[Integration] ORM', function(hooks) {
       assert.notOk('owner' in data.attributes, 'owner field is excluded');
     });
 
+    test('get call with fields parameter filters both attributes and relationships', async function(assert) {
+      // Per JSON:API spec, fields includes both attributes and relationships
+      const response = await fetch(`${endpoint}/animals/1?fields[animals]=type,age,owner`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(data.type, 'animal');
+      assert.equal(data.id, 1);
+
+      // Should include specified attributes
+      assert.ok('type' in data.attributes, 'type attribute is present');
+      assert.ok('age' in data.attributes, 'age attribute is present');
+      assert.notOk('size' in data.attributes, 'size attribute is excluded');
+
+      // Should include specified relationship
+      assert.ok('owner' in data.relationships, 'owner relationship is present');
+
+      // Should NOT include other relationships
+      assert.notOk('traits' in data.relationships, 'traits relationship is excluded');
+    });
+
     test('get collection with fields parameter returns only specified fields', async function(assert) {
       const response = await fetch(`${endpoint}/animals?fields[animals]=type,size`);
       const { data } = await response.json();
