@@ -48,21 +48,28 @@ export default class Record {
   }
 
   // Formats record for JSON API output
-  toJSON() {
+  toJSON(options = {}) {
     if (!this.__serialized) throw new Error('Record must be serialized before being converted to JSON');
-    
+
     const { __data:data } = this;
+    const { fields } = options;
     const relationships = {};
-    const attributes = { ...data };
-    delete attributes.id;
+    const attributes = {};
+
+    for (const [key, value] of Object.entries(data)) {
+      if (key === 'id') continue;
+      if (fields && !fields.has(key)) continue;
+      attributes[key] = value;
+    }
 
     for (const [key, getter] of getComputedProperties(this.__model)) {
+      if (fields && !fields.has(key)) continue;
       attributes[key] = getter.call(this);
     }
 
-    for (const [ key, childRecord ] of Object.entries(this.__relationships)) {
+    for (const [key, childRecord] of Object.entries(this.__relationships)) {
       relationships[key] = {
-        data: Array.isArray(childRecord) 
+        data: Array.isArray(childRecord)
         ? childRecord.map(r => ({ type: r.__model.__name, id: r.id }))
         : childRecord ? { type: childRecord.__model.__name, id: childRecord.id } : null
       };
