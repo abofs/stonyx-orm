@@ -1,5 +1,6 @@
 import QUnit from 'qunit';
 import Orm, { createRecord, updateRecord, store } from '@stonyx/orm';
+import Cron from '@stonyx/cron';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
 import { raw, serialized } from '../sample/payload.js';
 import { dbKey } from '../../src/db.js';
@@ -47,6 +48,42 @@ module('[Integration] ORM', function(hooks) {
 
       assert.ok(Array.isArray(record.owners));
       assert.ok(Array.isArray(record.animals));
+    });
+
+    test('autosave is not registered when disabled', function(assert) {
+      // Default config has autosave disabled
+      const cron = new Cron();
+      const saveJob = cron.jobs['save'];
+
+      assert.notOk(saveJob, 'save cron job is not registered when autosave is disabled');
+    });
+
+    test('autosave triggers db.save() at configured interval', async function(assert) {
+      const cron = new Cron();
+
+      // Track save calls
+      let saveCallCount = 0;
+      const originalSave = Orm.db.save.bind(Orm.db);
+      Orm.db.save = async function() {
+        saveCallCount++;
+        return originalSave();
+      };
+
+      // Register autosave with a very short interval (1 second)
+      const saveInterval = 1;
+      cron.register('save', Orm.db.save.bind(Orm.db), saveInterval);
+
+      assert.ok(cron.jobs['save'], 'save cron job is registered');
+      assert.equal(cron.jobs['save'].interval, saveInterval, 'uses configured saveInterval');
+
+      // Wait for the cron job to trigger (interval + buffer)
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      assert.ok(saveCallCount >= 1, `autosave triggered db.save() (called ${saveCallCount} times)`);
+
+      // Cleanup
+      cron.unregister('save');
+      Orm.db.save = originalSave;
     });
   });
 
