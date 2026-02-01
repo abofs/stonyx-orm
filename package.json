@@ -13,7 +13,8 @@
     "./db": "./src/exports/db.js"
   },
   "scripts": {
-    "test": "qunit --require ./stonyx-bootstrap.cjs"
+    "test": "qunit --require ./stonyx-bootstrap.cjs",
+    "prepublishOnly": "npm test"
   },
   "repository": {
     "type": "git",
@@ -25,19 +26,21 @@
     "Stone Costa <stone.costa@synamicd.com>"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "bugs": {
     "url": "https://github.com/abofs/stonyx-orm/issues"
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "stonyx": "^0.2.2"
+    "stonyx": "file:../stonyx",
+    "@stonyx/events": "file:../stonyx-events",
+    "@stonyx/cron": "file:../stonyx-cron"
   },
   "devDependencies": {
-    "@stonyx/cron": "^0.2.0",
-    "@stonyx/rest-server": "^0.2.0",
-    "@stonyx/utils": "^0.2.2",
+    "@stonyx/rest-server": "file:../stonyx-rest-server",
+    "@stonyx/utils": "file:../stonyx-utils",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
   }

@@ -8,3 +8,6 @@
 
 # db files
 *.json
+
+# npm auth (never commit tokens)
+.npmrc
