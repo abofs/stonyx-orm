@@ -8,13 +8,16 @@ importers:
 
   .:
     dependencies:
+      '@stonyx/cron':
+        specifier: ^0.2.0
+        version: 0.2.0
+      '@stonyx/events':
+        specifier: ^0.1.0
+        version: 0.1.0
       stonyx:
         specifier: ^0.2.2
         version: 0.2.2
     devDependencies:
-      '@stonyx/cron':
-        specifier: ^0.2.0
-        version: 0.2.0
       '@stonyx/rest-server':
         specifier: ^0.2.0
         version: 0.2.0
@@ -41,6 +44,9 @@ packages:
 
   '@stonyx/cron@0.2.0':
     resolution: {integrity: sha512-SlrQV8j8hgMSnykRARZ/ORnxylKSNNPQSviJMXofRUTP3jrJXKEtZE4Hc4pv9uN5EcgPcl99qSdV2TJc26ntzQ==}
+
+  '@stonyx/events@0.1.0':
+    resolution: {integrity: sha512-UFCNF/BglmFgwpjkh9uXcUjThvonF/69qyXD+7jGbvaI6Nwn+z6YSmFH5QetWkg+EqUXLCLGPYS8F+vtXRcwDQ==}
 
   '@stonyx/rest-server@0.2.0':
     resolution: {integrity: sha512-KXkoE04m4GSHyJPo4nXn5netGthxSc5q7AE/tp312zV+6BruOpGjJAVUTJPeDRVZLXYe/mTI9SscFVHhYIMb1Q==}
@@ -347,6 +353,9 @@ packages:
   stonyx@0.2.2:
     resolution: {integrity: sha512-X37/2R2YklI+CX4wKHckPg2pFmOL1hk0CwOMvn7E00sE+8JjhmbHvAeTI+0t50kufBsXKREPX3FBHVUd4Yi4Fw==}
 
+  stonyx@file:../stonyx:
+    resolution: {directory: ../stonyx, type: directory}
+
   supports-color@7.2.0:
     resolution: {integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==}
     engines: {node: '>=8'}
@@ -406,6 +415,10 @@ snapshots:
   '@stonyx/cron@0.2.0':
     dependencies:
       stonyx: 0.2.2
+
+  '@stonyx/events@0.1.0':
+    dependencies:
+      stonyx: file:../stonyx
 
   '@stonyx/rest-server@0.2.0':
     dependencies:
@@ -751,6 +764,10 @@ snapshots:
   statuses@2.0.2: {}
 
   stonyx@0.2.2:
+    dependencies:
+      node-chronicle: 0.2.0
+
+  stonyx@file:../stonyx:
     dependencies:
       node-chronicle: 0.2.0
 
