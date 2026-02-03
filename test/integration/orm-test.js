@@ -401,6 +401,41 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(hasTraits, 'valid traits relationship included');
     });
 
+    test('post call with existing id returns 409 conflict', async function(assert) {
+      // First, create a record with a specific id
+      const firstAnimal = {
+        data: {
+          type: 'animal',
+          attributes: { id: 9999, type: 'dog', age: 2, size: 'small', owner: 'bob' }
+        }
+      };
+      const firstResponse = await fetch(`${endpoint}/animals`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(firstAnimal)
+      });
+
+      assert.equal(firstResponse.status, 200, 'first creation succeeds');
+
+      // Attempt to create another record with the same id
+      const duplicateAnimal = {
+        data: {
+          type: 'animal',
+          attributes: { id: 9999, type: 'cat', age: 5, size: 'large', owner: 'gina' }
+        }
+      };
+      const duplicateResponse = await fetch(`${endpoint}/animals`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(duplicateAnimal)
+      });
+
+      assert.equal(duplicateResponse.status, 409, 'duplicate id returns 409 conflict');
+
+      // Cleanup
+      store.remove('animal', 9999);
+    });
+
     test('empty relationships do not appear in included array', async function(assert) {
       // Create animal with no traits relationship
       const newAnimal = {
