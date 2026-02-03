@@ -434,6 +434,67 @@ module('[Integration] ORM', function(hooks) {
 
       // Cleanup
       store.remove('animal', 9999);
+    test('post call without id increments from last record id', async function(assert) {
+      // Get the current last trait ID to avoid conflicts
+      const traitStore = store.get('trait');
+      const existingIds = Array.from(traitStore.keys());
+      const lastExistingId = Math.max(...existingIds);
+      const testId = lastExistingId + 1;
+
+      // Create a record with an id after the last existing one
+      const firstTrait = {
+        data: {
+          type: 'trait',
+          id: testId
+        }
+      };
+
+      const firstResponse = await fetch(`${endpoint}/traits`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(firstTrait)
+      });
+
+      assert.equal(firstResponse.status, 200, 'first record created');
+
+      // Now create a record without an id - should be last id + 1
+      const secondTrait = {
+        data: {
+          type: 'trait'
+        }
+      };
+
+      const secondResponse = await fetch(`${endpoint}/traits`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(secondTrait)
+      });
+
+      assert.equal(secondResponse.status, 200, 'second record created');
+
+      const { data } = await secondResponse.json();
+      assert.equal(data.id, testId + 1, 'auto-generated id increments from last record');
+
+      // Cleanup
+      store.remove('trait', testId);
+      store.remove('trait', testId + 1);
+    });
+
+    test('post call without type returns 400 bad request', async function(assert) {
+      const noTypePayload = {
+        data: {
+          id: 7777,
+          attributes: { age: 2 }
+        }
+      };
+
+      const response = await fetch(`${endpoint}/animals`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(noTypePayload)
+      });
+
+      assert.equal(response.status, 400, 'missing type returns 400 bad request');
     });
 
     test('empty relationships do not appear in included array', async function(assert) {
@@ -502,7 +563,7 @@ module('[Integration] ORM', function(hooks) {
       const createResponse = await fetch(`${endpoint}/animals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { attributes: { id: 999, type: 1, age: 1, size: 'tiny', owner: 'bob' } } })
+        body: JSON.stringify({ data: { type: 'animal', id: 999, attributes: { age: 1, size: 'tiny', owner: 'bob' } } })
       });
 
       const { data: created } = await createResponse.json();

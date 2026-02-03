@@ -215,10 +215,10 @@ export default class OrmRequest extends Request {
       },
 
       post: {
-        [`/${pluralizedModel}`]: (request) => {
-          const { attributes } = request.body?.data || {};
+        [`/${pluralizedModel}`]: ({ body }) => {
+          const { type, attributes } = body?.data || {};
 
-          if (!attributes) return 400; // Bad request
+          if (!type) return 400; // Bad request
 
           const fieldsMap = parseFields(request.query);
           const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
