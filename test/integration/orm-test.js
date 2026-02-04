@@ -340,6 +340,22 @@ module('[Integration] ORM', function(hooks) {
       assert.notOk(store.get('animal', 3));
     });
 
+    test('deleted record is not accessible via GET', async function(assert) {
+      const targetId = 4;
+
+      // Verify record exists
+      const getBeforeResponse = await fetch(`${endpoint}/animals/${targetId}`);
+      assert.equal(getBeforeResponse.status, 200, 'record exists before delete');
+
+      // Delete the record
+      const deleteResponse = await fetch(`${endpoint}/animals/${targetId}`, { method: 'DELETE' });
+      assert.equal(deleteResponse.status, 200, 'delete returns 200');
+
+      // Verify GET returns 404 after deletion
+      const getAfterResponse = await fetch(`${endpoint}/animals/${targetId}`);
+      assert.equal(getAfterResponse.status, 404, 'GET returns 404 after delete');
+    });
+
     test('get call with include parameter sideloads relationships', async function(assert) {
       const response = await fetch(`${endpoint}/animals/1?include=owner,traits`);
       const { data, included } = await response.json();
@@ -530,7 +546,7 @@ module('[Integration] ORM', function(hooks) {
     test('get call with nested include parameter sideloads deep relationships', async function(assert) {
       // Request animal with owner AND owner's pets (nested)
       const response = await fetch(`${endpoint}/animals/1?include=owner,owner.pets`);
-      const { data, included } = await response.json();
+      const { included } = await response.json();
 
       assert.equal(response.status, 200);
       assert.ok(included, 'included array exists');
@@ -713,6 +729,369 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(pets.length > 0, 'pets are included via first level nesting');
       assert.ok(traits.length > 0, 'traits are included via second level nesting');
       assert.ok(categories.length > 0, 'categories are included via third level nesting (belongsTo from trait)');
+    });
+  });
+
+  /**
+   * JSON API Relationship Routes
+   *
+   * Per JSON API spec, these routes should be automatically available based on model relationships:
+   * - GET /{type}/{id}/{relationship} - Returns the related resource(s)
+   * - GET /{type}/{id}/relationships/{relationship} - Returns relationship linkage data only
+   */
+  module('JSON API Relationship Routes', function(hooks) {
+    hooks.before(function() {
+      // Ensure test data exists
+      for (const category of serialized.categories) {
+        if (!store.get('category', category.id)) {
+          createRecord('category', category);
+        }
+      }
+      for (const owner of raw.owners) {
+        if (!store.get('owner', owner.name)) {
+          createRecord('owner', owner);
+        }
+      }
+      for (const animal of raw.animals) {
+        if (!store.get('animal', animal.id)) {
+          createRecord('animal', animal);
+        }
+      }
+    });
+
+    // ==========================================
+    // Related Resource Routes: GET /{type}/{id}/{relationship}
+    // These return the actual related records
+    // ==========================================
+
+    module('Related Resource Routes', function() {
+      // Owner -> pets (hasMany)
+      test('GET /owners/:id/pets returns related animals', async function(assert) {
+        const response = await fetch(`${endpoint}/owners/angela/pets`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.ok(Array.isArray(data), 'data is an array for hasMany');
+        assert.ok(data.length > 0, 'returns related pets');
+        assert.ok(data.every(record => record.type === 'animal'), 'all records are animals');
+      });
+
+      test('GET /owners/:id/pets returns empty array when no related records', async function(assert) {
+        // Create owner with no pets
+        createRecord('owner', { name: 'lonely', gender: 'male', age: 50 });
+
+        const response = await fetch(`${endpoint}/owners/lonely/pets`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.ok(Array.isArray(data), 'data is an array');
+        assert.equal(data.length, 0, 'returns empty array');
+
+        store.remove('owner', 'lonely');
+      });
+
+      test('GET /owners/:id/pets returns 404 for non-existent owner', async function(assert) {
+        const response = await fetch(`${endpoint}/owners/nonexistent/pets`);
+
+        assert.equal(response.status, 404, 'returns 404 for non-existent parent');
+      });
+
+      // Animal -> owner (belongsTo)
+      test('GET /animals/:id/owner returns related owner', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1/owner`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.notOk(Array.isArray(data), 'data is not an array for belongsTo');
+        assert.equal(data.type, 'owner', 'returns owner record');
+        assert.equal(data.id, 'angela', 'returns correct owner');
+      });
+
+      test('GET /animals/:id/owner returns null when no related record', async function(assert) {
+        // Create animal with no owner
+        createRecord('animal', { id: 9000, type: 'dog', age: 1, size: 'small' });
+
+        const response = await fetch(`${endpoint}/animals/9000/owner`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.equal(data, null, 'returns null for missing belongsTo');
+
+        store.remove('animal', 9000);
+      });
+
+      test('GET /animals/:id/owner returns 404 for non-existent animal', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/99999/owner`);
+
+        assert.equal(response.status, 404, 'returns 404 for non-existent parent');
+      });
+
+      // Animal -> traits (hasMany)
+      test('GET /animals/:id/traits returns related traits', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1/traits`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.ok(Array.isArray(data), 'data is an array for hasMany');
+        assert.ok(data.length > 0, 'returns related traits');
+        assert.ok(data.every(record => record.type === 'trait'), 'all records are traits');
+      });
+
+      // Trait -> category (belongsTo)
+      test('GET /traits/:id/category returns related category', async function(assert) {
+        const response = await fetch(`${endpoint}/traits/1/category`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.notOk(Array.isArray(data), 'data is not an array for belongsTo');
+        assert.equal(data.type, 'category', 'returns category record');
+      });
+    });
+
+    // ==========================================
+    // Relationship Linkage Routes: GET /{type}/{id}/relationships/{relationship}
+    // These return only the relationship linkage (type + id), not full records
+    // ==========================================
+
+    module('Relationship Linkage Routes', function() {
+      // Owner -> pets (hasMany)
+      test('GET /owners/:id/relationships/pets returns relationship linkage', async function(assert) {
+        const response = await fetch(`${endpoint}/owners/angela/relationships/pets`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.ok(Array.isArray(data), 'data is an array for hasMany');
+        assert.ok(data.length > 0, 'returns relationship linkage');
+        assert.ok(data.every(item => item.type && item.id), 'each item has type and id');
+        assert.ok(data.every(item => item.type === 'animal'), 'all items reference animals');
+        assert.notOk(data[0].attributes, 'linkage does not include attributes');
+      });
+
+      test('GET /owners/:id/relationships/pets returns 404 for non-existent owner', async function(assert) {
+        const response = await fetch(`${endpoint}/owners/nonexistent/relationships/pets`);
+
+        assert.equal(response.status, 404, 'returns 404 for non-existent parent');
+      });
+
+      // Animal -> owner (belongsTo)
+      test('GET /animals/:id/relationships/owner returns relationship linkage', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1/relationships/owner`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.notOk(Array.isArray(data), 'data is not an array for belongsTo');
+        assert.equal(data.type, 'owner', 'linkage references owner type');
+        assert.equal(data.id, 'angela', 'linkage has correct id');
+        assert.notOk(data.attributes, 'linkage does not include attributes');
+      });
+
+      test('GET /animals/:id/relationships/owner returns null when no relationship', async function(assert) {
+        createRecord('animal', { id: 9001, type: 'cat', age: 2, size: 'medium' });
+
+        const response = await fetch(`${endpoint}/animals/9001/relationships/owner`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.equal(data, null, 'returns null for missing belongsTo');
+
+        store.remove('animal', 9001);
+      });
+
+      // Animal -> traits (hasMany)
+      test('GET /animals/:id/relationships/traits returns relationship linkage', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1/relationships/traits`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.ok(Array.isArray(data), 'data is an array for hasMany');
+        assert.ok(data.length > 0, 'returns relationship linkage');
+        assert.ok(data.every(item => item.type === 'trait'), 'all items reference traits');
+      });
+
+      // Trait -> category (belongsTo)
+      test('GET /traits/:id/relationships/category returns relationship linkage', async function(assert) {
+        const response = await fetch(`${endpoint}/traits/1/relationships/category`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'returns 200 status');
+        assert.notOk(Array.isArray(data), 'data is not an array for belongsTo');
+        assert.equal(data.type, 'category', 'linkage references category type');
+        assert.notOk(data.attributes, 'linkage does not include attributes');
+      });
+
+      // Invalid relationship name
+      test('GET /{type}/:id/relationships/{invalid} returns 404', async function(assert) {
+        const response = await fetch(`${endpoint}/owners/angela/relationships/invalid`);
+
+        assert.equal(response.status, 404, 'returns 404 for invalid relationship name');
+      });
+
+      test('GET /{type}/:id/{invalid} returns 404 for invalid relationship', async function(assert) {
+        const response = await fetch(`${endpoint}/owners/angela/invalid`);
+
+        assert.equal(response.status, 404, 'returns 404 for invalid relationship name');
+      });
+    });
+  });
+
+  /**
+   * JSON API Links
+   *
+   * Per JSON API spec, responses should include a `links` object:
+   * - Top-level `links.self` - URL that generated the response
+   * - Resource `links.self` - URL to the resource
+   * - Relationship `links.self` - URL to the relationship itself
+   * - Relationship `links.related` - URL to the related resource(s)
+   */
+  module('JSON API Links', function() {
+    // ==========================================
+    // Top-level Links
+    // ==========================================
+
+    module('Top-level Links', function() {
+      test('GET collection response includes links.self', async function(assert) {
+        const response = await fetch(`${endpoint}/animals`);
+        const json = await response.json();
+
+        assert.ok(json.links, 'response has links object');
+        assert.ok(json.links.self, 'links has self property');
+        assert.ok(json.links.self.includes('/animals'), 'self link points to collection');
+      });
+
+      test('GET single resource response includes links.self', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1`);
+        const json = await response.json();
+
+        assert.ok(json.links, 'response has links object');
+        assert.ok(json.links.self, 'links has self property');
+        assert.ok(json.links.self.includes('/animals/1'), 'self link points to resource');
+      });
+
+      test('GET related resource response includes links.self', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1/owner`);
+        const json = await response.json();
+
+        assert.ok(json.links, 'response has links object');
+        assert.ok(json.links.self, 'links has self property');
+        assert.ok(json.links.self.includes('/animals/1/owner'), 'self link points to related resource URL');
+      });
+
+      test('GET relationship linkage response includes links.self and links.related', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1/relationships/owner`);
+        const json = await response.json();
+
+        assert.ok(json.links, 'response has links object');
+        assert.ok(json.links.self, 'links has self property');
+        assert.ok(json.links.self.includes('/animals/1/relationships/owner'), 'self link points to relationship URL');
+        assert.ok(json.links.related, 'links has related property');
+        assert.ok(json.links.related.includes('/animals/1/owner'), 'related link points to related resource URL');
+      });
+    });
+
+    // ==========================================
+    // Resource Links
+    // ==========================================
+
+    module('Resource Links', function() {
+      test('individual resource in collection includes links.self', async function(assert) {
+        const response = await fetch(`${endpoint}/animals`);
+        const { data } = await response.json();
+
+        assert.ok(data.length > 0, 'has resources');
+        const resource = data[0];
+        assert.ok(resource.links, 'resource has links object');
+        assert.ok(resource.links.self, 'resource has links.self');
+        assert.ok(resource.links.self.includes(`/animals/${resource.id}`), 'self link points to resource URL');
+      });
+
+      test('single resource response data includes links.self', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1`);
+        const { data } = await response.json();
+
+        assert.ok(data.links, 'resource has links object');
+        assert.ok(data.links.self, 'resource has links.self');
+        assert.ok(data.links.self.includes('/animals/1'), 'self link points to resource URL');
+      });
+
+      test('included resources have links.self', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1?include=owner`);
+        const { included } = await response.json();
+
+        assert.ok(included, 'response has included array');
+        assert.ok(included.length > 0, 'has included resources');
+
+        const owner = included.find(r => r.type === 'owner');
+        assert.ok(owner, 'owner is included');
+        assert.ok(owner.links, 'included resource has links object');
+        assert.ok(owner.links.self, 'included resource has links.self');
+        assert.ok(owner.links.self.includes(`/owners/${owner.id}`), 'self link points to resource URL');
+      });
+    });
+
+    // ==========================================
+    // Relationship Links
+    // ==========================================
+
+    module('Relationship Links', function() {
+      test('belongsTo relationship includes links.self and links.related', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1`);
+        const { data } = await response.json();
+
+        assert.ok(data.relationships, 'resource has relationships');
+        assert.ok(data.relationships.owner, 'has owner relationship');
+
+        const ownerRel = data.relationships.owner;
+        assert.ok(ownerRel.links, 'relationship has links object');
+        assert.ok(ownerRel.links.self, 'relationship has links.self');
+        assert.ok(ownerRel.links.self.includes('/animals/1/relationships/owner'), 'self points to relationship URL');
+        assert.ok(ownerRel.links.related, 'relationship has links.related');
+        assert.ok(ownerRel.links.related.includes('/animals/1/owner'), 'related points to related resource URL');
+      });
+
+      test('hasMany relationship includes links.self and links.related', async function(assert) {
+        const response = await fetch(`${endpoint}/animals/1`);
+        const { data } = await response.json();
+
+        assert.ok(data.relationships, 'resource has relationships');
+        assert.ok(data.relationships.traits, 'has traits relationship');
+
+        const traitsRel = data.relationships.traits;
+        assert.ok(traitsRel.links, 'relationship has links object');
+        assert.ok(traitsRel.links.self, 'relationship has links.self');
+        assert.ok(traitsRel.links.self.includes('/animals/1/relationships/traits'), 'self points to relationship URL');
+        assert.ok(traitsRel.links.related, 'relationship has links.related');
+        assert.ok(traitsRel.links.related.includes('/animals/1/traits'), 'related points to related resource URL');
+      });
+
+      test('owner hasMany pets relationship includes proper links', async function(assert) {
+        const response = await fetch(`${endpoint}/owners/bob`);
+        const { data } = await response.json();
+
+        assert.ok(data.relationships, 'resource has relationships');
+        assert.ok(data.relationships.pets, 'has pets relationship');
+
+        const petsRel = data.relationships.pets;
+        assert.ok(petsRel.links, 'relationship has links object');
+        assert.ok(petsRel.links.self, 'relationship has links.self');
+        assert.ok(petsRel.links.self.includes('/owners/bob/relationships/pets'), 'self points to relationship URL');
+        assert.ok(petsRel.links.related, 'relationship has links.related');
+        assert.ok(petsRel.links.related.includes('/owners/bob/pets'), 'related points to related resource URL');
+      });
+
+      test('trait belongsTo category relationship includes proper links', async function(assert) {
+        const response = await fetch(`${endpoint}/traits/1`);
+        const { data } = await response.json();
+
+        assert.ok(data.relationships, 'resource has relationships');
+        assert.ok(data.relationships.category, 'has category relationship');
+
+        const categoryRel = data.relationships.category;
+        assert.ok(categoryRel.links, 'relationship has links object');
+        assert.ok(categoryRel.links.self, 'relationship has links.self');
+        assert.ok(categoryRel.links.self.includes('/traits/1/relationships/category'), 'self points to relationship URL');
+        assert.ok(categoryRel.links.related, 'relationship has links.related');
+        assert.ok(categoryRel.links.related.includes('/traits/1/category'), 'related points to related resource URL');
+      });
     });
   });
 });

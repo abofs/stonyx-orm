@@ -1,5 +1,5 @@
 import { Request } from '@stonyx/rest-server';
-import { createRecord, store } from '@stonyx/orm';
+import Orm, { createRecord, store } from '@stonyx/orm';
 import { pluralize } from '@stonyx/utils/string';
 
 const methodAccessMap = {
@@ -9,14 +9,59 @@ const methodAccessMap = {
   PATCH: 'update',
 };
 
+// Helper to detect relationship type from function
+function getRelationshipInfo(property) {
+  if (typeof property !== 'function') return null;
+  const fnStr = property.toString();
+  if (fnStr.includes(`getRelationships('belongsTo',`)) {
+    return { type: 'belongsTo', isArray: false };
+  }
+  if (fnStr.includes(`getRelationships('hasMany',`)) {
+    return { type: 'hasMany', isArray: true };
+  }
+  return null;
+}
+
+// Helper to introspect model relationships
+function getModelRelationships(modelName) {
+  const { modelClass } = Orm.instance.getRecordClasses(modelName);
+  if (!modelClass) return {};
+
+  const model = new modelClass(modelName);
+  const relationships = {};
+
+  for (const [key, property] of Object.entries(model)) {
+    if (key.startsWith('__')) continue;
+    const info = getRelationshipInfo(property);
+    if (info) {
+      relationships[key] = info;
+    }
+  }
+
+  return relationships;
+}
+
+// Helper to build base URL from request
+function getBaseUrl(request) {
+  const protocol = request.protocol || 'http';
+  const host = request.get('host');
+  return `${protocol}://${host}`;
+}
+
 function getId({ id }) {
   if (isNaN(id)) return id;
 
   return parseInt(id);
 }
 
-function buildResponse(data, includeParam, recordOrRecords) {
+function buildResponse(data, includeParam, recordOrRecords, options = {}) {
+  const { links, baseUrl } = options;
   const response = { data };
+
+  // Add top-level links
+  if (links) {
+    response.links = links;
+  }
 
   if (!includeParam) return response;
 
@@ -25,7 +70,7 @@ function buildResponse(data, includeParam, recordOrRecords) {
 
   const includedRecords = collectIncludedRecords(recordOrRecords, includes);
   if (includedRecords.length > 0) {
-    response.included = includedRecords.map(record => record.toJSON());
+    response.included = includedRecords.map(record => record.toJSON({ baseUrl }));
   }
 
   return response;
@@ -166,6 +211,8 @@ export default class OrmRequest extends Request {
     this.access = access;
     const pluralizedModel = pluralize(model);
 
+    const modelRelationships = getModelRelationships(model);
+
     this.handlers = {
       get: {
         [`/${pluralizedModel}`]: (request, { filter: accessFilter }) => {
@@ -180,8 +227,13 @@ export default class OrmRequest extends Request {
           if (accessFilter) recordsToReturn = recordsToReturn.filter(accessFilter);
           if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate);
 
-          const data = recordsToReturn.map(record => record.toJSON({ fields: modelFields }));
-          return buildResponse(data, request.query?.include, recordsToReturn);
+          const baseUrl = getBaseUrl(request);
+          const data = recordsToReturn.map(record => record.toJSON({ fields: modelFields, baseUrl }));
+
+          return buildResponse(data, request.query?.include, recordsToReturn, {
+            links: { self: `${baseUrl}/${pluralizedModel}` },
+            baseUrl
+          });
         },
 
         [`/${pluralizedModel}/:id`]: (request) => {
@@ -191,8 +243,15 @@ export default class OrmRequest extends Request {
           const fieldsMap = parseFields(request.query);
           const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-          return buildResponse(record.toJSON({ fields: modelFields }), request.query?.include, record);
-        }
+          const baseUrl = getBaseUrl(request);
+          return buildResponse(record.toJSON({ fields: modelFields, baseUrl }), request.query?.include, record, {
+            links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
+            baseUrl
+          });
+        },
+
+        // Relationship routes - auto-generated based on model relationships
+        ...this._generateRelationshipRoutes(model, pluralizedModel, modelRelationships)
       },
 
       patch: {
@@ -237,6 +296,80 @@ export default class OrmRequest extends Request {
         }
       }
     }
+  }
+
+  _generateRelationshipRoutes(model, pluralizedModel, modelRelationships) {
+    const routes = {};
+
+    for (const [relationshipName, info] of Object.entries(modelRelationships)) {
+      // Related resource route: GET /{type}/:id/{relationship}
+      routes[`/${pluralizedModel}/:id/${relationshipName}`] = (request) => {
+        const record = store.get(model, getId(request.params));
+        if (!record) return 404;
+
+        const relatedData = record.__relationships[relationshipName];
+        const baseUrl = getBaseUrl(request);
+
+        let data;
+        if (info.isArray) {
+          // hasMany - return array
+          data = (relatedData || []).map(r => r.toJSON({ baseUrl }));
+        } else {
+          // belongsTo - return single or null
+          data = relatedData ? relatedData.toJSON({ baseUrl }) : null;
+        }
+
+        return {
+          links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}/${relationshipName}` },
+          data
+        };
+      };
+
+      // Relationship linkage route: GET /{type}/:id/relationships/{relationship}
+      routes[`/${pluralizedModel}/:id/relationships/${relationshipName}`] = (request) => {
+        const record = store.get(model, getId(request.params));
+        if (!record) return 404;
+
+        const relatedData = record.__relationships[relationshipName];
+        const baseUrl = getBaseUrl(request);
+
+        let data;
+        if (info.isArray) {
+          // hasMany - return array of linkage objects
+          data = (relatedData || []).map(r => ({ type: r.__model.__name, id: r.id }));
+        } else {
+          // belongsTo - return single linkage or null
+          data = relatedData ? { type: relatedData.__model.__name, id: relatedData.id } : null;
+        }
+
+        return {
+          links: {
+            self: `${baseUrl}/${pluralizedModel}/${request.params.id}/relationships/${relationshipName}`,
+            related: `${baseUrl}/${pluralizedModel}/${request.params.id}/${relationshipName}`
+          },
+          data
+        };
+      };
+    }
+
+    // Catch-all for invalid relationship names on related resource route
+    routes[`/${pluralizedModel}/:id/:relationship`] = (request) => {
+      const record = store.get(model, getId(request.params));
+      if (!record) return 404;
+
+      // If we reach here, relationship doesn't exist (valid ones were registered above)
+      return 404;
+    };
+
+    // Catch-all for invalid relationship names on relationship linkage route
+    routes[`/${pluralizedModel}/:id/relationships/:relationship`] = (request) => {
+      const record = store.get(model, getId(request.params));
+      if (!record) return 404;
+
+      return 404;
+    };
+
+    return routes;
   }
 
   auth(request, state) {
