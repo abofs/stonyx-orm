@@ -277,6 +277,33 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(data.attributes);
     });
 
+    test('post call with fields parameter returns only specified fields', async function(assert) {
+      const newAnimal = {
+        data: {
+          type: 'animal',
+          attributes: { type: 'cat', age: 2, size: 'small', owner: 'gina' }
+        }
+      };
+      const response = await fetch(`${endpoint}/animals?fields[animals]=type,age`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newAnimal)
+      });
+
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(data.type, 'animal');
+      assert.ok(data.id);
+
+      // Should only include requested fields
+      assert.ok('type' in data.attributes, 'type field is present');
+      assert.ok('age' in data.attributes, 'age field is present');
+
+      // Should NOT include other fields
+      assert.notOk('size' in data.attributes, 'size field is excluded');
+    });
+
     test('patch call for schema records work as expected', async function(assert) {
       const targetId = 12; // Based on michael's large cat from sample data
       const updates = {
@@ -451,6 +478,102 @@ module('[Integration] ORM', function(hooks) {
 
       assert.equal(response.status, 200);
       // Should not crash even if traits.metadata doesn't exist
+    });
+
+    test('get call with fields parameter returns only specified fields', async function(assert) {
+      const response = await fetch(`${endpoint}/animals/1?fields[animals]=type,age`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(data.type, 'animal');
+      assert.equal(data.id, 1);
+
+      // Should only include requested fields
+      assert.ok('type' in data.attributes, 'type field is present');
+      assert.ok('age' in data.attributes, 'age field is present');
+
+      // Should NOT include other fields
+      assert.notOk('size' in data.attributes, 'size field is excluded');
+      assert.notOk('owner' in data.attributes, 'owner field is excluded');
+    });
+
+    test('get call with fields parameter filters both attributes and relationships', async function(assert) {
+      // Per JSON:API spec, fields includes both attributes and relationships
+      const response = await fetch(`${endpoint}/animals/1?fields[animals]=type,age,owner`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(data.type, 'animal');
+      assert.equal(data.id, 1);
+
+      // Should include specified attributes
+      assert.ok('type' in data.attributes, 'type attribute is present');
+      assert.ok('age' in data.attributes, 'age attribute is present');
+      assert.notOk('size' in data.attributes, 'size attribute is excluded');
+
+      // Should include specified relationship
+      assert.ok('owner' in data.relationships, 'owner relationship is present');
+
+      // Should NOT include other relationships
+      assert.notOk('traits' in data.relationships, 'traits relationship is excluded');
+    });
+
+    test('get collection with fields parameter returns only specified fields', async function(assert) {
+      const response = await fetch(`${endpoint}/animals?fields[animals]=type,size`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(data.length > 0, 'returns animals');
+
+      // Check each record has only the requested fields
+      for (const record of data) {
+        assert.ok('type' in record.attributes, 'type field is present');
+        assert.ok('size' in record.attributes, 'size field is present');
+        assert.notOk('age' in record.attributes, 'age field is excluded');
+      }
+    });
+
+    test('get with filter on relationship field works as expected', async function(assert) {
+      // Filter animals by owner id (owner model uses id as identifier)
+      const response = await fetch(`${endpoint}/animals?filter[owner.id]=gina`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(data.length > 0, 'returns filtered animals');
+
+      // All returned animals should belong to gina
+      for (const record of data) {
+        assert.equal(record.relationships.owner.data.id, 'gina', 'animal belongs to gina');
+      }
+    });
+
+    test('get with filter on direct field works as expected', async function(assert) {
+      // Note: type uses 'animal' transform which converts 'dog' to 1
+      const response = await fetch(`${endpoint}/animals?filter[type]=1`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(data.length > 0, 'returns filtered animals');
+
+      // All returned animals should be dogs (type=1)
+      for (const record of data) {
+        assert.equal(record.attributes.type, 1, 'animal is a dog');
+      }
+    });
+
+    test('get with combined fields and filter parameters', async function(assert) {
+      const response = await fetch(`${endpoint}/animals?fields[animals]=type,age&filter[size]=large`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(data.length > 0, 'returns filtered animals');
+
+      for (const record of data) {
+        // Check sparse fieldsets are applied
+        assert.ok('type' in record.attributes, 'type field is present');
+        assert.ok('age' in record.attributes, 'age field is present');
+        assert.notOk('size' in record.attributes, 'size field is excluded from attributes');
+      }
     });
 
     test('verify trait->category relationships are established in store', function(assert) {

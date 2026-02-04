@@ -114,6 +114,51 @@ function parseInclude(includeParam) {
     .map(rel => rel.split('.')); // Parse nested paths: "owner.pets" → ["owner", "pets"]
 }
 
+function parseFields(query) {
+  const fields = new Map();
+  if (!query) return fields;
+
+  for (const [key, value] of Object.entries(query)) {
+    const match = key.match(/^fields\[(\w+)\]$/);
+    if (match && typeof value === 'string') {
+      const modelName = match[1];
+      const fieldNames = value.split(',').map(f => f.trim()).filter(f => f);
+      fields.set(modelName, new Set(fieldNames));
+    }
+  }
+
+  return fields;
+}
+
+function parseFilters(query) {
+  const filters = [];
+  if (!query) return filters;
+
+  for (const [key, value] of Object.entries(query)) {
+    const match = key.match(/^filter\[(.+)\]$/);
+    if (match && typeof value === 'string') {
+      filters.push({ path: match[1].split('.'), value });
+    }
+  }
+
+  return filters;
+}
+
+function createFilterPredicate(filters) {
+  if (filters.length === 0) return null;
+
+  return (record) => filters.every(({ path, value }) => {
+    let current = record;
+
+    for (const segment of path) {
+      if (current == null) return false;
+      current = current[segment];
+    }
+
+    return String(current) === value;
+  });
+}
+
 export default class OrmRequest extends Request {
   constructor({ model, access }) {
     super(...arguments);
@@ -123,20 +168,30 @@ export default class OrmRequest extends Request {
 
     this.handlers = {
       get: {
-        [`/${pluralizedModel}`]: (request, { filter }) => {
+        [`/${pluralizedModel}`]: (request, { filter: accessFilter }) => {
           const allRecords = Array.from(store.get(model).values());
-          const recordsToReturn = filter ? allRecords.filter(filter) : allRecords;
-          const data = recordsToReturn.map(record => record.toJSON());
 
+          const queryFilters = parseFilters(request.query);
+          const queryFilterPredicate = createFilterPredicate(queryFilters);
+          const fieldsMap = parseFields(request.query);
+          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
+
+          let recordsToReturn = allRecords;
+          if (accessFilter) recordsToReturn = recordsToReturn.filter(accessFilter);
+          if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate);
+
+          const data = recordsToReturn.map(record => record.toJSON({ fields: modelFields }));
           return buildResponse(data, request.query?.include, recordsToReturn);
         },
 
         [`/${pluralizedModel}/:id`]: (request) => {
           const record = store.get(model, getId(request.params));
+          if (!record) return 404;
 
-          if (!record) return 404; // Record not found
+          const fieldsMap = parseFields(request.query);
+          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-          return buildResponse(record.toJSON(), request.query?.include, record);
+          return buildResponse(record.toJSON({ fields: modelFields }), request.query?.include, record);
         }
       },
 
@@ -160,14 +215,17 @@ export default class OrmRequest extends Request {
       },
 
       post: {
-        [`/${pluralizedModel}`]: ({ body }) => {
-          const { attributes } = body?.data || {};
+        [`/${pluralizedModel}`]: (request) => {
+          const { attributes } = request.body?.data || {};
 
           if (!attributes) return 400; // Bad request
 
+          const fieldsMap = parseFields(request.query);
+          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
+
           const record = createRecord(model, attributes, { serialize: false });
 
-          return { data: record.toJSON() };
+          return { data: record.toJSON({ fields: modelFields }) };
         }
       },
 
