@@ -434,6 +434,8 @@ module('[Integration] ORM', function(hooks) {
 
       // Cleanup
       store.remove('animal', 9999);
+    });
+
     test('post call without id increments from last record id', async function(assert) {
       // Get the current last trait ID to avoid conflicts
       const traitStore = store.get('trait');
@@ -563,7 +565,7 @@ module('[Integration] ORM', function(hooks) {
       const createResponse = await fetch(`${endpoint}/animals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { type: 'animal', id: 999, attributes: { age: 1, size: 'tiny', owner: 'bob' } } })
+        body: JSON.stringify({ data: { type: 'animal', id: 999, attributes: { type: 1, age: 1, size: 'tiny', owner: 'bob' } } })
       });
 
       const { data: created } = await createResponse.json();
@@ -574,6 +576,9 @@ module('[Integration] ORM', function(hooks) {
 
       assert.equal(response.status, 200);
       // Should not crash even if traits.metadata doesn't exist
+
+      // Cleanup
+      store.remove('animal', 999);
     });
 
     test('get call with fields parameter returns only specified fields', async function(assert) {

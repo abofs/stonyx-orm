@@ -215,15 +215,15 @@ export default class OrmRequest extends Request {
       },
 
       post: {
-        [`/${pluralizedModel}`]: ({ body }) => {
+        [`/${pluralizedModel}`]: ({ body, query }) => {
           const { type, attributes } = body?.data || {};
 
           if (!type) return 400; // Bad request
 
-          const fieldsMap = parseFields(request.query);
+          const fieldsMap = parseFields(query);
           const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
           // Check for duplicate ID
-          if (attributes.id !== undefined && store.get(model, attributes.id)) return 409; // Conflict
+          if (attributes?.id !== undefined && store.get(model, attributes.id)) return 409; // Conflict
 
           const record = createRecord(model, attributes, { serialize: false });
 
