@@ -1,6 +1,6 @@
 import { Request } from '@stonyx/rest-server';
 import Orm, { createRecord, store } from '@stonyx/orm';
-import { pluralize } from '@stonyx/utils/string';
+import { pluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
 
 const methodAccessMap = {
   GET: 'read',
@@ -302,8 +302,11 @@ export default class OrmRequest extends Request {
     const routes = {};
 
     for (const [relationshipName, info] of Object.entries(modelRelationships)) {
+      // Dasherize the relationship name for URL paths (e.g., accessLinks -> access-links)
+      const dasherizedName = camelCaseToKebabCase(relationshipName);
+
       // Related resource route: GET /{type}/:id/{relationship}
-      routes[`/${pluralizedModel}/:id/${relationshipName}`] = (request) => {
+      routes[`/${pluralizedModel}/:id/${dasherizedName}`] = (request) => {
         const record = store.get(model, getId(request.params));
         if (!record) return 404;
 
@@ -320,13 +323,13 @@ export default class OrmRequest extends Request {
         }
 
         return {
-          links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}/${relationshipName}` },
+          links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}/${dasherizedName}` },
           data
         };
       };
 
       // Relationship linkage route: GET /{type}/:id/relationships/{relationship}
-      routes[`/${pluralizedModel}/:id/relationships/${relationshipName}`] = (request) => {
+      routes[`/${pluralizedModel}/:id/relationships/${dasherizedName}`] = (request) => {
         const record = store.get(model, getId(request.params));
         if (!record) return 404;
 
@@ -344,8 +347,8 @@ export default class OrmRequest extends Request {
 
         return {
           links: {
-            self: `${baseUrl}/${pluralizedModel}/${request.params.id}/relationships/${relationshipName}`,
-            related: `${baseUrl}/${pluralizedModel}/${request.params.id}/${relationshipName}`
+            self: `${baseUrl}/${pluralizedModel}/${request.params.id}/relationships/${dasherizedName}`,
+            related: `${baseUrl}/${pluralizedModel}/${request.params.id}/${dasherizedName}`
           },
           data
         };

@@ -1,6 +1,6 @@
 import { store } from './index.js';
 import { getComputedProperties } from "./serializer.js";
-import { pluralize } from '@stonyx/utils/string';
+import { pluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
 export default class Record {
   __data = {};
   __relationships = {};
@@ -77,13 +77,16 @@ export default class Record {
         ? childRecord.map(r => ({ type: r.__model.__name, id: r.id }))
         : childRecord ? { type: childRecord.__model.__name, id: childRecord.id } : null;
 
-      relationships[key] = { data: relationshipData };
+      // Dasherize the key for URL paths (e.g., accessLinks -> access-links)
+      const dasherizedKey = camelCaseToKebabCase(key);
+
+      relationships[dasherizedKey] = { data: relationshipData };
 
       // Add links to relationship if baseUrl provided
       if (baseUrl) {
-        relationships[key].links = {
-          self: `${baseUrl}/${pluralizedModelName}/${recordId}/relationships/${key}`,
-          related: `${baseUrl}/${pluralizedModelName}/${recordId}/${key}`
+        relationships[dasherizedKey].links = {
+          self: `${baseUrl}/${pluralizedModelName}/${recordId}/relationships/${dasherizedKey}`,
+          related: `${baseUrl}/${pluralizedModelName}/${recordId}/${dasherizedKey}`
         };
       }
     }

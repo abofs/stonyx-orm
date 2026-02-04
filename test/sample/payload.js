@@ -34,10 +34,10 @@ export const raw = {
 
 export const serialized = {
   owners: [
-    { id: 'gina', gender: 'female', age: 34, pets: [ 4, 8, 13, 18 ] },
-    { id: 'michael', gender: 'male', age: 38, pets: [ 2, 6, 9, 12, 16 ] },
-    { id: 'angela', gender: 'female', age: 36, pets: [ 1, 3, 7, 10, 11, 15, 17, 20 ] },
-    { id: 'bob', gender: 'male', age: 44, pets: [ 5, 14, 19 ] }
+    { id: 'gina', gender: 'female', age: 34, pets: [ 4, 8, 13, 18 ], testModels: [] },
+    { id: 'michael', gender: 'male', age: 38, pets: [ 2, 6, 9, 12, 16 ], testModels: [] },
+    { id: 'angela', gender: 'female', age: 36, pets: [ 1, 3, 7, 10, 11, 15, 17, 20 ], testModels: [] },
+    { id: 'bob', gender: 'male', age: 44, pets: [ 5, 14, 19 ], testModels: [] }
   ],
   animals: [
     { id: 1, type: 1, age: 2, size: 'small', owner: 'angela', traits: [ 1, 2 ] },

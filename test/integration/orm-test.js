@@ -846,6 +846,27 @@ module('[Integration] ORM', function(hooks) {
         assert.notOk(Array.isArray(data), 'data is not an array for belongsTo');
         assert.equal(data.type, 'category', 'returns category record');
       });
+
+      // Owner -> testModels (camelCase property should generate dasherized route)
+      // Model has: testModels = hasMany('test-model')
+      // Expected route: /owners/:id/test-models (dasherized)
+      test('GET /owners/:id/test-models works when model property is camelCase testModels', async function(assert) {
+        // Create test-model record tied to existing owner
+        createRecord('test-model', { id: 'tm-1', label: 'primary', owner: 'gina' });
+
+        // Request using dasherized route (JSON:API convention)
+        const response = await fetch(`${endpoint}/owners/gina/test-models`);
+        const { data } = await response.json();
+
+        assert.equal(response.status, 200, 'dasherized route /test-models should work for camelCase property testModels');
+        assert.ok(Array.isArray(data), 'data is an array for hasMany');
+        assert.ok(data.length > 0, 'returns related test-models');
+        assert.equal(data[0].type, 'test-model', 'record type is test-model');
+        assert.equal(data[0].id, 'tm-1', 'record id matches created record');
+
+        // Cleanup
+        store.remove('test-model', 'tm-1');
+      });
     });
 
     // ==========================================
