@@ -34,14 +34,19 @@
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "stonyx": "file:../stonyx",
-    "@stonyx/events": "file:../stonyx-events",
-    "@stonyx/cron": "file:../stonyx-cron"
+    "stonyx": "^0.2.2",
+    "@stonyx/events": "^0.1.0",
+    "@stonyx/cron": "^0.2.0"
   },
   "devDependencies": {
-    "@stonyx/rest-server": "file:../stonyx-rest-server",
-    "@stonyx/utils": "file:../stonyx-utils",
+    "@stonyx/rest-server": "^0.2.0",
+    "@stonyx/utils": "^0.2.2",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "stonyx": "^0.2.2"
+    }
   }
 }

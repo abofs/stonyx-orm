@@ -12,6 +12,7 @@
 4. **Data Persistence**: File-based JSON storage with auto-save
 5. **REST API Generation**: Auto-generated RESTful endpoints with access control
 6. **Data Transformation**: Custom type conversion and formatting
+7. **Event System**: Pub/sub events for CRUD operations with before/after hooks
 
 ---
 
@@ -28,28 +29,29 @@
 7. **Relationships** ([src/has-many.js](src/has-many.js), [src/belongs-to.js](src/belongs-to.js)) - Relationship handlers
 8. **Include Parser** ([src/include-parser.js](src/include-parser.js)) - Parses include query params
 9. **Include Collector** ([src/include-collector.js](src/include-collector.js)) - Collects and deduplicates included records
+10. **Events** (from `@stonyx/events`) - Pub/sub event system for CRUD hooks
 
 ### Project Structure
 
 ```
 stonyx-orm/
 ├── src/
-│   ├── index.js                  # Main exports
+│   ├── index.js                  # Main exports (includes ormEvents)
 │   ├── main.js                   # Orm class
 │   ├── model.js                  # Base Model
 │   ├── record.js                 # Record instances
 │   ├── serializer.js             # Base Serializer
-│   ├── store.js                  # In-memory storage
+│   ├── store.js                  # In-memory storage (emits delete events)
 │   ├── db.js                     # JSON persistence
 │   ├── attr.js                   # Attribute helper (Proxy-based)
 │   ├── has-many.js               # One-to-many relationships
 │   ├── belongs-to.js             # Many-to-one relationships
 │   ├── relationships.js          # Relationship registry
-│   ├── manage-record.js          # createRecord/updateRecord
+│   ├── manage-record.js          # createRecord/updateRecord (emits create events)
 │   ├── model-property.js         # Transform handler
 │   ├── transforms.js             # Built-in transforms
 │   ├── setup-rest-server.js      # REST integration
-│   ├── orm-request.js            # CRUD request handler
+│   ├── orm-request.js            # CRUD request handler (emits update events)
 │   └── meta-request.js           # Meta endpoint (dev only)
 ├── config/
 │   └── environment.js            # Default configuration
@@ -380,8 +382,137 @@ config.orm = {
 **Dependencies:**
 - `stonyx` - Main framework (peer)
 - `@stonyx/utils` - File/string utilities
-- `@stonyx/cron` - Scheduled tasks
+- `@stonyx/events` - Pub/sub event system for CRUD hooks
+- `@stonyx/cron` - Scheduled tasks (used by DB for auto-save)
 - `@stonyx/rest-server` - REST API
+
+## Event System
+
+The ORM emits events during CRUD operations, allowing applications to hook into the data lifecycle.
+
+### Event Architecture
+
+**Event Source**: `@stonyx/events` (Events class)
+**Integration**: `src/index.js` initializes singleton `ormEvents` instance
+**Event Registration**: 6 events registered on initialization:
+- `create:before`, `create:after`
+- `update:before`, `update:after`
+- `delete:before`, `delete:after`
+
+### Event Emission Points
+
+**CREATE Events** - `src/manage-record.js`:
+```javascript
+// Line ~34: Before serialization
+Events.instance?.emit('create:before', {
+  model: modelName,
+  record,
+  rawData,
+  options
+});
+
+// Line ~88: After record fully created
+Events.instance?.emit('create:after', {
+  model: modelName,
+  record,
+  data: record.__data,
+  rawData,
+  options
+});
+```
+
+**UPDATE Events** - `src/orm-request.js` (PATCH handler):
+```javascript
+// Line ~155: Before applying updates
+const oldData = { ...record.__data };
+Events.instance?.emit('update:before', {
+  model,
+  record,
+  data: record.__data,
+  oldData,
+  rawData: attributes,
+  options: {}
+});
+
+// Line ~173: After updates applied
+Events.instance?.emit('update:after', {
+  model,
+  record,
+  data: record.__data,
+  oldData,
+  rawData: attributes,
+  options: {}
+});
+```
+
+**DELETE Events** - `src/store.js` (unloadRecord):
+```javascript
+// Line ~45: Before cleanup
+Events.instance?.emit('delete:before', {
+  model,
+  record,
+  data: { ...record.__data },
+  options
+});
+
+// Line ~65: After deletion
+Events.instance?.emit('delete:after', {
+  model,
+  record: null,
+  data: null,
+  options
+});
+```
+
+### Design Decisions
+
+**Fire Without Await**: Events are emitted without `await` to maintain backward compatibility
+- `createRecord()` remains synchronous
+- `unloadRecord()` remains synchronous
+- Synchronous handlers execute immediately
+- Async handlers run in background
+
+**Optional Chaining**: Uses `Events.instance?.emit()` for zero overhead when not used
+
+**Error Isolation**: Event errors are caught in Events class, never crash ORM operations
+
+### Usage Patterns
+
+**Auditing**:
+```javascript
+import { ormEvents } from '@stonyx/orm';
+
+ormEvents.subscribe('update:after', ({ model, data, oldData }) => {
+  auditLog.write({
+    action: 'update',
+    model,
+    changes: diff(oldData, data),
+    timestamp: Date.now()
+  });
+});
+```
+
+**Auto-Timestamps**:
+```javascript
+ormEvents.subscribe('create:before', ({ record }) => {
+  record.__data.createdAt = new Date().toISOString();
+});
+
+ormEvents.subscribe('update:before', ({ record }) => {
+  record.__data.updatedAt = new Date().toISOString();
+});
+```
+
+**Cache Invalidation**:
+```javascript
+ormEvents.subscribe('update:after', ({ model, record }) => {
+  cache.invalidate(`${model}:${record.id}`);
+});
+
+ormEvents.subscribe('delete:after', ({ model, record }) => {
+  if (record) cache.invalidate(`${model}:${record.id}`);
+});
+```
 
 ---
 
@@ -412,7 +543,7 @@ config.orm = {
 
 **Import the ORM:**
 ```javascript
-import { Orm, Model, Serializer, attr, hasMany, belongsTo, createRecord, updateRecord, store } from '@stonyx/orm';
+import { Orm, Model, Serializer, attr, hasMany, belongsTo, createRecord, updateRecord, store, ormEvents } from '@stonyx/orm';
 ```
 
 **Initialize:**

@@ -4,17 +4,23 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  stonyx: ^0.2.2
+
 importers:
 
   .:
     dependencies:
+      '@stonyx/cron':
+        specifier: ^0.2.0
+        version: 0.2.0
+      '@stonyx/events':
+        specifier: ^0.1.0
+        version: 0.1.0
       stonyx:
         specifier: ^0.2.2
         version: 0.2.2
     devDependencies:
-      '@stonyx/cron':
-        specifier: ^0.2.0
-        version: 0.2.0
       '@stonyx/rest-server':
         specifier: ^0.2.0
         version: 0.2.0
@@ -41,6 +47,9 @@ packages:
 
   '@stonyx/cron@0.2.0':
     resolution: {integrity: sha512-SlrQV8j8hgMSnykRARZ/ORnxylKSNNPQSviJMXofRUTP3jrJXKEtZE4Hc4pv9uN5EcgPcl99qSdV2TJc26ntzQ==}
+
+  '@stonyx/events@0.1.0':
+    resolution: {integrity: sha512-UFCNF/BglmFgwpjkh9uXcUjThvonF/69qyXD+7jGbvaI6Nwn+z6YSmFH5QetWkg+EqUXLCLGPYS8F+vtXRcwDQ==}
 
   '@stonyx/rest-server@0.2.0':
     resolution: {integrity: sha512-KXkoE04m4GSHyJPo4nXn5netGthxSc5q7AE/tp312zV+6BruOpGjJAVUTJPeDRVZLXYe/mTI9SscFVHhYIMb1Q==}
@@ -404,6 +413,10 @@ snapshots:
       type-detect: 4.1.0
 
   '@stonyx/cron@0.2.0':
+    dependencies:
+      stonyx: 0.2.2
+
+  '@stonyx/events@0.1.0':
     dependencies:
       stonyx: 0.2.2
 
