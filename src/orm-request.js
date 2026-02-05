@@ -1,7 +1,6 @@
 import { Request } from '@stonyx/rest-server';
 import Orm, { createRecord, store } from '@stonyx/orm';
-import { camelCaseToKebabCase } from '@stonyx/utils/string';
-import { pluralize } from './utils.js';
+import { pluralize as basePluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
 
 const methodAccessMap = {
   GET: 'read',
@@ -9,6 +8,18 @@ const methodAccessMap = {
   DELETE: 'delete',
   PATCH: 'update',
 };
+
+// Wrapper to handle dasherized model names
+function pluralize(word) {
+  if (word.includes('-')) {
+    const parts = word.split('-');
+    const pluralizedLast = basePluralize(parts.pop());
+
+    return [...parts, pluralizedLast].join('-');
+  }
+
+  return basePluralize(word);
+}
 
 // Helper to detect relationship type from function
 function getRelationshipInfo(property) {
