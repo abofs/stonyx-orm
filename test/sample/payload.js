@@ -69,5 +69,9 @@ export const serialized = {
   categories: [
     { id: 'physical', name: 'Physical Attributes' },
     { id: 'appearance', name: 'Appearance Attributes' }
+  ],
+  userProfiles: [
+    { id: 1, name: 'John Doe', email: 'john@example.com' },
+    { id: 2, name: 'Jane Smith', email: 'jane@example.com' }
   ]
 };

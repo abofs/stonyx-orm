@@ -39,7 +39,8 @@ module('[Integration] ORM', function(hooks) {
         owners: [],
         animals: [],
         traits: [],
-        categories: []
+        categories: [],
+        userProfiles: []
       });
     });
 
@@ -92,6 +93,11 @@ module('[Integration] ORM', function(hooks) {
       // Create categories first so traits can reference them
       for (const category of serialized.categories) {
         createRecord('category', category);
+      }
+
+      // Create user-profiles
+      for (const profile of serialized.userProfiles) {
+        createRecord('user-profile', profile);
       }
 
       // Use original raw data approach (goes through serializers)
@@ -250,8 +256,36 @@ module('[Integration] ORM', function(hooks) {
 
     test('get call for invalid records return a 404', async function(assert) {
       const response = await fetch(`${endpoint}/owners/rex`);
-      
+
       assert.equal(response.status, 404);
+    });
+
+    test('dasherized model names are correctly pluralized in routes', async function(assert) {
+      // Create test user-profile records
+      createRecord('user-profile', { id: 1, name: 'John Doe', email: 'john@example.com' });
+      createRecord('user-profile', { id: 2, name: 'Jane Smith', email: 'jane@example.com' });
+
+      // Test collection route - should be /user-profiles (not /user-profile)
+      const collectionResponse = await fetch(`${endpoint}/user-profiles`);
+      const { data: collection } = await collectionResponse.json();
+
+      assert.equal(collectionResponse.status, 200, 'collection route responds successfully');
+      assert.equal(collection.length, 2, 'returns both user-profile records');
+      assert.equal(collection[0].type, 'user-profile', 'type is user-profile');
+      assert.equal(collection[0].attributes.name, 'John Doe');
+
+      // Test individual record route - should be /user-profiles/:id
+      const individualResponse = await fetch(`${endpoint}/user-profiles/1`);
+      const { data: individual } = await individualResponse.json();
+
+      assert.equal(individualResponse.status, 200, 'individual route responds successfully');
+      assert.equal(individual.id, 1);
+      assert.equal(individual.type, 'user-profile');
+      assert.equal(individual.attributes.email, 'john@example.com');
+
+      // Cleanup
+      store.remove('user-profile', 1);
+      store.remove('user-profile', 2);
     });
 
     test('post call for schema records create a new record expected', async function(assert) {
