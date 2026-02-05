@@ -1,6 +1,6 @@
 import { Request } from '@stonyx/rest-server';
 import { createRecord, store } from '@stonyx/orm';
-import { pluralize } from './utils.js';
+import { pluralize as basePluralize } from '@stonyx/utils/string';
 
 const methodAccessMap = {
   GET: 'read',
@@ -8,6 +8,17 @@ const methodAccessMap = {
   DELETE: 'delete',
   PATCH: 'update',
 };
+
+function pluralize(word) {
+  if (word.includes('-')) {
+    const parts = word.split('-');
+    const pluralizedLast = basePluralize(parts.pop());
+
+    return [...parts, pluralizedLast].join('-');
+  }
+
+  return basePluralize(word);
+}
 
 function getId({ id }) {
   if (isNaN(id)) return id;
