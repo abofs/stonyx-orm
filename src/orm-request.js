@@ -1,6 +1,7 @@
 import { Request } from '@stonyx/rest-server';
 import Orm, { createRecord, store } from '@stonyx/orm';
-import { pluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
+import { camelCaseToKebabCase } from '@stonyx/utils/string';
+import { pluralize } from './utils.js';
 
 const methodAccessMap = {
   GET: 'read',

@@ -2,7 +2,7 @@
  * Sample access control that grants access to all models except for owner Angela
  */
 export default class GlobalAccess {
-  models = ['owner', 'animal', 'trait', 'category', 'test-model']; // * instead of an array will allow access to all models
+  models = ['owner', 'animal', 'trait', 'category', 'test-model', 'user-profile']; // * instead of an array will allow access to all models
   
   // Custom logic here
   access(request) {
