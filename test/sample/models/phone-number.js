@@ -1,7 +1,7 @@
 import { Model, attr, belongsTo } from '@stonyx/orm';
 
-export default class TestModelModel extends Model {
+export default class PhoneNumberModel extends Model {
   id = attr('string');
-  label = attr('string');
+  areaCode = attr('number');
   owner = belongsTo('owner');
 }

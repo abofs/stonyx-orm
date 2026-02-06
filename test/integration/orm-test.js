@@ -40,7 +40,7 @@ module('[Integration] ORM', function(hooks) {
         animals: [],
         traits: [],
         categories: [],
-        userProfiles: []
+        phoneNumbers: []
       });
     });
 
@@ -95,9 +95,9 @@ module('[Integration] ORM', function(hooks) {
         createRecord('category', category);
       }
 
-      // Create user-profiles
-      for (const profile of serialized.userProfiles) {
-        createRecord('user-profile', profile);
+      // Create phone-numbers
+      for (const phoneNumber of serialized.phoneNumbers) {
+        createRecord('phone-number', phoneNumber);
       }
 
       // Use original raw data approach (goes through serializers)
@@ -261,31 +261,23 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('dasherized model names are correctly pluralized in routes', async function(assert) {
-      // Create test user-profile records
-      createRecord('user-profile', { id: 1, name: 'John Doe', email: 'john@example.com' });
-      createRecord('user-profile', { id: 2, name: 'Jane Smith', email: 'jane@example.com' });
-
-      // Test collection route - should be /user-profiles (not /user-profile)
-      const collectionResponse = await fetch(`${endpoint}/user-profiles`);
+      // Test collection route - should be /phone-numbers (not /phone-number)
+      const collectionResponse = await fetch(`${endpoint}/phone-numbers`);
       const { data: collection } = await collectionResponse.json();
 
       assert.equal(collectionResponse.status, 200, 'collection route responds successfully');
-      assert.equal(collection.length, 2, 'returns both user-profile records');
-      assert.equal(collection[0].type, 'user-profile', 'type is user-profile');
-      assert.equal(collection[0].attributes.name, 'John Doe');
+      assert.equal(collection.length, 2, 'returns both phone-number records');
+      assert.equal(collection[0].type, 'phone-number', 'type is phone-number');
+      assert.equal(collection[0].attributes.areaCode, 555);
 
-      // Test individual record route - should be /user-profiles/:id
-      const individualResponse = await fetch(`${endpoint}/user-profiles/1`);
+      // Test individual record route - should be /phone-numbers/:id
+      const individualResponse = await fetch(`${endpoint}/phone-numbers/555-0123`);
       const { data: individual } = await individualResponse.json();
 
       assert.equal(individualResponse.status, 200, 'individual route responds successfully');
-      assert.equal(individual.id, 1);
-      assert.equal(individual.type, 'user-profile');
-      assert.equal(individual.attributes.email, 'john@example.com');
-
-      // Cleanup
-      store.remove('user-profile', 1);
-      store.remove('user-profile', 2);
+      assert.equal(individual.id, '555-0123');
+      assert.equal(individual.type, 'phone-number');
+      assert.equal(individual.attributes.areaCode, 555);
     });
 
     test('post call for schema records create a new record expected', async function(assert) {
@@ -881,25 +873,25 @@ module('[Integration] ORM', function(hooks) {
         assert.equal(data.type, 'category', 'returns category record');
       });
 
-      // Owner -> testModels (camelCase property should generate dasherized route)
-      // Model has: testModels = hasMany('test-model')
-      // Expected route: /owners/:id/test-models (dasherized)
-      test('GET /owners/:id/test-models works when model property is camelCase testModels', async function(assert) {
-        // Create test-model record tied to existing owner
-        createRecord('test-model', { id: 'tm-1', label: 'primary', owner: 'gina' });
+      // Owner -> phoneNumbers (camelCase property should generate dasherized route)
+      // Model has: phoneNumbers = hasMany('phone-number')
+      // Expected route: /owners/:id/phone-numbers (dasherized)
+      test('GET /owners/:id/phone-numbers works when model property is camelCase phoneNumbers', async function(assert) {
+        // Create phone-number record tied to existing owner
+        createRecord('phone-number', { id: '415-9999', areaCode: 415, owner: 'gina' });
 
         // Request using dasherized route (JSON:API convention)
-        const response = await fetch(`${endpoint}/owners/gina/test-models`);
+        const response = await fetch(`${endpoint}/owners/gina/phone-numbers`);
         const { data } = await response.json();
 
-        assert.equal(response.status, 200, 'dasherized route /test-models should work for camelCase property testModels');
+        assert.equal(response.status, 200, 'dasherized route /phone-numbers should work for camelCase property phoneNumbers');
         assert.ok(Array.isArray(data), 'data is an array for hasMany');
-        assert.ok(data.length > 0, 'returns related test-models');
-        assert.equal(data[0].type, 'test-model', 'record type is test-model');
-        assert.equal(data[0].id, 'tm-1', 'record id matches created record');
+        assert.ok(data.length > 0, 'returns related phone-numbers');
+        assert.equal(data[0].type, 'phone-number', 'record type is phone-number');
+        assert.equal(data[0].id, '415-9999', 'record id matches created record');
 
         // Cleanup
-        store.remove('test-model', 'tm-1');
+        store.remove('phone-number', '415-9999');
       });
     });
 

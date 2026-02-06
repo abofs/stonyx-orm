@@ -5,7 +5,7 @@ export default class OwnerModel extends Model {
   gender = attr('string');
   age = attr('number');
   pets = hasMany('animal');
-  testModels = hasMany('test-model');
+  phoneNumbers = hasMany('phone-number');
 
   get totalPets() {
     return this.pets.length;
