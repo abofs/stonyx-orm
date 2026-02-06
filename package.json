@@ -40,7 +40,7 @@
   },
   "devDependencies": {
     "@stonyx/rest-server": "^0.2.0",
-    "@stonyx/utils": "^0.2.3",
+    "@stonyx/utils": "^0.2.2",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
   },
