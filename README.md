@@ -289,6 +289,282 @@ GET /animals/1
 
 - Only available on GET endpoints (not POST/PATCH)
 
+## Lifecycle Hooks
+
+The ORM provides a powerful event-driven hook system that allows you to run custom logic before and after CRUD operations. Hooks are perfect for validation, transformation, side effects, authorization, and auditing.
+
+### Overview
+
+Hooks are implemented using the `@stonyx/events` package and emit events at key points in the request lifecycle:
+
+- **Before hooks**: Run before the operation executes (validation, authorization)
+- **After hooks**: Run after the operation completes (logging, notifications, cache invalidation)
+
+### Event Naming Convention
+
+Events follow the pattern: `{timing}:{operation}:{modelName}`
+
+**Operations:**
+- `list` - GET collection (`/animals`)
+- `get` - GET single record (`/animals/1`)
+- `create` - POST new record (`/animals`)
+- `update` - PATCH existing record (`/animals/1`)
+- `delete` - DELETE record (`/animals/1`)
+
+**Examples:**
+- `before:create:animal` - Before creating an animal
+- `after:list:owner` - After fetching owner collection
+- `before:update:trait` - Before updating a trait
+
+### Hook Context Object
+
+Each hook receives a context object with comprehensive information:
+
+```javascript
+{
+  model: 'animal',           // Model name
+  operation: 'create',       // Operation type
+  request,                   // Express request object
+  params,                    // URL params (e.g., { id: 5 })
+  body,                      // Request body (POST/PATCH)
+  query,                     // Query parameters
+  state,                     // Request state object
+  record,                    // Record instance (after hooks, single operations)
+  records,                   // Record array (after hooks, list operations)
+  response,                  // Response data (after hooks)
+}
+```
+
+### Usage Examples
+
+#### Basic Hook Registration
+
+```javascript
+import { subscribe } from '@stonyx/events';
+
+// Validation before creating
+subscribe('before:create:animal', async (context) => {
+  const { age } = context.body.data.attributes;
+  if (age < 0) {
+    throw new Error('Age must be positive');
+  }
+});
+
+// Logging after updates
+subscribe('after:update:animal', async (context) => {
+  console.log(`Animal ${context.record.id} was updated`);
+});
+```
+
+#### Data Transformation
+
+```javascript
+// Normalize data before saving
+subscribe('before:create:owner', async (context) => {
+  const attrs = context.body.data.attributes;
+  if (attrs.email) {
+    attrs.email = attrs.email.toLowerCase().trim();
+  }
+});
+```
+
+#### Side Effects
+
+```javascript
+// Send notification after animal is adopted
+subscribe('after:update:animal', async (context) => {
+  if (context.record.owner !== context.body.data.attributes.owner) {
+    await sendNotification({
+      type: 'adoption',
+      animalId: context.record.id,
+      newOwner: context.record.owner
+    });
+  }
+});
+
+// Cache invalidation
+subscribe('after:delete:animal', async (context) => {
+  await cache.invalidate(`owner:${context.params.id}:pets`);
+});
+```
+
+#### Authorization
+
+```javascript
+// Additional access control
+subscribe('before:delete:animal', async (context) => {
+  const user = context.state.currentUser;
+  const animal = store.get('animal', context.params.id);
+
+  if (animal.owner !== user.id && !user.isAdmin) {
+    throw new Error('Unauthorized to delete this animal');
+  }
+});
+```
+
+#### Auditing
+
+```javascript
+// Audit log for all changes
+const auditOperations = ['create', 'update', 'delete'];
+
+for (const operation of auditOperations) {
+  subscribe(`after:${operation}:animal`, async (context) => {
+    await auditLog.create({
+      operation: context.operation,
+      model: context.model,
+      recordId: context.record?.id,
+      userId: context.state.currentUser?.id,
+      timestamp: new Date(),
+      changes: context.body
+    });
+  });
+}
+```
+
+#### Error Handling
+
+Hook errors are isolated and won't break the operation:
+
+```javascript
+subscribe('after:create:animal', async (context) => {
+  try {
+    await sendWelcomeEmail(context.record.owner);
+  } catch (error) {
+    // Error is logged but doesn't fail the create operation
+    console.error('Failed to send welcome email:', error);
+  }
+});
+```
+
+### Hook Lifecycle Management
+
+#### Unsubscribing
+
+```javascript
+// Get unsubscribe function
+const unsubscribe = subscribe('before:create:animal', handler);
+
+// Later, remove the hook
+unsubscribe();
+```
+
+#### Clearing All Hooks for an Event
+
+```javascript
+import { clear } from '@stonyx/events';
+
+// Remove all hooks for this event
+clear('before:create:animal');
+```
+
+#### One-time Hooks
+
+```javascript
+import { once } from '@stonyx/events';
+
+// Run only on the next create
+once('after:create:animal', async (context) => {
+  console.log('First animal created!');
+});
+```
+
+### Advanced Patterns
+
+#### Conditional Hooks
+
+```javascript
+subscribe('before:update:animal', async (context) => {
+  // Only validate if age is being updated
+  if ('age' in context.body.data.attributes) {
+    const { age } = context.body.data.attributes;
+    if (age < 0 || age > 50) {
+      throw new Error('Invalid age range');
+    }
+  }
+});
+```
+
+#### Cross-Model Hooks
+
+```javascript
+// Update owner's pet count when animal is created
+subscribe('after:create:animal', async (context) => {
+  const owner = store.get('owner', context.record.owner);
+  if (owner) {
+    owner.petCount = (owner.petCount || 0) + 1;
+  }
+});
+```
+
+#### Batch Operations
+
+```javascript
+// Track batch operations
+let batchContext = null;
+
+subscribe('before:list:animal', async (context) => {
+  if (context.query.batch) {
+    batchContext = { startTime: Date.now() };
+  }
+});
+
+subscribe('after:list:animal', async (context) => {
+  if (batchContext) {
+    console.log(`Batch operation completed in ${Date.now() - batchContext.startTime}ms`);
+    console.log(`Returned ${context.records.length} records`);
+    batchContext = null;
+  }
+});
+```
+
+### Hook Execution Order
+
+1. **Before hooks** fire first (all subscribers in parallel)
+2. **Main operation** executes
+3. **After hooks** fire last (all subscribers in parallel)
+
+Multiple hooks for the same event run in parallel and independently - one hook's error won't affect others.
+
+### Best Practices
+
+1. **Keep hooks focused**: Each hook should do one thing well
+2. **Use async/await**: All hooks are async for consistency
+3. **Handle errors gracefully**: Don't let hook errors break operations
+4. **Document side effects**: Make it clear what each hook does
+5. **Test hooks independently**: Write unit tests for hook logic
+6. **Avoid heavy operations**: Keep hooks fast to maintain performance
+7. **Use descriptive names**: Name hook handlers clearly for debugging
+
+### Testing Hooks
+
+```javascript
+import { subscribe, emit } from '@stonyx/events';
+
+// Test hook behavior
+test('validation hook rejects negative age', async () => {
+  let error;
+
+  subscribe('before:create:animal', async (context) => {
+    if (context.body.data.attributes.age < 0) {
+      throw new Error('Age must be positive');
+    }
+  });
+
+  try {
+    await emit('before:create:animal', {
+      model: 'animal',
+      operation: 'create',
+      body: { data: { attributes: { age: -5 } } }
+    });
+  } catch (e) {
+    error = e;
+  }
+
+  assert.ok(error, 'Hook threw error for negative age');
+});
+```
+
 ## Exported Helpers
 
 | Export          | Description                                                             |

@@ -23,6 +23,7 @@ import setupRestServer from './setup-rest-server.js';
 import baseTransforms from './transforms.js';
 import Store from './store.js';
 import Serializer from './serializer.js';
+import { setup } from '@stonyx/events';
 
 const defaultOptions = {
   dbType: 'json'
@@ -74,10 +75,25 @@ export default class Orm {
     // Wait for imports before db & rest server setup
     await Promise.all(promises);
 
+    // Setup event names for hooks after models are loaded
+    const eventNames = [];
+    const operations = ['list', 'get', 'create', 'update', 'delete'];
+    const timings = ['before', 'after'];
+
+    for (const modelName of Orm.store.data.keys()) {
+      for (const timing of timings) {
+        for (const operation of operations) {
+          eventNames.push(`${timing}:${operation}:${modelName}`);
+        }
+      }
+    }
+
+    setup(eventNames);
+
     if (this.options.dbType !== 'none') {
       const db = new DB();
       this.db = db;
-      
+
       promises.push(db.init());
     }
 

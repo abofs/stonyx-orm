@@ -7,6 +7,7 @@ import { dbKey } from '../../src/db.js';
 import { readFile, deleteFile } from '@stonyx/utils/file';
 import config from 'stonyx/config';
 import RestServer from '@stonyx/rest-server';
+import { subscribe, clear } from '@stonyx/events';
 
 const { module, test } = QUnit;
 let endpoint;
@@ -1138,6 +1139,350 @@ module('[Integration] ORM', function(hooks) {
         assert.ok(categoryRel.links.self.includes('/traits/1/relationships/category'), 'self points to relationship URL');
         assert.ok(categoryRel.links.related, 'relationship has links.related');
         assert.ok(categoryRel.links.related.includes('/traits/1/category'), 'related points to related resource URL');
+      });
+    });
+
+    module('Hooks', function(hooks) {
+      let unsubscribeFns = [];
+
+      hooks.afterEach(function() {
+        // Clean up all subscriptions after each test
+        unsubscribeFns.forEach(fn => fn());
+        unsubscribeFns = [];
+      });
+
+      module('Before Hooks', function() {
+        test('before:create hook receives context', async function(assert) {
+          assert.expect(6);
+
+          const unsubscribe = subscribe('before:create:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'create', 'context has operation type');
+            assert.ok(context.body, 'context has body');
+            assert.strictEqual(context.body.data.type, 'animals', 'body has correct type');
+            assert.strictEqual(context.body.data.attributes.type, 'dog', 'body has correct attributes');
+            assert.ok(context.request, 'context has request object');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                attributes: { type: 'dog', age: 5, size: 'large' }
+              }
+            })
+          });
+        });
+
+        test('before:update hook receives context', async function(assert) {
+          assert.expect(6);
+
+          const unsubscribe = subscribe('before:update:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'update', 'context has operation type');
+            assert.ok(context.body, 'context has body');
+            assert.ok(context.params, 'context has params');
+            assert.strictEqual(context.params.id, '1', 'params has correct id');
+            assert.ok(context.request, 'context has request object');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals/1`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                id: '1',
+                attributes: { age: 10 }
+              }
+            })
+          });
+        });
+
+        test('before:delete hook receives params', async function(assert) {
+          assert.expect(4);
+
+          const unsubscribe = subscribe('before:delete:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'delete', 'context has operation type');
+            assert.ok(context.params, 'context has params');
+            assert.strictEqual(context.params.id, '2', 'params has correct id');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals/2`, {
+            method: 'DELETE'
+          });
+        });
+
+        test('before:list hook receives query parameters', async function(assert) {
+          assert.expect(5);
+
+          const unsubscribe = subscribe('before:list:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'list', 'context has operation type');
+            assert.ok(context.query, 'context has query object');
+            assert.ok(context.request, 'context has request object');
+            assert.ok(context.state, 'context has state object');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals?filter[species]=cat`);
+        });
+
+        test('before:get hook receives params', async function(assert) {
+          assert.expect(4);
+
+          const unsubscribe = subscribe('before:get:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'get', 'context has operation type');
+            assert.ok(context.params, 'context has params');
+            assert.strictEqual(context.params.id, '1', 'params has correct id');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals/1`);
+        });
+      });
+
+      module('After Hooks', function() {
+        test('after:create hook receives created record', async function(assert) {
+          assert.expect(6);
+
+          const unsubscribe = subscribe('after:create:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'create', 'context has operation type');
+            assert.ok(context.response, 'context has response');
+            assert.ok(context.response.data, 'response has data');
+            assert.ok(context.record, 'context has record');
+            assert.strictEqual(context.record.id, context.response.data.id, 'record matches response ID');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                attributes: { type: 'cat', age: 2, size: 'small' }
+              }
+            })
+          });
+        });
+
+        test('after:get hook receives fetched record', async function(assert) {
+          assert.expect(5);
+
+          const unsubscribe = subscribe('after:get:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'get', 'context has operation type');
+            assert.ok(context.response, 'context has response');
+            assert.ok(context.record, 'context has record');
+            assert.strictEqual(context.record.id, 1, 'record has correct id');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals/1`);
+        });
+
+        test('after:list hook receives records array', async function(assert) {
+          assert.expect(5);
+
+          const unsubscribe = subscribe('after:list:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'list', 'context has operation type');
+            assert.ok(context.response, 'context has response');
+            assert.ok(context.records, 'context has records array');
+            assert.ok(Array.isArray(context.records), 'records is an array');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals`);
+        });
+
+        test('after:update hook receives updated record', async function(assert) {
+          assert.expect(6);
+
+          const unsubscribe = subscribe('after:update:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'update', 'context has operation type');
+            assert.ok(context.response, 'context has response');
+            assert.ok(context.record, 'context has record');
+            assert.strictEqual(context.record.id, 1, 'record has correct id');
+            assert.strictEqual(context.record.age, 99, 'record was updated');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals/1`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                id: '1',
+                attributes: { age: 99 }
+              }
+            })
+          });
+        });
+
+        test('after:delete hook receives context', async function(assert) {
+          assert.expect(3);
+
+          const unsubscribe = subscribe('after:delete:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'delete', 'context has operation type');
+            assert.ok(context.params, 'context has params');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals/3`, {
+            method: 'DELETE'
+          });
+        });
+      });
+
+      module('Hook Error Handling', function() {
+        test('hook error does not break operation', async function(assert) {
+          assert.expect(2);
+
+          const unsubscribe = subscribe('before:create:animal', async () => {
+            throw new Error('Hook error');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          const response = await fetch(`${endpoint}/animals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                attributes: { type: 'fish', age: 1, size: 'small' }
+              }
+            })
+          });
+
+          assert.ok(response.ok, 'request succeeds despite hook error');
+          const json = await response.json();
+          assert.ok(json.data.id, 'record was created');
+        });
+
+        test('multiple hooks run independently', async function(assert) {
+          assert.expect(3);
+
+          let hook1Called = false;
+          let hook2Called = false;
+
+          const unsub1 = subscribe('before:create:animal', async () => {
+            hook1Called = true;
+            throw new Error('Hook 1 error');
+          });
+          unsubscribeFns.push(unsub1);
+
+          const unsub2 = subscribe('before:create:animal', async () => {
+            hook2Called = true;
+          });
+          unsubscribeFns.push(unsub2);
+
+          await fetch(`${endpoint}/animals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                attributes: { type: 'reptile', age: 3, size: 'medium' }
+              }
+            })
+          });
+
+          assert.ok(hook1Called, 'hook 1 was called');
+          assert.ok(hook2Called, 'hook 2 was called despite hook 1 error');
+          assert.strictEqual(hook1Called && hook2Called, true, 'both hooks ran independently');
+        });
+      });
+
+      module('Hook Lifecycle', function() {
+        test('unsubscribe removes hook', async function(assert) {
+          assert.expect(1);
+
+          let callCount = 0;
+          const unsubscribe = subscribe('before:create:animal', async () => {
+            callCount++;
+          });
+
+          await fetch(`${endpoint}/animals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                attributes: { type: 'mammal', age: 4, size: 'large' }
+              }
+            })
+          });
+
+          unsubscribe();
+
+          await fetch(`${endpoint}/animals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                attributes: { type: 'mammal', age: 5, size: 'large' }
+              }
+            })
+          });
+
+          assert.strictEqual(callCount, 1, 'hook only called once before unsubscribe');
+        });
+
+        test('clear removes all hooks for event', async function(assert) {
+          assert.expect(1);
+
+          let callCount = 0;
+
+          const unsub1 = subscribe('before:create:animal', async () => {
+            callCount++;
+          });
+          unsubscribeFns.push(unsub1);
+
+          const unsub2 = subscribe('before:create:animal', async () => {
+            callCount++;
+          });
+          unsubscribeFns.push(unsub2);
+
+          await fetch(`${endpoint}/animals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                attributes: { type: 'amphibian', age: 2, size: 'small' }
+              }
+            })
+          });
+
+          clear('before:create:animal');
+
+          await fetch(`${endpoint}/animals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                attributes: { type: 'amphibian', age: 3, size: 'small' }
+              }
+            })
+          });
+
+          assert.strictEqual(callCount, 2, 'hooks only called before clear');
+        });
       });
     });
   });

@@ -1,6 +1,7 @@
 import { Request } from '@stonyx/rest-server';
 import Orm, { createRecord, store } from '@stonyx/orm';
 import { pluralize as basePluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
+import { emit } from '@stonyx/events';
 
 const methodAccessMap = {
   GET: 'read',
@@ -220,94 +221,143 @@ export default class OrmRequest extends Request {
   constructor({ model, access }) {
     super(...arguments);
 
+    this.model = model;
     this.access = access;
     const pluralizedModel = pluralize(model);
 
     const modelRelationships = getModelRelationships(model);
 
+    // Define raw handlers first
+    const getCollectionHandler = (request, { filter: accessFilter }) => {
+      const allRecords = Array.from(store.get(model).values());
+
+      const queryFilters = parseFilters(request.query);
+      const queryFilterPredicate = createFilterPredicate(queryFilters);
+      const fieldsMap = parseFields(request.query);
+      const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
+
+      let recordsToReturn = allRecords;
+      if (accessFilter) recordsToReturn = recordsToReturn.filter(accessFilter);
+      if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate);
+
+      const baseUrl = getBaseUrl(request);
+      const data = recordsToReturn.map(record => record.toJSON({ fields: modelFields, baseUrl }));
+
+      return buildResponse(data, request.query?.include, recordsToReturn, {
+        links: { self: `${baseUrl}/${pluralizedModel}` },
+        baseUrl
+      });
+    };
+
+    const getSingleHandler = (request) => {
+      const record = store.get(model, getId(request.params));
+      if (!record) return 404;
+
+      const fieldsMap = parseFields(request.query);
+      const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
+
+      const baseUrl = getBaseUrl(request);
+      return buildResponse(record.toJSON({ fields: modelFields, baseUrl }), request.query?.include, record, {
+        links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
+        baseUrl
+      });
+    };
+
+    const createHandler = ({ body, query }) => {
+      const { type, attributes } = body?.data || {};
+
+      if (!type) return 400; // Bad request
+
+      const fieldsMap = parseFields(query);
+      const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
+      // Check for duplicate ID
+      if (attributes?.id !== undefined && store.get(model, attributes.id)) return 409; // Conflict
+
+      const record = createRecord(model, attributes, { serialize: false });
+
+      return { data: record.toJSON({ fields: modelFields }) };
+    };
+
+    const updateHandler = async ({ body, params }) => {
+      const record = store.get(model, getId(params));
+      const { attributes } = body?.data || {};
+
+      if (!attributes) return 400; // Bad request
+
+      // Apply updates 1 by 1 to utilize built-in transform logic, ignore id key
+      for (const [key, value] of Object.entries(attributes)) {
+        if (!record.hasOwnProperty(key)) continue;
+        if (key === 'id') continue;
+
+        record[key] = value
+      };
+
+      return { data: record.toJSON() };
+    };
+
+    const deleteHandler = ({ params }) => {
+      store.remove(model, getId(params));
+    };
+
+    // Wrap handlers with hooks
     this.handlers = {
       get: {
-        [`/${pluralizedModel}`]: (request, { filter: accessFilter }) => {
-          const allRecords = Array.from(store.get(model).values());
-
-          const queryFilters = parseFilters(request.query);
-          const queryFilterPredicate = createFilterPredicate(queryFilters);
-          const fieldsMap = parseFields(request.query);
-          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
-
-          let recordsToReturn = allRecords;
-          if (accessFilter) recordsToReturn = recordsToReturn.filter(accessFilter);
-          if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate);
-
-          const baseUrl = getBaseUrl(request);
-          const data = recordsToReturn.map(record => record.toJSON({ fields: modelFields, baseUrl }));
-
-          return buildResponse(data, request.query?.include, recordsToReturn, {
-            links: { self: `${baseUrl}/${pluralizedModel}` },
-            baseUrl
-          });
-        },
-
-        [`/${pluralizedModel}/:id`]: (request) => {
-          const record = store.get(model, getId(request.params));
-          if (!record) return 404;
-
-          const fieldsMap = parseFields(request.query);
-          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
-
-          const baseUrl = getBaseUrl(request);
-          return buildResponse(record.toJSON({ fields: modelFields, baseUrl }), request.query?.include, record, {
-            links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
-            baseUrl
-          });
-        },
-
-        // Relationship routes - auto-generated based on model relationships
+        [`/${pluralizedModel}`]: this._withHooks('list', getCollectionHandler),
+        [`/${pluralizedModel}/:id`]: this._withHooks('get', getSingleHandler),
         ...this._generateRelationshipRoutes(model, pluralizedModel, modelRelationships)
       },
-
       patch: {
-        [`/${pluralizedModel}/:id`]: async ({ body, params }) => {
-          const record = store.get(model, getId(params));
-          const { attributes } = body?.data || {};
-
-          if (!attributes) return 400; // Bad request
-
-          // Apply updates 1 by 1 to utilize built-in transform logic, ignore id key
-          for (const [key, value] of Object.entries(attributes)) {
-            if (!record.hasOwnProperty(key)) continue;
-            if (key === 'id') continue;
-
-            record[key] = value
-          };
-
-          return { data: record.toJSON() };
-        }
+        [`/${pluralizedModel}/:id`]: this._withHooks('update', updateHandler)
       },
-
       post: {
-        [`/${pluralizedModel}`]: ({ body, query }) => {
-          const { type, attributes } = body?.data || {};
-
-          if (!type) return 400; // Bad request
-
-          const fieldsMap = parseFields(query);
-          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
-          // Check for duplicate ID
-          if (attributes?.id !== undefined && store.get(model, attributes.id)) return 409; // Conflict
-
-          const record = createRecord(model, attributes, { serialize: false });
-
-          return { data: record.toJSON({ fields: modelFields }) };
-        }
+        [`/${pluralizedModel}`]: this._withHooks('create', createHandler)
       },
-
       delete: {
-        [`/${pluralizedModel}/:id`]: ({ params }) => {
-          store.remove(model, getId(params));
-        }
+        [`/${pluralizedModel}/:id`]: this._withHooks('delete', deleteHandler)
       }
     }
+  }
+
+  // Wraps a handler with before/after hook execution
+  _withHooks(operation, handler) {
+    return async (request, state) => {
+      // Build context object for hooks
+      const context = {
+        model: this.model,
+        operation,
+        request,
+        params: request.params,
+        body: request.body,
+        query: request.query,
+        state,
+      };
+
+      // Emit before hook
+      await emit(`before:${operation}:${this.model}`, context);
+
+      // Execute main handler
+      const response = await handler(request, state);
+
+      // Add response and relevant records to context
+      context.response = response;
+
+      if (operation === 'get' && response?.data && !Array.isArray(response.data)) {
+        context.record = store.get(this.model, getId(request.params));
+      } else if (operation === 'list' && response?.data) {
+        context.records = Array.from(store.get(this.model).values());
+      } else if (operation === 'create' && response?.data?.id) {
+        // For create, get the record from store using the ID from the response
+        const recordId = isNaN(response.data.id) ? response.data.id : parseInt(response.data.id);
+        context.record = store.get(this.model, recordId);
+      } else if (operation === 'update' && response?.data) {
+        context.record = store.get(this.model, getId(request.params));
+      }
+
+      // Emit after hook
+      await emit(`after:${operation}:${this.model}`, context);
+
+      return response;
+    };
   }
 
   _generateRelationshipRoutes(model, pluralizedModel, modelRelationships) {
