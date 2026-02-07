@@ -12,7 +12,7 @@
 4. **Data Persistence**: File-based JSON storage with auto-save
 5. **REST API Generation**: Auto-generated RESTful endpoints with access control
 6. **Data Transformation**: Custom type conversion and formatting
-7. **Lifecycle Hooks**: Event-driven before/after hooks for all CRUD operations with per-model granularity
+7. **Middleware Hooks**: Before/after hooks for all CRUD operations with halting capability
 
 ---
 
@@ -29,29 +29,30 @@
 7. **Relationships** ([src/has-many.js](src/has-many.js), [src/belongs-to.js](src/belongs-to.js)) - Relationship handlers
 8. **Include Parser** ([src/include-parser.js](src/include-parser.js)) - Parses include query params
 9. **Include Collector** ([src/include-collector.js](src/include-collector.js)) - Collects and deduplicates included records
-10. **Events** (from `@stonyx/events`) - Pub/sub event system for CRUD hooks
+10. **Hooks** ([src/hooks.js](src/hooks.js)) - Middleware-based hook registry for CRUD lifecycle
 
 ### Project Structure
 
 ```
 stonyx-orm/
 ├── src/
-│   ├── index.js                  # Main exports (includes ormEvents)
+│   ├── index.js                  # Main exports (includes hook functions)
 │   ├── main.js                   # Orm class
 │   ├── model.js                  # Base Model
 │   ├── record.js                 # Record instances
 │   ├── serializer.js             # Base Serializer
-│   ├── store.js                  # In-memory storage (emits delete events)
+│   ├── store.js                  # In-memory storage
 │   ├── db.js                     # JSON persistence
 │   ├── attr.js                   # Attribute helper (Proxy-based)
 │   ├── has-many.js               # One-to-many relationships
 │   ├── belongs-to.js             # Many-to-one relationships
 │   ├── relationships.js          # Relationship registry
-│   ├── manage-record.js          # createRecord/updateRecord (emits create events)
+│   ├── manage-record.js          # createRecord/updateRecord
 │   ├── model-property.js         # Transform handler
 │   ├── transforms.js             # Built-in transforms
+│   ├── hooks.js                  # Middleware hook registry
 │   ├── setup-rest-server.js      # REST integration
-│   ├── orm-request.js            # CRUD request handler (emits update events)
+│   ├── orm-request.js            # CRUD request handler with hooks
 │   └── meta-request.js           # Meta endpoint (dev only)
 ├── config/
 │   └── environment.js            # Default configuration
@@ -309,7 +310,8 @@ config.orm = {
 3. **Registry**: Relationships in nested Maps
 4. **Factory**: `createRecord()` function
 5. **Observer**: Auto-save via Cron
-6. **Convention over Configuration**: Auto-discovery by naming
+6. **Middleware**: Hook system with halting capability
+7. **Convention over Configuration**: Auto-discovery by naming
 
 **Naming Conventions:**
 - Models: `{PascalCase}Model` (e.g., `AnimalModel`)
@@ -363,156 +365,256 @@ config.orm = {
 
 ---
 
-## Key Insights
+## Middleware Hooks System
 
-**Strengths:**
-- Zero-config REST API generation
-- Clean declarative model definitions
-- Automatic relationship management
-- File-based (no database setup needed)
-- Flexible serialization for messy data
+The ORM provides a powerful middleware-based hook system that allows custom logic before and after CRUD operations. **Before hooks can halt operations** by returning a value.
 
-**Use Cases:**
-- Rapid prototyping
-- Small to medium applications
-- Third-party API consumption with normalization
-- Development/testing environments
-- Applications needing quick REST APIs
+### Architecture
 
-**Dependencies:**
-- `stonyx` - Main framework (peer)
-- `@stonyx/utils` - File/string utilities
-- `@stonyx/events` - Pub/sub event system for CRUD hooks
-- `@stonyx/cron` - Scheduled tasks (used by DB for auto-save)
-- `@stonyx/rest-server` - REST API
+**Hook Registry**: [src/hooks.js](src/hooks.js) - Stores before/after hooks in Maps
+**Integration**: [src/orm-request.js](src/orm-request.js) - `_withHooks()` wrapper executes hooks
+**Exports**: [src/index.js](src/index.js) - Exports `beforeHook`, `afterHook`, `clearHook`, `clearAllHooks`
 
-## Lifecycle Hooks System (Current)
+### API
 
-The ORM emits events during CRUD operations, allowing applications to hook into the data lifecycle.
+#### `beforeHook(operation, model, handler)`
 
-### Event Architecture
+Register a before hook that runs before the operation executes.
 
-**Event Source**: `@stonyx/events` (Events class)
-**Integration**: `src/index.js` initializes singleton `ormEvents` instance
-**Event Registration**: 6 events registered on initialization:
-- `create:before`, `create:after`
-- `update:before`, `update:after`
-- `delete:before`, `delete:after`
-
-### Event Emission Points
-
-**CREATE Events** - `src/manage-record.js`:
 ```javascript
-// Line ~34: Before serialization
-Events.instance?.emit('create:before', {
-  model: modelName,
-  record,
-  rawData,
-  options
-});
+import { beforeHook } from '@stonyx/orm';
 
-// Line ~88: After record fully created
-Events.instance?.emit('create:after', {
-  model: modelName,
-  record,
-  data: record.__data,
-  rawData,
-  options
+beforeHook('create', 'animal', (context) => {
+  // Validate, transform, authorize...
+  if (invalid) {
+    return 400; // Halt with status code
+  }
+  // Return undefined to continue
 });
 ```
 
-**UPDATE Events** - `src/orm-request.js` (PATCH handler):
-```javascript
-// Line ~155: Before applying updates
-const oldData = { ...record.__data };
-Events.instance?.emit('update:before', {
-  model,
-  record,
-  data: record.__data,
-  oldData,
-  rawData: attributes,
-  options: {}
-});
+**Handler return values:**
+- `undefined` / no return - Operation continues
+- **Any other value** - Halts operation and returns that value:
+  - Integer (e.g., `403`) - HTTP status code
+  - Object - JSON response body
 
-// Line ~173: After updates applied
-Events.instance?.emit('update:after', {
-  model,
-  record,
-  data: record.__data,
-  oldData,
-  rawData: attributes,
-  options: {}
+**Returns:** Unregister function
+
+#### `afterHook(operation, model, handler)`
+
+Register an after hook that runs after the operation completes.
+
+```javascript
+import { afterHook } from '@stonyx/orm';
+
+afterHook('update', 'animal', (context) => {
+  console.log(`Updated animal ${context.record.id}`);
+  // After hooks cannot halt (operation already complete)
 });
 ```
 
-**DELETE Events** - `src/store.js` (unloadRecord):
-```javascript
-// Line ~45: Before cleanup
-Events.instance?.emit('delete:before', {
-  model,
-  record,
-  data: { ...record.__data },
-  options
-});
+**Returns:** Unregister function
 
-// Line ~65: After deletion
-Events.instance?.emit('delete:after', {
-  model,
-  record: null,
-  data: null,
-  options
+#### `clearHook(operation, model, [type])`
+
+Clear registered hooks for a specific operation:model.
+
+```javascript
+import { clearHook } from '@stonyx/orm';
+
+clearHook('create', 'animal');           // Clear both before and after
+clearHook('create', 'animal', 'before'); // Clear only before hooks
+clearHook('create', 'animal', 'after');  // Clear only after hooks
+```
+
+#### `clearAllHooks()`
+
+Clear all registered hooks (useful for testing).
+
+```javascript
+import { clearAllHooks } from '@stonyx/orm';
+
+afterEach(() => {
+  clearAllHooks();
 });
 ```
 
-### Design Decisions
+### Operations
 
-**Fire Without Await**: Events are emitted without `await` to maintain backward compatibility
-- `createRecord()` remains synchronous
-- `unloadRecord()` remains synchronous
-- Synchronous handlers execute immediately
-- Async handlers run in background
+- `list` - GET collection (`/animals`)
+- `get` - GET single record (`/animals/1`)
+- `create` - POST new record (`/animals`)
+- `update` - PATCH existing record (`/animals/1`)
+- `delete` - DELETE record (`/animals/1`)
 
-**Optional Chaining**: Uses `Events.instance?.emit()` for zero overhead when not used
+### Context Object
 
-**Error Isolation**: Event errors are caught in Events class, never crash ORM operations
+Each hook receives a context object:
 
-### Usage Patterns
-
-**Auditing**:
 ```javascript
-import { ormEvents } from '@stonyx/orm';
+{
+  model: 'animal',           // Model name
+  operation: 'create',       // Operation type
+  request,                   // Express request object
+  params,                    // URL params (e.g., { id: 5 })
+  body,                      // Request body (POST/PATCH)
+  query,                     // Query parameters
+  state,                     // Request state (includes filter for access control)
 
-ormEvents.subscribe('update:after', ({ model, data, oldData }) => {
-  auditLog.write({
-    action: 'update',
-    model,
-    changes: diff(oldData, data),
-    timestamp: Date.now()
+  // For update/delete operations:
+  oldState,                  // Deep copy of record BEFORE operation
+
+  // For after hooks only:
+  response,                  // Handler response
+  record,                    // Affected record (create/update/get)
+  records,                   // All records (list)
+  recordId,                  // Record ID (delete only, since record no longer exists)
+}
+```
+
+**Notes:**
+- `oldState` is captured via `JSON.parse(JSON.stringify())` before operation executes
+- For delete operations, `recordId` is available since the record may no longer exist
+- `oldState` enables precise field-level change detection
+
+### Implementation Details
+
+**Hook Wrapper** (`src/orm-request.js`):
+
+```javascript
+_withHooks(operation, handler) {
+  return async (request, state) => {
+    const context = { model, operation, request, params, body, query, state };
+
+    // Capture old state for update/delete
+    if (operation === 'update' || operation === 'delete') {
+      const existingRecord = store.get(this.model, getId(request.params));
+      if (existingRecord) {
+        context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
+      }
+    }
+
+    // Run before hooks sequentially (can halt by returning a value)
+    for (const hook of getBeforeHooks(operation, this.model)) {
+      const result = await hook(context);
+      if (result !== undefined) {
+        return result;  // Halt - return status/response
+      }
+    }
+
+    // Execute main handler
+    const response = await handler(request, state);
+
+    // Enrich context for after hooks
+    context.response = response;
+    context.record = /* fetched from store */;
+    context.records = /* for list operations */;
+    context.recordId = /* for delete operations */;
+
+    // Run after hooks sequentially
+    for (const hook of getAfterHooks(operation, this.model)) {
+      await hook(context);
+    }
+
+    return response;
+  };
+}
+```
+
+### Usage Examples
+
+#### Validation (Halting)
+
+```javascript
+beforeHook('create', 'animal', (context) => {
+  const { age } = context.body.data.attributes;
+  if (age < 0) {
+    return 400; // Halt with Bad Request
+  }
+});
+```
+
+#### Custom Error Response
+
+```javascript
+beforeHook('delete', 'animal', (context) => {
+  const animal = store.get('animal', context.params.id);
+  if (animal.protected) {
+    return { errors: [{ detail: 'Cannot delete protected animals' }] };
+  }
+});
+```
+
+#### Change Detection with oldState
+
+```javascript
+afterHook('update', 'animal', (context) => {
+  if (!context.oldState) return;
+
+  // Detect specific field changes
+  if (context.oldState.owner !== context.record.owner) {
+    console.log(`Owner changed from ${context.oldState.owner} to ${context.record.owner}`);
+  }
+});
+```
+
+#### Audit Logging
+
+```javascript
+afterHook('update', 'animal', async (context) => {
+  const changes = {};
+  if (context.oldState) {
+    for (const [key, newValue] of Object.entries(context.record.__data)) {
+      if (context.oldState[key] !== newValue) {
+        changes[key] = { from: context.oldState[key], to: newValue };
+      }
+    }
+  }
+
+  await auditLog.create({
+    operation: 'update',
+    model: context.model,
+    recordId: context.record.id,
+    changes // { age: { from: 2, to: 3 } }
   });
 });
 ```
 
-**Auto-Timestamps**:
-```javascript
-ormEvents.subscribe('create:before', ({ record }) => {
-  record.__data.createdAt = new Date().toISOString();
-});
+#### Delete Auditing
 
-ormEvents.subscribe('update:before', ({ record }) => {
-  record.__data.updatedAt = new Date().toISOString();
+```javascript
+afterHook('delete', 'animal', async (context) => {
+  await auditLog.create({
+    operation: 'delete',
+    model: context.model,
+    recordId: context.recordId,
+    deletedData: context.oldState // Full snapshot
+  });
 });
 ```
 
-**Cache Invalidation**:
-```javascript
-ormEvents.subscribe('update:after', ({ model, record }) => {
-  cache.invalidate(`${model}:${record.id}`);
-});
+### Key Differences from Event-Based System
 
-ormEvents.subscribe('delete:after', ({ model, record }) => {
-  if (record) cache.invalidate(`${model}:${record.id}`);
-});
-```
+| Feature | Event-Based (Old) | Middleware-Based (Current) |
+|---------|-------------------|---------------------------|
+| Execution | Parallel (fire-and-forget) | Sequential |
+| Can halt operation | No | Yes (return any value) |
+| Error handling | Isolated (logged) | Propagated (halts operation) |
+| Middleware order | Not guaranteed | Registration order |
+| Context modification | Not reliable | Reliable (sequential) |
+| API | `subscribe('before:create:animal')` | `beforeHook('create', 'animal')` |
+
+### Testing
+
+**Location**: `test/integration/orm-test.js`
+**Coverage**: Comprehensive hook tests including:
+- Before/after hooks for all operations
+- Halting with status codes
+- Halting with custom response objects
+- Sequential execution order
+- Unsubscribe functionality
+- clearHook functionality
 
 ---
 
@@ -535,7 +637,37 @@ ormEvents.subscribe('delete:after', ({ model, record }) => {
 
 **Understanding REST API:**
 - [src/setup-rest-server.js](src/setup-rest-server.js) - Endpoint registration
-- [src/orm-request.js](src/orm-request.js) - Request handling
+- [src/orm-request.js](src/orm-request.js) - Request handling with hooks
+
+**Understanding Hooks:**
+- [src/hooks.js](src/hooks.js) - Hook registry (beforeHooks, afterHooks Maps)
+- [src/orm-request.js](src/orm-request.js) - `_withHooks()` wrapper
+
+---
+
+## Key Insights
+
+**Strengths:**
+- Zero-config REST API generation
+- Clean declarative model definitions
+- Automatic relationship management
+- File-based (no database setup needed)
+- Flexible serialization for messy data
+- Middleware hooks with halting capability
+
+**Use Cases:**
+- Rapid prototyping
+- Small to medium applications
+- Third-party API consumption with normalization
+- Development/testing environments
+- Applications needing quick REST APIs
+
+**Dependencies:**
+- `stonyx` - Main framework (peer)
+- `@stonyx/utils` - File/string utilities
+- `@stonyx/events` - Pub/sub event system (optional, not used for hooks)
+- `@stonyx/cron` - Scheduled tasks (used by DB for auto-save)
+- `@stonyx/rest-server` - REST API
 
 ---
 
@@ -543,7 +675,11 @@ ormEvents.subscribe('delete:after', ({ model, record }) => {
 
 **Import the ORM:**
 ```javascript
-import { Orm, Model, Serializer, attr, hasMany, belongsTo, createRecord, updateRecord, store, ormEvents } from '@stonyx/orm';
+import {
+  Orm, Model, Serializer, attr, hasMany, belongsTo,
+  createRecord, updateRecord, store,
+  beforeHook, afterHook, clearHook, clearAllHooks
+} from '@stonyx/orm';
 ```
 
 **Initialize:**
@@ -573,300 +709,24 @@ updateRecord(record, newData);
 store.remove('modelName', id);
 ```
 
+**Register Hooks:**
+```javascript
+// Before hook (can halt)
+const unsubscribe = beforeHook('create', 'animal', (ctx) => {
+  if (invalid) return 400;
+});
+
+// After hook
+afterHook('update', 'animal', (ctx) => {
+  console.log('Updated:', ctx.record.id);
+});
+
+// Cleanup
+unsubscribe();           // Remove specific hook
+clearHook('create', 'animal'); // Clear all hooks for operation
+clearAllHooks();         // Clear everything
+```
+
 ---
 
 This guide provides the foundation for understanding stonyx-orm's architecture, patterns, and usage. Refer to test files for concrete examples and the source code for implementation details.
-
----
-
-## NEW: Lifecycle Hooks Implementation (v0.2.1+)
-
-**Status**: ✅ Fully Implemented (181/181 tests passing)
-
-The ORM now provides a comprehensive event-driven hook system with per-model granularity for all CRUD operations.
-
-### Architecture
-
-**Event Format**: `{timing}:{operation}:{modelName}`
-**Event Source**: `@stonyx/events` (convenience exports)
-**Registration**: Auto-generated during `Orm.init()` for all models
-**Emission**: `src/orm-request.js` via `_withHooks()` wrapper
-
-### Event Names
-
-**Operations**:
-- `list` - GET collection
-- `get` - GET single record
-- `create` - POST new record
-- `update` - PATCH existing record
-- `delete` - DELETE record
-
-**Examples**:
-- `before:create:animal`
-- `after:list:owner`
-- `before:update:trait`
-- `after:delete:phoneNumber`
-
-### Implementation Details
-
-**Event Setup** (`src/main.js` ~77-90):
-```javascript
-async init() {
-  // After models are loaded...
-  const eventNames = [];
-  const operations = ['list', 'get', 'create', 'update', 'delete'];
-  const timings = ['before', 'after'];
-
-  for (const modelName of Orm.store.data.keys()) {
-    for (const timing of timings) {
-      for (const operation of operations) {
-        eventNames.push(`${timing}:${operation}:${modelName}`);
-      }
-    }
-  }
-
-  setup(eventNames);
-}
-```
-
-**Hook Wrapper** (`src/orm-request.js` ~315-370):
-```javascript
-_withHooks(operation, handler) {
-  return async (request, state) => {
-    const context = {
-      model: this.model,
-      operation,
-      request,
-      params: request.params,
-      body: request.body,
-      query: request.query,
-      state,
-    };
-
-    // Capture old state for operations that modify data
-    if (operation === 'update' || operation === 'delete') {
-      const existingRecord = store.get(this.model, getId(request.params));
-      if (existingRecord) {
-        // Deep copy the record's data to preserve old state
-        context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
-      }
-    }
-
-    // Emit before hook
-    await emit(`before:${operation}:${this.model}`, context);
-
-    // Execute main handler
-    const response = await handler(request, state);
-
-    // Enrich context with response and records
-    context.response = response;
-    if (operation === 'get' && response?.data && !Array.isArray(response.data)) {
-      context.record = store.get(this.model, getId(request.params));
-    } else if (operation === 'list' && response?.data) {
-      context.records = Array.from(store.get(this.model).values());
-    } else if (operation === 'create' && response?.data?.id) {
-      const recordId = isNaN(response.data.id) ? response.data.id : parseInt(response.data.id);
-      context.record = store.get(this.model, recordId);
-    } else if (operation === 'update' && response?.data) {
-      context.record = store.get(this.model, getId(request.params));
-    } else if (operation === 'delete') {
-      // For delete, the record may no longer exist, but we have oldState
-      context.recordId = getId(request.params);
-    }
-
-    // Emit after hook
-    await emit(`after:${operation}:${this.model}`, context);
-
-    return response;
-  };
-}
-```
-
-**Handler Wrapping** (`src/orm-request.js` constructor):
-```javascript
-// Extract raw handlers
-const getCollectionHandler = (request, state) => { /* ... */ };
-const getSingleHandler = (request) => { /* ... */ };
-const createHandler = ({ body, query }) => { /* ... */ };
-const updateHandler = async ({ body, params }) => { /* ... */ };
-const deleteHandler = ({ params }) => { /* ... */ };
-
-// Wrap with hooks
-this.handlers = {
-  get: {
-    [`/${pluralizedModel}`]: this._withHooks('list', getCollectionHandler),
-    [`/${pluralizedModel}/:id`]: this._withHooks('get', getSingleHandler),
-    ...this._generateRelationshipRoutes(model, pluralizedModel, modelRelationships)
-  },
-  patch: {
-    [`/${pluralizedModel}/:id`]: this._withHooks('update', updateHandler)
-  },
-  post: {
-    [`/${pluralizedModel}`]: this._withHooks('create', createHandler)
-  },
-  delete: {
-    [`/${pluralizedModel}/:id`]: this._withHooks('delete', deleteHandler)
-  }
-};
-```
-
-### Context Object
-
-Every hook receives:
-```javascript
-{
-  model,      // Model name (e.g., 'animal')
-  operation,  // Operation type (e.g., 'create')
-  request,    // Express request object
-  params,     // URL parameters
-  body,       // Request body
-  query,      // Query string
-  state,      // Request state
-  record,     // Single record (after hooks, single ops)
-  records,    // Record array (after hooks, list ops)
-  response,   // Response data (after hooks)
-  oldState,   // Previous record state (update/delete ops only, captured via deep copy)
-  recordId,   // Record ID (delete operations in after hooks, when record no longer exists)
-}
-```
-
-**Note**: `oldState` is captured BEFORE the operation executes for `update` and `delete` operations. It contains a deep copy (via JSON serialization) of the record's `__data` property, allowing precise change tracking and audit trails.
-
-### Usage Examples
-
-**Validation**:
-```javascript
-import { subscribe } from '@stonyx/events';
-
-subscribe('before:create:animal', async (context) => {
-  const { age } = context.body.data.attributes;
-  if (age < 0) throw new Error('Age must be positive');
-});
-```
-
-**Auditing with Change Tracking**:
-```javascript
-subscribe('after:update:animal', async (context) => {
-  // Compare oldState with current record to capture exact changes
-  const changes = {};
-  if (context.oldState) {
-    for (const [key, newValue] of Object.entries(context.record.__data || context.record)) {
-      if (context.oldState[key] !== newValue) {
-        changes[key] = { from: context.oldState[key], to: newValue };
-      }
-    }
-  }
-
-  await auditLog.create({
-    operation: context.operation,
-    model: context.model,
-    recordId: context.record.id,
-    userId: context.state.currentUser?.id,
-    timestamp: new Date(),
-    changes // Precise field-level changes: { age: { from: 2, to: 3 } }
-  });
-});
-
-// Audit deletes with full record snapshot
-subscribe('after:delete:animal', async (context) => {
-  await auditLog.create({
-    operation: 'delete',
-    model: context.model,
-    recordId: context.recordId,
-    userId: context.state.currentUser?.id,
-    timestamp: new Date(),
-    deletedData: context.oldState // Full snapshot of deleted record
-  });
-});
-```
-
-**Side Effects with Change Detection**:
-```javascript
-// Detect specific field changes and trigger notifications
-subscribe('after:update:animal', async (context) => {
-  // Use oldState to detect if owner changed (adoption event)
-  if (context.oldState && context.oldState.owner !== context.record.owner) {
-    await sendNotification({
-      type: 'adoption',
-      animalId: context.record.id,
-      previousOwner: context.oldState.owner,
-      newOwner: context.record.owner
-    });
-  }
-
-  // Detect age milestone
-  if (context.oldState && context.oldState.age < 5 && context.record.age >= 5) {
-    await sendNotification({
-      type: 'milestone',
-      message: `Animal ${context.record.id} reached age 5!`
-    });
-  }
-});
-
-// Cache invalidation on delete
-subscribe('after:delete:animal', async (context) => {
-  await cache.invalidate(`animal:${context.recordId}`);
-  // Also invalidate owner's cache if we know who owned it
-  if (context.oldState?.owner) {
-    await cache.invalidate(`owner:${context.oldState.owner}:pets`);
-  }
-});
-```
-
-### Testing
-
-**Location**: `test/integration/orm-test.js` (~1145-1490)
-**Coverage**: 14 comprehensive tests
-- Before hooks: 5 tests ✅
-- After hooks: 5 tests ✅
-- Error handling: 2 tests ✅
-- Lifecycle management: 2 tests ✅
-
-**Test Results**: 181/181 passing (100%)
-
-### Key Differences from Old Event System
-
-| Aspect | Old System | New Hooks System |
-|--------|-----------|------------------|
-| Event Names | `create:before` | `before:create:animal` |
-| Granularity | Global | Per-model |
-| Execution | Fire-and-forget | Awaited |
-| Context | Basic | Comprehensive |
-| Coverage | create/update/delete only | All CRUD + list/get |
-| Integration | Multiple files | Centralized in orm-request.js |
-| Testing | None | 14 comprehensive tests |
-
-### Migration Guide
-
-**Old Code**:
-```javascript
-import { ormEvents } from '@stonyx/orm';
-ormEvents.subscribe('create:after', ({ model, record }) => {
-  if (model === 'animal') {
-    console.log('Animal created:', record.id);
-  }
-});
-```
-
-**New Code**:
-```javascript
-import { subscribe } from '@stonyx/events';
-subscribe('after:create:animal', async (context) => {
-  console.log('Animal created:', context.record.id);
-});
-```
-
-### Benefits
-
-1. **Per-Model Granularity**: No need to filter by model in handlers
-2. **Comprehensive Context**: Access to request, params, query, state, and more
-3. **Full CRUD Coverage**: list and get operations now have hooks
-4. **Predictable Execution**: Async/await ensures proper ordering
-5. **Better Testing**: 14 comprehensive integration tests
-6. **Error Isolation**: Hook errors don't break operations
-7. **Clean API**: Uses @stonyx/events convenience exports
-8. **Type Safety**: Events must be registered (caught at runtime)
-9. **Change Tracking**: `oldState` enables precise field-level change detection and audit trails
-10. **Delete Safety**: `recordId` ensures you can still identify deleted records in after hooks
-
----

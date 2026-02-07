@@ -26,3 +26,4 @@ export { default } from './main.js';
 export { store, relationships } from './main.js';
 export { Model, Serializer }; // base classes
 export { attr, belongsTo, hasMany, createRecord, updateRecord }; // helpers
+export { beforeHook, afterHook, clearHook, clearAllHooks } from './hooks.js'; // middleware hooks

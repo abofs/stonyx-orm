@@ -291,14 +291,14 @@ GET /animals/1
 
 ## Lifecycle Hooks
 
-The ORM provides a powerful event-driven hook system that allows you to run custom logic before and after CRUD operations. Hooks are perfect for validation, transformation, side effects, authorization, and auditing.
+The ORM provides a powerful middleware-based hook system that allows you to run custom logic before and after CRUD operations. Hooks are perfect for validation, transformation, side effects, authorization, and auditing.
 
 ### Overview
 
-Hooks are implemented using the `@stonyx/events` package and emit events at key points in the request lifecycle:
+Hooks run at key points in the request lifecycle:
 
-- **Before hooks**: Run before the operation executes (validation, authorization)
-- **After hooks**: Run after the operation completes (logging, notifications, cache invalidation)
+- **Before hooks**: Run before the operation executes. **Can halt operations** by returning a value (status code or response object).
+- **After hooks**: Run after the operation completes (logging, notifications, cache invalidation).
 
 ### Event Naming Convention
 
@@ -349,19 +349,49 @@ Each hook receives a context object with comprehensive information:
 #### Basic Hook Registration
 
 ```javascript
-import { subscribe } from '@stonyx/events';
+import { beforeHook, afterHook } from '@stonyx/orm';
 
-// Validation before creating
-subscribe('before:create:animal', async (context) => {
+// Validation before creating - can halt by returning a value
+beforeHook('create', 'animal', (context) => {
   const { age } = context.body.data.attributes;
   if (age < 0) {
-    throw new Error('Age must be positive');
+    return 400; // Halt with 400 Bad Request
   }
+  // Return undefined to continue
 });
 
 // Logging after updates
-subscribe('after:update:animal', async (context) => {
+afterHook('update', 'animal', (context) => {
   console.log(`Animal ${context.record.id} was updated`);
+});
+```
+
+#### Halting Operations
+
+Before hooks can halt operations by returning a value:
+
+```javascript
+import { beforeHook } from '@stonyx/orm';
+
+// Return a status code to halt with that HTTP status
+beforeHook('create', 'animal', (context) => {
+  if (!context.body.data.attributes.name) {
+    return 400; // Bad Request
+  }
+});
+
+// Return an object to send a custom response
+beforeHook('delete', 'animal', (context) => {
+  const animal = store.get('animal', context.params.id);
+  if (animal.protected) {
+    return { errors: [{ detail: 'Cannot delete protected animals' }] };
+  }
+});
+
+// Return undefined (or nothing) to allow operation to continue
+beforeHook('update', 'animal', (context) => {
+  console.log('Update proceeding...');
+  // No return = operation continues
 });
 ```
 
@@ -369,7 +399,7 @@ subscribe('after:update:animal', async (context) => {
 
 ```javascript
 // Normalize data before saving
-subscribe('before:create:owner', async (context) => {
+beforeHook('create', 'owner', (context) => {
   const attrs = context.body.data.attributes;
   if (attrs.email) {
     attrs.email = attrs.email.toLowerCase().trim();
@@ -381,7 +411,7 @@ subscribe('before:create:owner', async (context) => {
 
 ```javascript
 // Send notification after animal is adopted (using oldState to detect changes)
-subscribe('after:update:animal', async (context) => {
+afterHook('update', 'animal', async (context) => {
   // Use oldState to compare before/after values
   if (context.oldState && context.oldState.owner !== context.record.owner) {
     await sendNotification({
@@ -394,7 +424,7 @@ subscribe('after:update:animal', async (context) => {
 });
 
 // Cache invalidation
-subscribe('after:delete:animal', async (context) => {
+afterHook('delete', 'animal', async (context) => {
   await cache.invalidate(`owner:${context.params.id}:pets`);
 });
 ```
@@ -405,7 +435,7 @@ The `oldState` property (available for `update` and `delete` operations) enables
 
 ```javascript
 // Detect specific field changes
-subscribe('after:update:animal', async (context) => {
+afterHook('update', 'animal', async (context) => {
   if (!context.oldState) return; // No old state for create operations
 
   // Check if a specific field changed
@@ -427,7 +457,7 @@ subscribe('after:update:animal', async (context) => {
 });
 
 // Access deleted record data
-subscribe('after:delete:animal', async (context) => {
+afterHook('delete', 'animal', async (context) => {
   console.log(`Deleted animal: ${context.oldState.type} (age: ${context.oldState.age})`);
   // oldState contains full snapshot of the deleted record
 });
@@ -436,13 +466,13 @@ subscribe('after:delete:animal', async (context) => {
 #### Authorization
 
 ```javascript
-// Additional access control
-subscribe('before:delete:animal', async (context) => {
+// Additional access control - halt with 403 if unauthorized
+beforeHook('delete', 'animal', (context) => {
   const user = context.state.currentUser;
   const animal = store.get('animal', context.params.id);
 
   if (animal.owner !== user.id && !user.isAdmin) {
-    throw new Error('Unauthorized to delete this animal');
+    return 403; // Forbidden
   }
 });
 ```
@@ -451,7 +481,7 @@ subscribe('before:delete:animal', async (context) => {
 
 ```javascript
 // Audit log for all changes with field-level change tracking
-subscribe('after:update:animal', async (context) => {
+afterHook('update', 'animal', async (context) => {
   // Compare oldState with current record to capture exact changes
   const changes = {};
   if (context.oldState) {
@@ -473,7 +503,7 @@ subscribe('after:update:animal', async (context) => {
 });
 
 // Audit deletes with full record snapshot
-subscribe('after:delete:animal', async (context) => {
+afterHook('delete', 'animal', async (context) => {
   await auditLog.create({
     operation: 'delete',
     model: context.model,
@@ -487,10 +517,10 @@ subscribe('after:delete:animal', async (context) => {
 
 #### Error Handling
 
-Hook errors are isolated and won't break the operation:
+For after hooks, wrap in try/catch if errors should not propagate:
 
 ```javascript
-subscribe('after:create:animal', async (context) => {
+afterHook('create', 'animal', async (context) => {
   try {
     await sendWelcomeEmail(context.record.owner);
   } catch (error) {
@@ -505,31 +535,31 @@ subscribe('after:create:animal', async (context) => {
 #### Unsubscribing
 
 ```javascript
+import { beforeHook } from '@stonyx/orm';
+
 // Get unsubscribe function
-const unsubscribe = subscribe('before:create:animal', handler);
+const unsubscribe = beforeHook('create', 'animal', handler);
 
 // Later, remove the hook
 unsubscribe();
 ```
 
-#### Clearing All Hooks for an Event
+#### Clearing Hooks
 
 ```javascript
-import { clear } from '@stonyx/events';
+import { clearHook, clearAllHooks } from '@stonyx/orm';
 
-// Remove all hooks for this event
-clear('before:create:animal');
-```
+// Remove all hooks for a specific operation:model
+clearHook('create', 'animal');
 
-#### One-time Hooks
+// Remove only before hooks
+clearHook('create', 'animal', 'before');
 
-```javascript
-import { once } from '@stonyx/events';
+// Remove only after hooks
+clearHook('create', 'animal', 'after');
 
-// Run only on the next create
-once('after:create:animal', async (context) => {
-  console.log('First animal created!');
-});
+// Remove ALL hooks (useful for testing)
+clearAllHooks();
 ```
 
 ### Advanced Patterns
@@ -537,12 +567,12 @@ once('after:create:animal', async (context) => {
 #### Conditional Hooks
 
 ```javascript
-subscribe('before:update:animal', async (context) => {
+beforeHook('update', 'animal', (context) => {
   // Only validate if age is being updated
   if ('age' in context.body.data.attributes) {
     const { age } = context.body.data.attributes;
     if (age < 0 || age > 50) {
-      throw new Error('Invalid age range');
+      return 400; // Bad Request
     }
   }
 });
@@ -552,7 +582,7 @@ subscribe('before:update:animal', async (context) => {
 
 ```javascript
 // Update owner's pet count when animal is created
-subscribe('after:create:animal', async (context) => {
+afterHook('create', 'animal', async (context) => {
   const owner = store.get('owner', context.record.owner);
   if (owner) {
     owner.petCount = (owner.petCount || 0) + 1;
@@ -560,71 +590,68 @@ subscribe('after:create:animal', async (context) => {
 });
 ```
 
-#### Batch Operations
+#### Sequential Middleware
 
 ```javascript
-// Track batch operations
-let batchContext = null;
-
-subscribe('before:list:animal', async (context) => {
-  if (context.query.batch) {
-    batchContext = { startTime: Date.now() };
-  }
+// Multiple hooks run in registration order
+beforeHook('create', 'post', (context) => {
+  console.log('First middleware');
+  context.customData = { checked: true };
 });
 
-subscribe('after:list:animal', async (context) => {
-  if (batchContext) {
-    console.log(`Batch operation completed in ${Date.now() - batchContext.startTime}ms`);
-    console.log(`Returned ${context.records.length} records`);
-    batchContext = null;
+beforeHook('create', 'post', (context) => {
+  console.log('Second middleware');
+  // Can access data from previous hooks
+  if (!context.customData?.checked) {
+    return 403;
   }
 });
 ```
 
 ### Hook Execution Order
 
-1. **Before hooks** fire first (all subscribers in parallel)
-2. **Main operation** executes
-3. **After hooks** fire last (all subscribers in parallel)
+1. **Before hooks** fire first (sequentially, in registration order)
+2. **Main operation** executes (if no before hook halted)
+3. **After hooks** fire last (sequentially, in registration order)
 
-Multiple hooks for the same event run in parallel and independently - one hook's error won't affect others.
+Before hooks can halt the operation by returning a value. After hooks run after completion and cannot halt.
 
 ### Best Practices
 
 1. **Keep hooks focused**: Each hook should do one thing well
-2. **Use async/await**: All hooks are async for consistency
-3. **Handle errors gracefully**: Don't let hook errors break operations
+2. **Use async/await**: Hooks support async functions for consistency
+3. **Return values intentionally**: Only return a value from before hooks when you want to halt
 4. **Document side effects**: Make it clear what each hook does
 5. **Test hooks independently**: Write unit tests for hook logic
 6. **Avoid heavy operations**: Keep hooks fast to maintain performance
-7. **Use descriptive names**: Name hook handlers clearly for debugging
+7. **Clean up in tests**: Use `clearAllHooks()` in test teardown
 
 ### Testing Hooks
 
 ```javascript
-import { subscribe, emit } from '@stonyx/events';
+import { beforeHook, clearAllHooks } from '@stonyx/orm';
 
-// Test hook behavior
+// Clean up after each test
+afterEach(() => {
+  clearAllHooks();
+});
+
+// Test that validation hook halts with 400
 test('validation hook rejects negative age', async () => {
-  let error;
-
-  subscribe('before:create:animal', async (context) => {
+  beforeHook('create', 'animal', (context) => {
     if (context.body.data.attributes.age < 0) {
-      throw new Error('Age must be positive');
+      return 400;
     }
   });
 
-  try {
-    await emit('before:create:animal', {
-      model: 'animal',
-      operation: 'create',
-      body: { data: { attributes: { age: -5 } } }
-    });
-  } catch (e) {
-    error = e;
-  }
+  const response = await fetch('/animals', {
+    method: 'POST',
+    body: JSON.stringify({
+      data: { attributes: { age: -5 } }
+    })
+  });
 
-  assert.ok(error, 'Hook threw error for negative age');
+  assert.strictEqual(response.status, 400, 'Hook halted with 400');
 });
 ```
 
@@ -638,6 +665,10 @@ test('validation hook rejects negative age', async () => {
 | `createRecord`  | Instantiate a record with proper serialization and relationships.       |
 | `store`         | Singleton store for all model instances.                                |
 | `relationships` | Access all relationships (`hasMany`, `belongsTo`, `global`, `pending`). |
+| `beforeHook`    | Register a before hook that can halt operations.                        |
+| `afterHook`     | Register an after hook for post-operation logic.                        |
+| `clearHook`     | Clear hooks for a specific operation:model.                             |
+| `clearAllHooks` | Clear all registered hooks (useful for testing).                        |
 
 ## License
 

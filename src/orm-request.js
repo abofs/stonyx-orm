@@ -1,7 +1,7 @@
 import { Request } from '@stonyx/rest-server';
 import Orm, { createRecord, store } from '@stonyx/orm';
 import { pluralize as basePluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
-import { emit } from '@stonyx/events';
+import { getBeforeHooks, getAfterHooks } from './hooks.js';
 
 const methodAccessMap = {
   GET: 'read',
@@ -341,8 +341,14 @@ export default class OrmRequest extends Request {
         }
       }
 
-      // Emit before hook
-      await emit(`before:${operation}:${this.model}`, context);
+      // Run before hooks sequentially (can halt by returning a value)
+      for (const hook of getBeforeHooks(operation, this.model)) {
+        const result = await hook(context);
+        if (result !== undefined) {
+          // Hook returned a value - halt operation and return result
+          return result;
+        }
+      }
 
       // Execute main handler
       const response = await handler(request, state);
@@ -365,8 +371,10 @@ export default class OrmRequest extends Request {
         context.recordId = getId(request.params);
       }
 
-      // Emit after hook
-      await emit(`after:${operation}:${this.model}`, context);
+      // Run after hooks sequentially
+      for (const hook of getAfterHooks(operation, this.model)) {
+        await hook(context);
+      }
 
       return response;
     };
