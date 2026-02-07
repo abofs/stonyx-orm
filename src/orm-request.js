@@ -332,6 +332,15 @@ export default class OrmRequest extends Request {
         state,
       };
 
+      // Capture old state for operations that modify data
+      if (operation === 'update' || operation === 'delete') {
+        const existingRecord = store.get(this.model, getId(request.params));
+        if (existingRecord) {
+          // Deep copy the record's data to preserve old state
+          context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
+        }
+      }
+
       // Emit before hook
       await emit(`before:${operation}:${this.model}`, context);
 
@@ -351,6 +360,9 @@ export default class OrmRequest extends Request {
         context.record = store.get(this.model, recordId);
       } else if (operation === 'update' && response?.data) {
         context.record = store.get(this.model, getId(request.params));
+      } else if (operation === 'delete') {
+        // For delete, the record may no longer exist, but we have oldState
+        context.recordId = getId(request.params);
       }
 
       // Emit after hook

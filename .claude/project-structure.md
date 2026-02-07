@@ -629,7 +629,7 @@ async init() {
 }
 ```
 
-**Hook Wrapper** (`src/orm-request.js` ~315-357):
+**Hook Wrapper** (`src/orm-request.js` ~315-370):
 ```javascript
 _withHooks(operation, handler) {
   return async (request, state) => {
@@ -642,6 +642,15 @@ _withHooks(operation, handler) {
       query: request.query,
       state,
     };
+
+    // Capture old state for operations that modify data
+    if (operation === 'update' || operation === 'delete') {
+      const existingRecord = store.get(this.model, getId(request.params));
+      if (existingRecord) {
+        // Deep copy the record's data to preserve old state
+        context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
+      }
+    }
 
     // Emit before hook
     await emit(`before:${operation}:${this.model}`, context);
@@ -660,6 +669,9 @@ _withHooks(operation, handler) {
       context.record = store.get(this.model, recordId);
     } else if (operation === 'update' && response?.data) {
       context.record = store.get(this.model, getId(request.params));
+    } else if (operation === 'delete') {
+      // For delete, the record may no longer exist, but we have oldState
+      context.recordId = getId(request.params);
     }
 
     // Emit after hook
@@ -713,8 +725,12 @@ Every hook receives:
   record,     // Single record (after hooks, single ops)
   records,    // Record array (after hooks, list ops)
   response,   // Response data (after hooks)
+  oldState,   // Previous record state (update/delete ops only, captured via deep copy)
+  recordId,   // Record ID (delete operations in after hooks, when record no longer exists)
 }
 ```
+
+**Note**: `oldState` is captured BEFORE the operation executes for `update` and `delete` operations. It contains a deep copy (via JSON serialization) of the record's `__data` property, allowing precise change tracking and audit trails.
 
 ### Usage Examples
 
@@ -728,26 +744,72 @@ subscribe('before:create:animal', async (context) => {
 });
 ```
 
-**Auditing**:
+**Auditing with Change Tracking**:
 ```javascript
 subscribe('after:update:animal', async (context) => {
+  // Compare oldState with current record to capture exact changes
+  const changes = {};
+  if (context.oldState) {
+    for (const [key, newValue] of Object.entries(context.record.__data || context.record)) {
+      if (context.oldState[key] !== newValue) {
+        changes[key] = { from: context.oldState[key], to: newValue };
+      }
+    }
+  }
+
   await auditLog.create({
     operation: context.operation,
     model: context.model,
     recordId: context.record.id,
     userId: context.state.currentUser?.id,
-    timestamp: new Date()
+    timestamp: new Date(),
+    changes // Precise field-level changes: { age: { from: 2, to: 3 } }
+  });
+});
+
+// Audit deletes with full record snapshot
+subscribe('after:delete:animal', async (context) => {
+  await auditLog.create({
+    operation: 'delete',
+    model: context.model,
+    recordId: context.recordId,
+    userId: context.state.currentUser?.id,
+    timestamp: new Date(),
+    deletedData: context.oldState // Full snapshot of deleted record
   });
 });
 ```
 
-**Side Effects**:
+**Side Effects with Change Detection**:
 ```javascript
-subscribe('after:create:animal', async (context) => {
-  await sendNotification({
-    type: 'new_animal',
-    animalId: context.record.id
-  });
+// Detect specific field changes and trigger notifications
+subscribe('after:update:animal', async (context) => {
+  // Use oldState to detect if owner changed (adoption event)
+  if (context.oldState && context.oldState.owner !== context.record.owner) {
+    await sendNotification({
+      type: 'adoption',
+      animalId: context.record.id,
+      previousOwner: context.oldState.owner,
+      newOwner: context.record.owner
+    });
+  }
+
+  // Detect age milestone
+  if (context.oldState && context.oldState.age < 5 && context.record.age >= 5) {
+    await sendNotification({
+      type: 'milestone',
+      message: `Animal ${context.record.id} reached age 5!`
+    });
+  }
+});
+
+// Cache invalidation on delete
+subscribe('after:delete:animal', async (context) => {
+  await cache.invalidate(`animal:${context.recordId}`);
+  // Also invalidate owner's cache if we know who owned it
+  if (context.oldState?.owner) {
+    await cache.invalidate(`owner:${context.oldState.owner}:pets`);
+  }
 });
 ```
 
@@ -804,5 +866,7 @@ subscribe('after:create:animal', async (context) => {
 6. **Error Isolation**: Hook errors don't break operations
 7. **Clean API**: Uses @stonyx/events convenience exports
 8. **Type Safety**: Events must be registered (caught at runtime)
+9. **Change Tracking**: `oldState` enables precise field-level change detection and audit trails
+10. **Delete Safety**: `recordId` ensures you can still identify deleted records in after hooks
 
 ---

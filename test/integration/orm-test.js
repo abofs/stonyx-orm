@@ -1331,17 +1331,58 @@ module('[Integration] ORM', function(hooks) {
           });
         });
 
-        test('after:delete hook receives context', async function(assert) {
-          assert.expect(3);
+        test('after:update hook includes oldState for comparison', async function(assert) {
+          assert.expect(5);
+
+          const unsubscribe = subscribe('after:update:animal', async (context) => {
+            assert.ok(context.oldState, 'context has oldState');
+            assert.ok(context.record, 'context has updated record');
+            assert.notEqual(context.oldState.age, context.record.age, 'age changed');
+            assert.strictEqual(context.oldState.age, 99, 'oldState has previous age from earlier test');
+            assert.strictEqual(context.record.age, 50, 'record has new age');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals/1`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                type: 'animals',
+                id: '1',
+                attributes: { age: 50 }
+              }
+            })
+          });
+        });
+
+        test('after:delete hook includes oldState', async function(assert) {
+          assert.expect(4);
 
           const unsubscribe = subscribe('after:delete:animal', async (context) => {
+            assert.strictEqual(context.model, 'animal', 'context has model name');
+            assert.strictEqual(context.operation, 'delete', 'context has operation type');
+            assert.ok(context.oldState, 'context has oldState from deleted record');
+            assert.strictEqual(context.oldState.id, 3, 'oldState has correct id');
+          });
+          unsubscribeFns.push(unsubscribe);
+
+          await fetch(`${endpoint}/animals/3`, {
+            method: 'DELETE'
+          });
+        });
+
+        test('before:delete hook receives context', async function(assert) {
+          assert.expect(3);
+
+          const unsubscribe = subscribe('before:delete:animal', async (context) => {
             assert.strictEqual(context.model, 'animal', 'context has model name');
             assert.strictEqual(context.operation, 'delete', 'context has operation type');
             assert.ok(context.params, 'context has params');
           });
           unsubscribeFns.push(unsubscribe);
 
-          await fetch(`${endpoint}/animals/3`, {
+          await fetch(`${endpoint}/animals/4`, {
             method: 'DELETE'
           });
         });

@@ -332,8 +332,17 @@ Each hook receives a context object with comprehensive information:
   record,                    // Record instance (after hooks, single operations)
   records,                   // Record array (after hooks, list operations)
   response,                  // Response data (after hooks)
+  oldState,                  // Previous record state (update/delete operations only)
+  recordId,                  // Record ID (delete operations in after hooks)
 }
 ```
+
+**Important Notes**:
+- `oldState` is only available for `update` and `delete` operations
+- It contains a deep copy of the record's state **before** the operation executes (captured before the `before` hook fires)
+- The deep copy is created via JSON serialization (`JSON.parse(JSON.stringify())`) to ensure complete isolation
+- For `delete` operations, `recordId` is provided in after hooks since the record may no longer exist in the store
+- `oldState` is captured from `record.__data` or the record itself, providing access to the raw data structure
 
 ### Usage Examples
 
@@ -371,12 +380,14 @@ subscribe('before:create:owner', async (context) => {
 #### Side Effects
 
 ```javascript
-// Send notification after animal is adopted
+// Send notification after animal is adopted (using oldState to detect changes)
 subscribe('after:update:animal', async (context) => {
-  if (context.record.owner !== context.body.data.attributes.owner) {
+  // Use oldState to compare before/after values
+  if (context.oldState && context.oldState.owner !== context.record.owner) {
     await sendNotification({
       type: 'adoption',
       animalId: context.record.id,
+      previousOwner: context.oldState.owner,
       newOwner: context.record.owner
     });
   }
@@ -385,6 +396,40 @@ subscribe('after:update:animal', async (context) => {
 // Cache invalidation
 subscribe('after:delete:animal', async (context) => {
   await cache.invalidate(`owner:${context.params.id}:pets`);
+});
+```
+
+#### Change Detection
+
+The `oldState` property (available for `update` and `delete` operations) enables precise change tracking:
+
+```javascript
+// Detect specific field changes
+subscribe('after:update:animal', async (context) => {
+  if (!context.oldState) return; // No old state for create operations
+
+  // Check if a specific field changed
+  if (context.oldState.age !== context.record.age) {
+    console.log(`Age changed from ${context.oldState.age} to ${context.record.age}`);
+  }
+
+  // Track multiple field changes
+  const changedFields = [];
+  for (const key in context.record.__data) {
+    if (context.oldState[key] !== context.record.__data[key]) {
+      changedFields.push(key);
+    }
+  }
+
+  if (changedFields.length > 0) {
+    console.log(`Fields changed: ${changedFields.join(', ')}`);
+  }
+});
+
+// Access deleted record data
+subscribe('after:delete:animal', async (context) => {
+  console.log(`Deleted animal: ${context.oldState.type} (age: ${context.oldState.age})`);
+  // oldState contains full snapshot of the deleted record
 });
 ```
 
@@ -405,21 +450,39 @@ subscribe('before:delete:animal', async (context) => {
 #### Auditing
 
 ```javascript
-// Audit log for all changes
-const auditOperations = ['create', 'update', 'delete'];
+// Audit log for all changes with field-level change tracking
+subscribe('after:update:animal', async (context) => {
+  // Compare oldState with current record to capture exact changes
+  const changes = {};
+  if (context.oldState) {
+    for (const [key, newValue] of Object.entries(context.record.__data || context.record)) {
+      if (context.oldState[key] !== newValue) {
+        changes[key] = { from: context.oldState[key], to: newValue };
+      }
+    }
+  }
 
-for (const operation of auditOperations) {
-  subscribe(`after:${operation}:animal`, async (context) => {
-    await auditLog.create({
-      operation: context.operation,
-      model: context.model,
-      recordId: context.record?.id,
-      userId: context.state.currentUser?.id,
-      timestamp: new Date(),
-      changes: context.body
-    });
+  await auditLog.create({
+    operation: 'update',
+    model: context.model,
+    recordId: context.record.id,
+    userId: context.state.currentUser?.id,
+    timestamp: new Date(),
+    changes // Precise field-level changes: { age: { from: 2, to: 3 } }
   });
-}
+});
+
+// Audit deletes with full record snapshot
+subscribe('after:delete:animal', async (context) => {
+  await auditLog.create({
+    operation: 'delete',
+    model: context.model,
+    recordId: context.recordId,
+    userId: context.state.currentUser?.id,
+    timestamp: new Date(),
+    deletedData: context.oldState // Full snapshot of deleted record
+  });
+});
 ```
 
 #### Error Handling

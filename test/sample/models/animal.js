@@ -12,6 +12,10 @@ export default class AnimalModel extends Model {
   get tag() {
     const { owner, size } = this;
 
+    if (!owner) {
+      return `Unowned ${size} ${ANIMALS[this.type]}`;
+    }
+
     return `${owner.id}'s ${size} ${ANIMALS[this.type]}`;
   }
 }
