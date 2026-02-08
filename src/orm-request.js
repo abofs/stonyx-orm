@@ -264,16 +264,19 @@ export default class OrmRequest extends Request {
     };
 
     const createHandler = ({ body, query }) => {
-      const { type, attributes } = body?.data || {};
+      const { type, id, attributes } = body?.data || {};
 
       if (!type) return 400; // Bad request
 
       const fieldsMap = parseFields(query);
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
-      // Check for duplicate ID
-      if (attributes?.id !== undefined && store.get(model, attributes.id)) return 409; // Conflict
 
-      const record = createRecord(model, attributes, { serialize: false });
+      const recordId = id ?? attributes?.id;
+      // Check for duplicate ID
+      if (recordId !== undefined && store.get(model, recordId)) return 409; // Conflict
+
+      const recordAttributes = id !== undefined ? { id, ...attributes } : attributes;
+      const record = createRecord(model, recordAttributes, { serialize: false });
 
       return { data: record.toJSON({ fields: modelFields }) };
     };

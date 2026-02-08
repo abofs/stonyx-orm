@@ -448,7 +448,8 @@ module('[Integration] ORM', function(hooks) {
       const firstAnimal = {
         data: {
           type: 'animal',
-          attributes: { id: 9999, type: 'dog', age: 2, size: 'small', owner: 'bob' }
+          id: 9999,
+          attributes: { type: 'dog', age: 2, size: 'small', owner: 'bob' }
         }
       };
       const firstResponse = await fetch(`${endpoint}/animals`, {
@@ -463,7 +464,8 @@ module('[Integration] ORM', function(hooks) {
       const duplicateAnimal = {
         data: {
           type: 'animal',
-          attributes: { id: 9999, type: 'cat', age: 5, size: 'large', owner: 'gina' }
+          id: 9999,
+          attributes: { type: 'cat', age: 5, size: 'large', owner: 'gina' }
         }
       };
       const duplicateResponse = await fetch(`${endpoint}/animals`, {
