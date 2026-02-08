@@ -543,6 +543,28 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(response.status, 400, 'missing type returns 400 bad request');
     });
 
+    test('post call with id only in attributes does not use it as record id', async function(assert) {
+      const payload = {
+        data: {
+          type: 'animal',
+          attributes: { id: 8888, type: 'dog', age: 2, size: 'small', owner: 'bob' }
+        }
+      };
+      const response = await fetch(`${endpoint}/animals`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.notEqual(data.id, 8888, 'id from attributes is not used as record id');
+
+      // Cleanup
+      store.remove('animal', data.id);
+    });
+
     test('empty relationships do not appear in included array', async function(assert) {
       // Create animal with no traits relationship
       const newAnimal = {

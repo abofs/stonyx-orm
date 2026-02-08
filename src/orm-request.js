@@ -271,11 +271,11 @@ export default class OrmRequest extends Request {
       const fieldsMap = parseFields(query);
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-      const recordId = id ?? attributes?.id;
       // Check for duplicate ID
-      if (recordId !== undefined && store.get(model, recordId)) return 409; // Conflict
+      if (id !== undefined && store.get(model, id)) return 409; // Conflict
 
-      const recordAttributes = id !== undefined ? { id, ...attributes } : attributes;
+      const { id: _ignoredId, ...sanitizedAttributes } = attributes || {};
+      const recordAttributes = id !== undefined ? { id, ...sanitizedAttributes } : sanitizedAttributes;
       const record = createRecord(model, recordAttributes, { serialize: false });
 
       return { data: record.toJSON({ fields: modelFields }) };
