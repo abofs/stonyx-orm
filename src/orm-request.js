@@ -2,6 +2,7 @@ import { Request } from '@stonyx/rest-server';
 import Orm, { createRecord, store } from '@stonyx/orm';
 import { pluralize as basePluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
+import config from 'stonyx/config';
 
 const methodAccessMap = {
   GET: 'read',
@@ -9,6 +10,8 @@ const methodAccessMap = {
   DELETE: 'delete',
   PATCH: 'update',
 };
+
+const WRITE_OPERATIONS = new Set(['create', 'update', 'delete']);
 
 // Wrapper to handle dasherized model names
 function pluralize(word) {
@@ -377,6 +380,11 @@ export default class OrmRequest extends Request {
       // Run after hooks sequentially
       for (const hook of getAfterHooks(operation, this.model)) {
         await hook(context);
+      }
+
+      // Auto-save DB after write operations when configured
+      if (config.orm.db.autosave === 'onUpdate' && WRITE_OPERATIONS.has(operation)) {
+        await Orm.db.save();
       }
 
       return response;

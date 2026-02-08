@@ -32,6 +32,8 @@ const {
   ORM_USE_REST_SERVER,
   DB_AUTO_SAVE,
   DB_FILE,
+  DB_MODE,
+  DB_DIRECTORY,
   DB_SCHEMA_PATH,
   DB_SAVE_INTERVAL
 } = process;
@@ -44,6 +46,8 @@ export default {
     db: {
       autosave: DB_AUTO_SAVE ?? 'false',
       file: DB_FILE ?? 'db.json',
+      mode: DB_MODE ?? 'file', // 'file' (single db.json) or 'directory' (one file per collection)
+      directory: DB_DIRECTORY ?? 'db', // directory name for collection files when mode is 'directory'
       saveInterval: DB_SAVE_INTERVAL ?? 3600, // 1 hour
       schema: DB_SCHEMA_PATH ?? './config/db-schema.js'
     },
@@ -154,7 +158,7 @@ export default function(value) {
 
 ## Database (DB) Integration
 
-The ORM can automatically save records to a JSON file with optional auto-save intervals.
+The ORM can automatically save records to a JSON file or a directory of collection files, with optional auto-save intervals.
 
 ```js
 import Orm from '@stonyx/orm';
@@ -168,10 +172,14 @@ const dbRecord = Orm.db;
 
 Configuration options are in `config/environment.js`:
 
-* `DB_AUTO_SAVE`: Whether to auto-save.
+* `DB_AUTO_SAVE`: Auto-save mode — `'true'` (cron-based interval), `'false'` (disabled), or `'onUpdate'` (save after every create/update/delete via REST API).
 * `DB_FILE`: File path to store data.
-* `DB_SAVE_INTERVAL`: Interval in seconds for auto-save.
+* `DB_MODE`: Storage mode — `'file'` (single JSON file, default) or `'directory'` (one file per collection in a directory).
+* `DB_DIRECTORY`: Directory name for collection files when mode is `'directory'` (default: `'db'`).
+* `DB_SAVE_INTERVAL`: Interval in seconds for auto-save (only applies when `DB_AUTO_SAVE` is `'true'`).
 * `DB_SCHEMA_PATH`: Path to DB schema.
+
+In directory mode, each collection is stored as `{directory}/{collection}.json` (e.g., `db/animals.json`, `db/owners.json`). The main `db.json` is kept as a skeleton with empty arrays. Migration scripts are available: `stonyx-db-file-to-directory` and `stonyx-db-directory-to-file`.
 
 ## REST Server Integration
 

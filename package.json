@@ -8,9 +8,14 @@
   "description": "",
   "main": "src/main.js",
   "type": "module",
+  "bin": {
+    "stonyx-db-file-to-directory": "./scripts/file-to-directory.js",
+    "stonyx-db-directory-to-file": "./scripts/directory-to-file.js"
+  },
   "exports": {
     ".": "./src/index.js",
-    "./db": "./src/exports/db.js"
+    "./db": "./src/exports/db.js",
+    "./migrate": "./src/migrate.js"
   },
   "scripts": {
     "test": "qunit --require ./stonyx-bootstrap.cjs",
@@ -34,13 +39,13 @@
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "stonyx": "^0.2.2",
-    "@stonyx/events": "^0.1.0",
-    "@stonyx/cron": "^0.2.0"
+    "stonyx": "file:../stonyx",
+    "@stonyx/events": "file:../stonyx-events",
+    "@stonyx/cron": "file:../stonyx-cron"
   },
   "devDependencies": {
-    "@stonyx/rest-server": "^0.2.0",
-    "@stonyx/utils": "^0.2.2",
+    "@stonyx/rest-server": "file:../stonyx-rest-server",
+    "@stonyx/utils": "file:../stonyx-utils",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
   },

@@ -291,6 +291,8 @@ config.orm = {
   db: {
     autosave: 'false',
     file: 'db.json',
+    mode: 'file', // 'file' (single db.json) or 'directory' (one file per collection)
+    directory: 'db', // directory name for collection files when mode is 'directory'
     saveInterval: 3600,
     schema: './config/db-schema.js'
   },
@@ -300,6 +302,21 @@ config.orm = {
   }
 }
 ```
+
+---
+
+## Storage Modes
+
+The ORM supports two storage modes, configured via `db.mode`:
+
+- **`'file'`** (default): All data is stored in a single `db.json` file.
+- **`'directory'`**: Each collection is stored as a separate file in the configured directory — `{directory}/{collection}.json` (e.g., `db/animals.json`, `db/owners.json`). The main `db.json` is kept as a skeleton with empty arrays.
+
+**Migration CLI commands:**
+- `stonyx-db-file-to-directory` — Splits a single `db.json` into per-collection files in the directory.
+- `stonyx-db-directory-to-file` — Merges per-collection files back into a single `db.json`.
+
+**Mode validation:** On startup, the ORM warns if the configured mode doesn't match the actual file state (e.g., mode is `'file'` but a `db/` directory exists, or mode is `'directory'` but no directory is found).
 
 ---
 
