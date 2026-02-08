@@ -1,6 +1,7 @@
 import { store } from './index.js';
 import { getComputedProperties } from "./serializer.js";
-import { pluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
+import { camelCaseToKebabCase } from '@stonyx/utils/string';
+import { pluralize } from './utils.js';
 export default class Record {
   __data = {};
   __relationships = {};

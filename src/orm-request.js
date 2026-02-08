@@ -1,6 +1,7 @@
 import { Request } from '@stonyx/rest-server';
 import Orm, { createRecord, store } from '@stonyx/orm';
-import { pluralize as basePluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
+import { camelCaseToKebabCase } from '@stonyx/utils/string';
+import { pluralize } from './utils.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
 import config from 'stonyx/config';
 
@@ -12,18 +13,6 @@ const methodAccessMap = {
 };
 
 const WRITE_OPERATIONS = new Set(['create', 'update', 'delete']);
-
-// Wrapper to handle dasherized model names
-function pluralize(word) {
-  if (word.includes('-')) {
-    const parts = word.split('-');
-    const pluralizedLast = basePluralize(parts.pop());
-
-    return [...parts, pluralizedLast].join('-');
-  }
-
-  return basePluralize(word);
-}
 
 // Helper to detect relationship type from function
 function getRelationshipInfo(property) {
@@ -308,18 +297,18 @@ export default class OrmRequest extends Request {
     // Wrap handlers with hooks
     this.handlers = {
       get: {
-        [`/${pluralizedModel}`]: this._withHooks('list', getCollectionHandler),
-        [`/${pluralizedModel}/:id`]: this._withHooks('get', getSingleHandler),
+        '/': this._withHooks('list', getCollectionHandler),
+        '/:id': this._withHooks('get', getSingleHandler),
         ...this._generateRelationshipRoutes(model, pluralizedModel, modelRelationships)
       },
       patch: {
-        [`/${pluralizedModel}/:id`]: this._withHooks('update', updateHandler)
+        '/:id': this._withHooks('update', updateHandler)
       },
       post: {
-        [`/${pluralizedModel}`]: this._withHooks('create', createHandler)
+        '/': this._withHooks('create', createHandler)
       },
       delete: {
-        [`/${pluralizedModel}/:id`]: this._withHooks('delete', deleteHandler)
+        '/:id': this._withHooks('delete', deleteHandler)
       }
     }
   }
@@ -398,8 +387,8 @@ export default class OrmRequest extends Request {
       // Dasherize the relationship name for URL paths (e.g., accessLinks -> access-links)
       const dasherizedName = camelCaseToKebabCase(relationshipName);
 
-      // Related resource route: GET /{type}/:id/{relationship}
-      routes[`/${pluralizedModel}/:id/${dasherizedName}`] = (request) => {
+      // Related resource route: GET /:id/{relationship}
+      routes[`/:id/${dasherizedName}`] = (request) => {
         const record = store.get(model, getId(request.params));
         if (!record) return 404;
 
@@ -421,8 +410,8 @@ export default class OrmRequest extends Request {
         };
       };
 
-      // Relationship linkage route: GET /{type}/:id/relationships/{relationship}
-      routes[`/${pluralizedModel}/:id/relationships/${dasherizedName}`] = (request) => {
+      // Relationship linkage route: GET /:id/relationships/{relationship}
+      routes[`/:id/relationships/${dasherizedName}`] = (request) => {
         const record = store.get(model, getId(request.params));
         if (!record) return 404;
 
@@ -449,7 +438,7 @@ export default class OrmRequest extends Request {
     }
 
     // Catch-all for invalid relationship names on related resource route
-    routes[`/${pluralizedModel}/:id/:relationship`] = (request) => {
+    routes[`/:id/:relationship`] = (request) => {
       const record = store.get(model, getId(request.params));
       if (!record) return 404;
 
@@ -458,7 +447,7 @@ export default class OrmRequest extends Request {
     };
 
     // Catch-all for invalid relationship names on relationship linkage route
-    routes[`/${pluralizedModel}/:id/relationships/:relationship`] = (request) => {
+    routes[`/:id/relationships/:relationship`] = (request) => {
       const record = store.get(model, getId(request.params));
       if (!record) return 404;
 
