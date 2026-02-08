@@ -1,4 +1,5 @@
 import QUnit from 'qunit';
+import sinon from 'sinon';
 import Orm, { createRecord, updateRecord, store, beforeHook, afterHook, clearHook, clearAllHooks } from '@stonyx/orm';
 import Cron from '@stonyx/cron';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
@@ -85,6 +86,80 @@ module('[Integration] ORM', function(hooks) {
       // Cleanup
       cron.unregister('save');
       Orm.db.save = originalSave;
+    });
+
+    test('onUpdate autosave triggers db.save() after PATCH', async function(assert) {
+      // Create an isolated record for this test
+      createRecord('trait', { id: 8000, type: 'test', value: 'original' });
+
+      const originalAutosave = config.orm.db.autosave;
+      config.orm.db.autosave = 'onUpdate';
+      const saveSpy = sinon.spy(Orm.db, 'save');
+
+      await fetch(`${endpoint}/traits/8000`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: { type: 'traits', id: 8000, attributes: { value: 'changed' } }
+        })
+      });
+
+      assert.ok(saveSpy.calledOnce, 'db.save() called once after PATCH');
+
+      saveSpy.restore();
+      config.orm.db.autosave = originalAutosave;
+      store.remove('trait', 8000);
+    });
+
+    test('onUpdate autosave triggers db.save() after POST', async function(assert) {
+      const originalAutosave = config.orm.db.autosave;
+      config.orm.db.autosave = 'onUpdate';
+      const saveSpy = sinon.spy(Orm.db, 'save');
+
+      const response = await fetch(`${endpoint}/traits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: { type: 'trait', attributes: { id: 8001, type: 'test', value: 'new' } }
+        })
+      });
+
+      assert.ok(saveSpy.calledOnce, 'db.save() called once after POST');
+
+      saveSpy.restore();
+      config.orm.db.autosave = originalAutosave;
+      store.remove('trait', 8001);
+    });
+
+    test('onUpdate autosave triggers db.save() after DELETE', async function(assert) {
+      // Create an isolated record to delete
+      createRecord('trait', { id: 8002, type: 'test', value: 'deleteme' });
+
+      const originalAutosave = config.orm.db.autosave;
+      config.orm.db.autosave = 'onUpdate';
+      const saveSpy = sinon.spy(Orm.db, 'save');
+
+      await fetch(`${endpoint}/traits/8002`, {
+        method: 'DELETE'
+      });
+
+      assert.ok(saveSpy.calledOnce, 'db.save() called once after DELETE');
+
+      saveSpy.restore();
+      config.orm.db.autosave = originalAutosave;
+    });
+
+    test('onUpdate autosave does NOT trigger db.save() on GET', async function(assert) {
+      const originalAutosave = config.orm.db.autosave;
+      config.orm.db.autosave = 'onUpdate';
+      const saveSpy = sinon.spy(Orm.db, 'save');
+
+      await fetch(`${endpoint}/traits`);
+
+      assert.notOk(saveSpy.called, 'db.save() not called on GET collection');
+
+      saveSpy.restore();
+      config.orm.db.autosave = originalAutosave;
     });
   });
 
