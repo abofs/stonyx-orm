@@ -90,7 +90,12 @@ export default class Orm {
 
     setup(eventNames);
 
-    if (this.options.dbType !== 'none') {
+    if (config.orm.mysql) {
+      const { default: MysqlDB } = await import('./mysql/mysql-db.js');
+      this.mysqlDb = new MysqlDB();
+      this.db = this.mysqlDb;
+      promises.push(this.mysqlDb.init());
+    } else if (this.options.dbType !== 'none') {
       const db = new DB();
       this.db = db;
 
@@ -103,6 +108,14 @@ export default class Orm {
 
     Orm.ready = await Promise.all(promises);
     Orm.initialized = true;
+  }
+
+  async startup() {
+    if (this.mysqlDb) await this.mysqlDb.startup();
+  }
+
+  async shutdown() {
+    if (this.mysqlDb) await this.mysqlDb.shutdown();
   }
 
   static get db() {

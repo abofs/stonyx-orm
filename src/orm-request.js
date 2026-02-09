@@ -334,6 +334,9 @@ export default class OrmRequest extends Request {
           // Deep copy the record's data to preserve old state
           context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
         }
+        if (operation === 'delete') {
+          context.recordId = getId(request.params);
+        }
       }
 
       // Run before hooks sequentially (can halt by returning a value)
@@ -347,6 +350,11 @@ export default class OrmRequest extends Request {
 
       // Execute main handler
       const response = await handler(request, state);
+
+      // Persist to MySQL for write operations
+      if (Orm.instance.mysqlDb && WRITE_OPERATIONS.has(operation)) {
+        await Orm.instance.mysqlDb.persist(operation, this.model, context, response);
+      }
 
       // Add response and relevant records to context
       context.response = response;

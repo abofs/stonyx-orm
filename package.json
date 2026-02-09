@@ -40,6 +40,12 @@
     "@stonyx/events": "file:../stonyx-events",
     "@stonyx/cron": "file:../stonyx-cron"
   },
+  "peerDependencies": {
+    "mysql2": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "mysql2": { "optional": true }
+  },
   "devDependencies": {
     "@stonyx/rest-server": "file:../stonyx-rest-server",
     "@stonyx/utils": "file:../stonyx-utils",
