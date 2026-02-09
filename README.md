@@ -65,16 +65,13 @@ export default {
 };
 ```
 
-Then initialize the Stonyx framework, which auto-initializes all of its modules, including `@stonyx/rest-server`:
+Then run the application via the Stonyx CLI, which auto-initializes all modules including the ORM:
 
-```js
-import Stonyx from 'stonyx';
-import config from './config/environment.js';
-
-new Stonyx(config);
+```bash
+stonyx serve
 ```
 
-For further framework initialization instructions, see the [Stonyx repository](https://github.com/abofs/stonyx).
+For further framework instructions, see the [Stonyx repository](https://github.com/abofs/stonyx).
 
 ## Models
 

@@ -120,7 +120,7 @@ module('[Integration] ORM', function(hooks) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          data: { type: 'trait', attributes: { id: 8001, type: 'test', value: 'new' } }
+          data: { type: 'trait', id: 8001, attributes: { type: 'test', value: 'new' } }
         })
       });
 

@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  stonyx: ^0.2.2
-
 importers:
 
   .:
@@ -18,8 +15,8 @@ importers:
         specifier: file:../stonyx-events
         version: file:../stonyx-events
       stonyx:
-        specifier: ^0.2.2
-        version: 0.2.2
+        specifier: file:../stonyx
+        version: file:../stonyx
     devDependencies:
       '@stonyx/rest-server':
         specifier: file:../stonyx-rest-server
@@ -353,8 +350,9 @@ packages:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
 
-  stonyx@0.2.2:
-    resolution: {integrity: sha512-X37/2R2YklI+CX4wKHckPg2pFmOL1hk0CwOMvn7E00sE+8JjhmbHvAeTI+0t50kufBsXKREPX3FBHVUd4Yi4Fw==}
+  stonyx@file:../stonyx:
+    resolution: {directory: ../stonyx, type: directory}
+    hasBin: true
 
   supports-color@7.2.0:
     resolution: {integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==}
@@ -414,7 +412,7 @@ snapshots:
 
   '@stonyx/cron@file:../stonyx-cron':
     dependencies:
-      stonyx: 0.2.2
+      stonyx: file:../stonyx
 
   '@stonyx/events@file:../stonyx-events': {}
 
@@ -422,7 +420,7 @@ snapshots:
     dependencies:
       cors: 2.8.6
       express: 5.2.1
-      stonyx: 0.2.2
+      stonyx: file:../stonyx
     transitivePeerDependencies:
       - supports-color
 
@@ -761,7 +759,7 @@ snapshots:
 
   statuses@2.0.2: {}
 
-  stonyx@0.2.2:
+  stonyx@file:../stonyx:
     dependencies:
       node-chronicle: 0.2.0
 
