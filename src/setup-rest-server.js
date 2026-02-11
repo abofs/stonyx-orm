@@ -5,6 +5,7 @@ import MetaRequest from './meta-request.js';
 import RestServer from '@stonyx/rest-server';
 import { forEachFileImport } from '@stonyx/utils/file';
 import { dbKey } from './db.js';
+import { pluralize } from './utils.js';
 import log from 'stonyx/log';
 
 export default async function(route, accessPath, metaRoute) {
@@ -42,7 +43,9 @@ export default async function(route, accessPath, metaRoute) {
 
   // Configure endpoints for models with access configuration
   for (const [model, access] of Object.entries(accessFiles)) {
-    RestServer.instance.mountRoute(OrmRequest, { name, options: { model, access } }); 
+    const pluralizedModel = pluralize(model);
+    const modelName = name === 'index' ? pluralizedModel : `${name}/${pluralizedModel}`;
+    RestServer.instance.mountRoute(OrmRequest, { name: modelName, options: { model, access } });
   }
 
   // Mount the meta route when metaRoute config is enabled

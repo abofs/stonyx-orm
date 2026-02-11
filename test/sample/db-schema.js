@@ -10,4 +10,5 @@ export default class DBModel extends Model {
   animals = hasMany('animal');
   traits = hasMany('trait');
   categories = hasMany('category');
+  phoneNumbers = hasMany('phone-number');
 }

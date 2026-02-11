@@ -71,8 +71,8 @@ export default class Serializer {
       const handler = model[key];
       const data = query(rawData, pathPrefix, subPath);
 
-      // Ignore null values on updates (TODO: What if we want it set to null?)
-      if (data === null && options.update) continue;
+      // Ignore null/undefined values on updates (TODO: What if we want it set to null?)
+      if ((data === null || data === undefined) && options.update) continue;
 
       // Relationship handling
       if (typeof handler === 'function') {

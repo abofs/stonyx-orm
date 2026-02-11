@@ -6,8 +6,9 @@
 *.vsix%
 *DS_Store*
 
-# db files
+# db/log files
 *.json
+*.log
 
 # npm auth (never commit tokens)
 .npmrc
