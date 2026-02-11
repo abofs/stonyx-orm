@@ -6,7 +6,7 @@ export default class GlobalAccess {
   
   // Custom logic here
   access(request) {
-    const { url } = request; // destructure url from express request object
+    const { originalUrl: url } = request; // destructure originalUrl from express request object
 
     // Returning false explicitly denies access
     if (url.endsWith('/owners/angela')) return false;

@@ -437,7 +437,7 @@ module('[Integration] ORM', function(hooks) {
 
       const response = await fetch(`${endpoint}/animals/3`, { method: 'delete' });
 
-      assert.equal(response.status, 200);
+      assert.equal(response.status, 204);
       assert.notOk(store.get('animal', 3));
     });
 
@@ -450,7 +450,7 @@ module('[Integration] ORM', function(hooks) {
 
       // Delete the record
       const deleteResponse = await fetch(`${endpoint}/animals/${targetId}`, { method: 'DELETE' });
-      assert.equal(deleteResponse.status, 200, 'delete returns 200');
+      assert.equal(deleteResponse.status, 204, 'delete returns 204');
 
       // Verify GET returns 404 after deletion
       const getAfterResponse = await fetch(`${endpoint}/animals/${targetId}`);
@@ -616,6 +616,39 @@ module('[Integration] ORM', function(hooks) {
       });
 
       assert.equal(response.status, 400, 'missing type returns 400 bad request');
+    });
+
+    test('post call with belongsTo in relationships object sets relationship on record', async function(assert) {
+      const newTrait = {
+        data: {
+          type: 'trait',
+          id: 7777,
+          attributes: { type: 'color', value: 'orange' },
+          relationships: {
+            category: {
+              data: { type: 'category', id: 'appearance' }
+            }
+          }
+        }
+      };
+      const response = await fetch(`${endpoint}/traits`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newTrait)
+      });
+
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(data.id, 7777);
+
+      // Verify the belongsTo relationship was set on the store record
+      const record = store.get('trait', 7777);
+      assert.ok(record.category, 'record has category relationship');
+      assert.equal(record.category.id, 'appearance', 'category points to correct record');
+
+      // Cleanup
+      store.remove('trait', 7777);
     });
 
     test('post call with id only in attributes does not use it as record id', async function(assert) {

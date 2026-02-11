@@ -1,5 +1,5 @@
 import { Request } from '@stonyx/rest-server';
-import Orm, { createRecord, store } from '@stonyx/orm';
+import Orm, { createRecord, updateRecord, store } from '@stonyx/orm';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { pluralize } from './utils.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
@@ -256,7 +256,7 @@ export default class OrmRequest extends Request {
     };
 
     const createHandler = ({ body, query }) => {
-      const { type, id, attributes } = body?.data || {};
+      const { type, id, attributes, relationships: rels } = body?.data || {};
 
       if (!type) return 400; // Bad request
 
@@ -267,6 +267,17 @@ export default class OrmRequest extends Request {
       if (id !== undefined && store.get(model, id)) return 409; // Conflict
 
       const { id: _ignoredId, ...sanitizedAttributes } = attributes || {};
+
+      // Extract relationship IDs from JSON:API relationships object
+      if (rels) {
+        for (const [key, value] of Object.entries(rels)) {
+          const relData = value?.data;
+          if (relData && relData.id !== undefined) {
+            sanitizedAttributes[key] = relData.id;
+          }
+        }
+      }
+
       const recordAttributes = id !== undefined ? { id, ...sanitizedAttributes } : sanitizedAttributes;
       const record = createRecord(model, recordAttributes, { serialize: false });
 
@@ -275,23 +286,40 @@ export default class OrmRequest extends Request {
 
     const updateHandler = async ({ body, params }) => {
       const record = store.get(model, getId(params));
-      const { attributes } = body?.data || {};
+      const { attributes, relationships: rels } = body?.data || {};
 
-      if (!attributes) return 400; // Bad request
+      if (!attributes && !rels) return 400; // Bad request
 
-      // Apply updates 1 by 1 to utilize built-in transform logic, ignore id key
-      for (const [key, value] of Object.entries(attributes)) {
-        if (!record.hasOwnProperty(key)) continue;
-        if (key === 'id') continue;
+      // Apply attribute updates 1 by 1 to utilize built-in transform logic, ignore id key
+      if (attributes) {
+        for (const [key, value] of Object.entries(attributes)) {
+          if (!record.hasOwnProperty(key)) continue;
+          if (key === 'id') continue;
 
-        record[key] = value
-      };
+          record[key] = value
+        };
+      }
+
+      // Apply relationship updates via updateRecord to properly resolve references
+      if (rels) {
+        const relUpdates = {};
+        for (const [key, value] of Object.entries(rels)) {
+          const relData = value?.data;
+          if (relData && relData.id !== undefined) {
+            relUpdates[key] = relData.id;
+          }
+        }
+        if (Object.keys(relUpdates).length > 0) {
+          updateRecord(record, relUpdates);
+        }
+      }
 
       return { data: record.toJSON() };
     };
 
     const deleteHandler = ({ params }) => {
       store.remove(model, getId(params));
+      return 204;
     };
 
     // Wrap handlers with hooks

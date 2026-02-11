@@ -29,4 +29,48 @@ module('[Unit] ORM Commands', function() {
     assert.equal(cmd.bootstrap, true, 'requires bootstrap');
     assert.equal(typeof cmd.run, 'function', 'has run function');
   });
+
+  test('db:generate-migration has required properties', async function(assert) {
+    const { default: commands } = await import('../../src/commands.js');
+    const cmd = commands['db:generate-migration'];
+
+    assert.ok(cmd, 'has db:generate-migration command');
+    assert.equal(typeof cmd.description, 'string', 'has description');
+    assert.ok(cmd.description.length > 0, 'description is not empty');
+    assert.equal(cmd.bootstrap, true, 'requires bootstrap');
+    assert.equal(typeof cmd.run, 'function', 'has run function');
+  });
+
+  test('db:migrate has required properties', async function(assert) {
+    const { default: commands } = await import('../../src/commands.js');
+    const cmd = commands['db:migrate'];
+
+    assert.ok(cmd, 'has db:migrate command');
+    assert.equal(typeof cmd.description, 'string', 'has description');
+    assert.ok(cmd.description.length > 0, 'description is not empty');
+    assert.equal(cmd.bootstrap, true, 'requires bootstrap');
+    assert.equal(typeof cmd.run, 'function', 'has run function');
+  });
+
+  test('db:migrate:rollback has required properties', async function(assert) {
+    const { default: commands } = await import('../../src/commands.js');
+    const cmd = commands['db:migrate:rollback'];
+
+    assert.ok(cmd, 'has db:migrate:rollback command');
+    assert.equal(typeof cmd.description, 'string', 'has description');
+    assert.ok(cmd.description.length > 0, 'description is not empty');
+    assert.equal(cmd.bootstrap, true, 'requires bootstrap');
+    assert.equal(typeof cmd.run, 'function', 'has run function');
+  });
+
+  test('db:migrate:status has required properties', async function(assert) {
+    const { default: commands } = await import('../../src/commands.js');
+    const cmd = commands['db:migrate:status'];
+
+    assert.ok(cmd, 'has db:migrate:status command');
+    assert.equal(typeof cmd.description, 'string', 'has description');
+    assert.ok(cmd.description.length > 0, 'description is not empty');
+    assert.equal(cmd.bootstrap, true, 'requires bootstrap');
+    assert.equal(typeof cmd.run, 'function', 'has run function');
+  });
 });

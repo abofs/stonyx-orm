@@ -34,9 +34,9 @@
 5. **Serializer** ([src/serializer.js](src/serializer.js)) - Maps raw data to model format
 6. **DB** ([src/db.js](src/db.js)) - JSON file persistence layer
 7. **Relationships** ([src/has-many.js](src/has-many.js), [src/belongs-to.js](src/belongs-to.js)) - Relationship handlers
-8. **Include Parser** ([src/include-parser.js](src/include-parser.js)) - Parses include query params
-9. **Include Collector** ([src/include-collector.js](src/include-collector.js)) - Collects and deduplicates included records
-10. **Hooks** ([src/hooks.js](src/hooks.js)) - Middleware-based hook registry for CRUD lifecycle
+8. **Include Logic** (inline in [src/orm-request.js](src/orm-request.js)) - Parses include query params, traverses relationships, collects and deduplicates included records
+9. **Hooks** ([src/hooks.js](src/hooks.js)) - Middleware-based hook registry for CRUD lifecycle
+10. **MySQL Driver** ([src/mysql/mysql-db.js](src/mysql/mysql-db.js)) - MySQL persistence, migrations, schema introspection. Loads records in topological order. `_rowToRawData()` converts TINYINT(1) → boolean, remaps FK columns, strips timestamps.
 
 ### Project Structure
 
@@ -59,8 +59,21 @@ stonyx-orm/
 │   ├── transforms.js             # Built-in transforms
 │   ├── hooks.js                  # Middleware hook registry
 │   ├── setup-rest-server.js      # REST integration
-│   ├── orm-request.js            # CRUD request handler with hooks
-│   └── meta-request.js           # Meta endpoint (dev only)
+│   ├── orm-request.js            # CRUD request handler with hooks + includes
+│   ├── meta-request.js           # Meta endpoint (dev only)
+│   ├── migrate.js                # JSON DB mode migration (file <-> directory)
+│   ├── commands.js               # CLI commands (db:migrate-*, etc.)
+│   ├── utils.js                  # Pluralize wrapper for dasherized names
+│   ├── exports/
+│   │   └── db.js                 # Convenience re-export of DB instance
+│   └── mysql/
+│       ├── mysql-db.js           # MySQL driver (CRUD persistence, record loading)
+│       ├── connection.js         # mysql2 connection pool
+│       ├── query-builder.js      # SQL builders (INSERT/UPDATE/DELETE/SELECT)
+│       ├── schema-introspector.js # Model-to-MySQL schema introspection
+│       ├── migration-generator.js # Schema diff and .sql migration generation
+│       ├── migration-runner.js   # Migration apply/rollback with transactions
+│       └── type-map.js           # ORM attr types -> MySQL column types
 ├── config/
 │   └── environment.js            # Default configuration
 ├── test/
@@ -201,9 +214,10 @@ The ORM supports two storage modes, configured via `db.mode`:
 **Dependencies:**
 - `stonyx` - Main framework (peer)
 - `@stonyx/utils` - File/string utilities
-- `@stonyx/events` - Pub/sub event system (optional, not used for hooks)
+- `@stonyx/events` - Pub/sub event system (event names initialized on startup; hooks use separate middleware-based registry)
 - `@stonyx/cron` - Scheduled tasks (used by DB for auto-save)
 - `@stonyx/rest-server` - REST API
+- `mysql2` - Optional peer dependency for MySQL mode
 
 ---
 

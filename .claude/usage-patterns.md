@@ -158,8 +158,23 @@ export default class GlobalAccess {
 // GET    /owners          - List all
 // GET    /owners/:id       - Get one
 // POST   /animals          - Create
-// PATCH  /animals/:id      - Update
+// PATCH  /animals/:id      - Update (attributes and/or relationships)
 // DELETE /animals/:id      - Delete
+```
+
+**PATCH supports both attributes and relationships:**
+```javascript
+// Update attributes only
+PATCH /animals/1
+{ data: { type: 'animal', attributes: { age: 5 } } }
+
+// Update relationship only
+PATCH /animals/1
+{ data: { type: 'animal', relationships: { owner: { data: { type: 'owner', id: 'gina' } } } } }
+
+// Update both
+PATCH /animals/1
+{ data: { type: 'animal', attributes: { age: 5 }, relationships: { owner: { data: { type: 'owner', id: 'gina' } } } } }
 ```
 
 ## 9. Include Parameter (Sideloading)

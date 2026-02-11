@@ -6,103 +6,148 @@ import { buildInsert, buildUpdate, buildDelete, buildSelect } from './query-buil
 import { createRecord, store } from '@stonyx/orm';
 import { confirm } from '@stonyx/utils/prompt';
 import { readFile } from '@stonyx/utils/file';
-import { pluralize } from '@stonyx/utils/string';
+import { pluralize } from '../utils.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
 import path from 'path';
 
+const defaultDeps = {
+  getPool, closePool, ensureMigrationsTable, getAppliedMigrations,
+  getMigrationFiles, applyMigration, parseMigrationFile,
+  introspectModels, getTopologicalOrder, schemasToSnapshot,
+  loadLatestSnapshot, detectSchemaDrift,
+  buildInsert, buildUpdate, buildDelete, buildSelect,
+  createRecord, store, confirm, readFile, pluralize, config, log, path
+};
+
 export default class MysqlDB {
-  constructor() {
+  constructor(deps = {}) {
     if (MysqlDB.instance) return MysqlDB.instance;
     MysqlDB.instance = this;
 
+    this.deps = { ...defaultDeps, ...deps };
     this.pool = null;
-    this.mysqlConfig = config.orm.mysql;
+    this.mysqlConfig = this.deps.config.orm.mysql;
   }
 
   async init() {
-    this.pool = await getPool(this.mysqlConfig);
-    await ensureMigrationsTable(this.pool, this.mysqlConfig.migrationsTable);
+    this.pool = await this.deps.getPool(this.mysqlConfig);
+    await this.deps.ensureMigrationsTable(this.pool, this.mysqlConfig.migrationsTable);
     await this.loadAllRecords();
   }
 
   async startup() {
-    const migrationsPath = path.resolve(config.rootPath, this.mysqlConfig.migrationsDir);
+    const migrationsPath = this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir);
 
     // Check for pending migrations
-    const applied = await getAppliedMigrations(this.pool, this.mysqlConfig.migrationsTable);
-    const files = await getMigrationFiles(migrationsPath);
+    const applied = await this.deps.getAppliedMigrations(this.pool, this.mysqlConfig.migrationsTable);
+    const files = await this.deps.getMigrationFiles(migrationsPath);
     const pending = files.filter(f => !applied.includes(f));
 
     if (pending.length > 0) {
-      log.db(`${pending.length} pending migration(s) found.`);
+      this.deps.log.db(`${pending.length} pending migration(s) found.`);
 
-      const shouldApply = await confirm(`${pending.length} pending migration(s) found. Apply now?`);
+      const shouldApply = await this.deps.confirm(`${pending.length} pending migration(s) found. Apply now?`);
 
       if (shouldApply) {
         for (const filename of pending) {
-          const content = await readFile(path.join(migrationsPath, filename));
-          const { up } = parseMigrationFile(content);
+          const content = await this.deps.readFile(this.deps.path.join(migrationsPath, filename));
+          const { up } = this.deps.parseMigrationFile(content);
 
-          await applyMigration(this.pool, filename, up, this.mysqlConfig.migrationsTable);
-          log.db(`Applied migration: ${filename}`);
+          await this.deps.applyMigration(this.pool, filename, up, this.mysqlConfig.migrationsTable);
+          this.deps.log.db(`Applied migration: ${filename}`);
         }
 
         // Reload records after applying migrations
         await this.loadAllRecords();
       } else {
-        log.warn('Skipping pending migrations. Schema may be outdated.');
+        this.deps.log.warn('Skipping pending migrations. Schema may be outdated.');
+      }
+    } else if (files.length === 0) {
+      const schemas = this.deps.introspectModels();
+      const modelCount = Object.keys(schemas).length;
+
+      if (modelCount > 0) {
+        const shouldGenerate = await this.deps.confirm(
+          `No migrations found but ${modelCount} model(s) detected. Generate and apply initial migration?`
+        );
+
+        if (shouldGenerate) {
+          const { generateMigration } = await import('./migration-generator.js');
+          const result = await generateMigration('initial_setup');
+
+          if (result) {
+            const { up } = this.deps.parseMigrationFile(result.content);
+            await this.deps.applyMigration(this.pool, result.filename, up, this.mysqlConfig.migrationsTable);
+            this.deps.log.db(`Applied migration: ${result.filename}`);
+            await this.loadAllRecords();
+          }
+        } else {
+          this.deps.log.warn('Skipping initial migration. Tables may not exist.');
+        }
       }
     }
 
     // Check for schema drift
-    const schemas = introspectModels();
-    const snapshot = await loadLatestSnapshot(path.resolve(config.rootPath, this.mysqlConfig.migrationsDir));
+    const schemas = this.deps.introspectModels();
+    const snapshot = await this.deps.loadLatestSnapshot(this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir));
 
     if (Object.keys(snapshot).length > 0) {
-      const drift = detectSchemaDrift(schemas, snapshot);
+      const drift = this.deps.detectSchemaDrift(schemas, snapshot);
 
       if (drift.hasChanges) {
-        log.warn('Schema drift detected: models have changed since the last migration.');
-        log.warn('Run `stonyx db:generate-migration` to create a new migration.');
+        this.deps.log.warn('Schema drift detected: models have changed since the last migration.');
+        this.deps.log.warn('Run `stonyx db:generate-migration` to create a new migration.');
       }
     }
   }
 
   async shutdown() {
-    await closePool();
+    await this.deps.closePool();
     this.pool = null;
   }
 
+  async save() {
+    // No-op: MySQL persists data immediately via persist()
+  }
+
   async loadAllRecords() {
-    const schemas = introspectModels();
-    const order = getTopologicalOrder(schemas);
+    const schemas = this.deps.introspectModels();
+    const order = this.deps.getTopologicalOrder(schemas);
 
     for (const modelName of order) {
       const schema = schemas[modelName];
-      const { sql, values } = buildSelect(schema.table);
+      const { sql, values } = this.deps.buildSelect(schema.table);
 
       try {
         const [rows] = await this.pool.execute(sql, values);
 
         for (const row of rows) {
           const rawData = this._rowToRawData(row, schema);
-          createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false });
+          this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false });
         }
       } catch (error) {
         // Table may not exist yet (pre-migration) — skip gracefully
         if (error.code === 'ER_NO_SUCH_TABLE') {
-          log.db(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
+          this.deps.log.db(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
           continue;
         }
 
         throw error;
       }
     }
+
   }
 
   _rowToRawData(row, schema) {
     const rawData = { ...row };
+
+    // Convert boolean columns from MySQL TINYINT(1) 0/1 to false/true
+    for (const [col, mysqlType] of Object.entries(schema.columns)) {
+      if (mysqlType === 'TINYINT(1)' && rawData[col] != null) {
+        rawData[col] = !!rawData[col];
+      }
+    }
 
     // Map FK columns back to relationship keys
     // e.g., owner_id → owner (the belongsTo handler expects the id value under the relationship key name)
@@ -134,13 +179,13 @@ export default class MysqlDB {
   }
 
   async _persistCreate(modelName, context, response) {
-    const schemas = introspectModels();
+    const schemas = this.deps.introspectModels();
     const schema = schemas[modelName];
 
     if (!schema) return;
 
     const recordId = response?.data?.id;
-    const record = recordId != null ? store.get(modelName, isNaN(recordId) ? recordId : parseInt(recordId)) : null;
+    const record = recordId != null ? this.deps.store.get(modelName, isNaN(recordId) ? recordId : parseInt(recordId)) : null;
 
     if (!record) return;
 
@@ -155,7 +200,7 @@ export default class MysqlDB {
       // Keep user-provided ID (string IDs or explicit numeric IDs)
     }
 
-    const { sql, values } = buildInsert(schema.table, insertData);
+    const { sql, values } = this.deps.buildInsert(schema.table, insertData);
 
     const [result] = await this.pool.execute(sql, values);
 
@@ -163,7 +208,7 @@ export default class MysqlDB {
     if (isPendingId && result.insertId) {
       const pendingId = record.id;
       const realId = result.insertId;
-      const modelStore = store.get(modelName);
+      const modelStore = this.deps.store.get(modelName);
 
       modelStore.delete(pendingId);
       record.__data.id = realId;
@@ -180,7 +225,7 @@ export default class MysqlDB {
   }
 
   async _persistUpdate(modelName, context, response) {
-    const schemas = introspectModels();
+    const schemas = this.deps.introspectModels();
     const schema = schemas[modelName];
 
     if (!schema) return;
@@ -214,12 +259,12 @@ export default class MysqlDB {
 
     if (Object.keys(changedData).length === 0) return;
 
-    const { sql, values } = buildUpdate(schema.table, id, changedData);
+    const { sql, values } = this.deps.buildUpdate(schema.table, id, changedData);
     await this.pool.execute(sql, values);
   }
 
   async _persistDelete(modelName, context) {
-    const schemas = introspectModels();
+    const schemas = this.deps.introspectModels();
     const schema = schemas[modelName];
 
     if (!schema) return;
@@ -227,7 +272,7 @@ export default class MysqlDB {
     const id = context.recordId;
     if (id == null) return;
 
-    const { sql, values } = buildDelete(schema.table, id);
+    const { sql, values } = this.deps.buildDelete(schema.table, id);
     await this.pool.execute(sql, values);
   }
 

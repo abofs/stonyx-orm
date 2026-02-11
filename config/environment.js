@@ -18,7 +18,7 @@ const {
   MYSQL_DATABASE,
   MYSQL_CONNECTION_LIMIT,
   MYSQL_MIGRATIONS_DIR,
-} = process;
+} = process.env;
 
 export default {
   logColor: 'white',

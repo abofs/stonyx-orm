@@ -1,7 +1,7 @@
 # @stonyx/orm
 
 A lightweight ORM for Stonyx projects, featuring model definitions, serializers, relationships, transforms, and optional REST server integration.
-`@stonyx/orm` provides a structured way to define models, manage relationships, and persist data in JSON files. It also allows integration with the Stonyx REST server for automatic route setup and access control.
+`@stonyx/orm` provides a structured way to define models, manage relationships, and persist data in JSON files or MySQL. It also allows integration with the Stonyx REST server for automatic route setup and access control.
 
 ## Highlights
 
@@ -9,8 +9,9 @@ A lightweight ORM for Stonyx projects, featuring model definitions, serializers,
 - **Models**: Define attributes with type-safe proxies (`attr`) and relationships (`hasMany`, `belongsTo`).
 - **Serializers**: Map raw data into model-friendly structures, including nested properties.
 - **Transforms**: Apply custom transformations on data values automatically.
-- **DB Integration**: Optional file-based persistence with auto-save support.
+- **DB Integration**: Optional file-based persistence with auto-save support, or MySQL for production workloads.
 - **REST Server Integration**: Automatic route setup with customizable access control.
+- **Lifecycle Hooks**: Middleware-based before/after hooks for validation, authorization, side effects, and auditing.
 
 ## Installation
 
@@ -35,8 +36,15 @@ const {
   DB_MODE,
   DB_DIRECTORY,
   DB_SCHEMA_PATH,
-  DB_SAVE_INTERVAL
-} = process;
+  DB_SAVE_INTERVAL,
+  MYSQL_HOST,
+  MYSQL_PORT,
+  MYSQL_USER,
+  MYSQL_PASSWORD,
+  MYSQL_DATABASE,
+  MYSQL_CONNECTION_LIMIT,
+  MYSQL_MIGRATIONS_DIR,
+} = process.env;
 
 export default {
   orm: {
@@ -57,6 +65,16 @@ export default {
       serializer: ORM_SERIALIZER_PATH ?? './serializers',
       transform: ORM_TRANSFORM_PATH ?? './transforms'
     },
+    mysql: MYSQL_HOST ? {
+      host: MYSQL_HOST ?? 'localhost',
+      port: parseInt(MYSQL_PORT ?? '3306'),
+      user: MYSQL_USER ?? 'root',
+      password: MYSQL_PASSWORD ?? '',
+      database: MYSQL_DATABASE ?? 'stonyx',
+      connectionLimit: parseInt(MYSQL_CONNECTION_LIMIT ?? '10'),
+      migrationsDir: MYSQL_MIGRATIONS_DIR ?? 'migrations',
+      migrationsTable: '__migrations',
+    } : undefined,
     restServer: {
       enabled: ORM_USE_REST_SERVER ?? 'true',
       route: ORM_REST_ROUTE ?? '/'
@@ -176,7 +194,18 @@ Configuration options are in `config/environment.js`:
 * `DB_SAVE_INTERVAL`: Interval in seconds for auto-save (only applies when `DB_AUTO_SAVE` is `'true'`).
 * `DB_SCHEMA_PATH`: Path to DB schema.
 
-In directory mode, each collection is stored as `{directory}/{collection}.json` (e.g., `db/animals.json`, `db/owners.json`). The main `db.json` is kept as a skeleton with empty arrays. Migration scripts are available: `stonyx-db-file-to-directory` and `stonyx-db-directory-to-file`.
+In directory mode, each collection is stored as `{directory}/{collection}.json` (e.g., `db/animals.json`, `db/owners.json`). The main `db.json` is kept as a skeleton with empty arrays. Migration commands are available: `stonyx db:migrate-to-directory` and `stonyx db:migrate-to-file`.
+
+### MySQL Mode
+
+Set the `MYSQL_HOST` environment variable to enable MySQL persistence. The ORM loads all records into memory on startup and persists CRUD operations to MySQL automatically. Supports schema-aware migration generation, apply, rollback, and drift detection.
+
+| Command | Description |
+|---------|-------------|
+| `stonyx db:generate-migration <desc>` | Generate a migration from model schema diffs |
+| `stonyx db:migrate` | Apply pending migrations |
+| `stonyx db:migrate:rollback` | Rollback the most recent migration |
+| `stonyx db:migrate:status` | Show migration status |
 
 ## REST Server Integration
 
@@ -668,6 +697,7 @@ test('validation hook rejects negative age', async () => {
 | `belongsTo`     | Define a one-to-one relationship.                                       |
 | `hasMany`       | Define a one-to-many relationship.                                      |
 | `createRecord`  | Instantiate a record with proper serialization and relationships.       |
+| `updateRecord`  | Update an existing record with new data.                                |
 | `store`         | Singleton store for all model instances.                                |
 | `relationships` | Access all relationships (`hasMany`, `belongsTo`, `global`, `pending`). |
 | `beforeHook`    | Register a before hook that can halt operations.                        |
@@ -675,6 +705,10 @@ test('validation hook rejects negative age', async () => {
 | `clearHook`     | Clear hooks for a specific operation:model.                             |
 | `clearAllHooks` | Clear all registered hooks (useful for testing).                        |
 
+## Project Structure
+
+For a full architectural reference, see [project-structure.md](project-structure.md).
+
 ## License
 
-Apache — do what you want, just keep attribution.
+Apache 2.0 — see [LICENSE.md](LICENSE.md).

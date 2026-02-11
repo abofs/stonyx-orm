@@ -10,6 +10,7 @@ export default class Record {
   constructor(model, serializer) {
     this.__model = model;
     this.__serializer = serializer;
+
   }
 
   serialize(rawData, options={}) {
@@ -74,6 +75,7 @@ export default class Record {
 
     for (const [key, childRecord] of Object.entries(this.__relationships)) {
       if (fields && !fields.has(key)) continue;
+
       const relationshipData = Array.isArray(childRecord)
         ? childRecord.map(r => ({ type: r.__model.__name, id: r.id }))
         : childRecord ? { type: childRecord.__model.__name, id: childRecord.id } : null;

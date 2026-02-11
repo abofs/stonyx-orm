@@ -12,7 +12,8 @@
     ".": "./src/index.js",
     "./db": "./src/exports/db.js",
     "./migrate": "./src/migrate.js",
-    "./commands": "./src/commands.js"
+    "./commands": "./src/commands.js",
+    "./hooks": "./src/hooks.js"
   },
   "scripts": {
     "test": "stonyx test",

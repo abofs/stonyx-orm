@@ -1,4 +1,4 @@
-import { introspectModels, buildTableDDL, schemasToSnapshot } from './schema-introspector.js';
+import { introspectModels, buildTableDDL, schemasToSnapshot, getTopologicalOrder } from './schema-introspector.js';
 import { readFile, createFile, createDirectory, fileExists } from '@stonyx/utils/file';
 import path from 'path';
 import config from 'stonyx/config';
@@ -24,10 +24,13 @@ export async function generateMigration(description = 'migration') {
   const upStatements = [];
   const downStatements = [];
 
-  // New tables
-  for (const name of diff.addedModels) {
-    upStatements.push(buildTableDDL(name, schemas[name]) + ';');
-    downStatements.push(`DROP TABLE IF EXISTS \`${schemas[name].table}\`;`);
+  // New tables — in topological order (parents before children)
+  const allOrder = getTopologicalOrder(schemas);
+  const addedOrdered = allOrder.filter(name => diff.addedModels.includes(name));
+
+  for (const name of addedOrdered) {
+    upStatements.push(buildTableDDL(name, schemas[name], schemas) + ';');
+    downStatements.unshift(`DROP TABLE IF EXISTS \`${schemas[name].table}\`;`);
   }
 
   // Removed tables (warn only, commented out)
@@ -61,7 +64,10 @@ export async function generateMigration(description = 'migration') {
   // Added foreign keys
   for (const { model, column, references } of diff.addedForeignKeys) {
     const table = currentSnapshot[model].table;
-    upStatements.push(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` INT;`);
+    // Resolve FK column type from the referenced table's PK type
+    const refModel = Object.entries(currentSnapshot).find(([, s]) => s.table === references.references);
+    const fkType = refModel && refModel[1].idType === 'string' ? 'VARCHAR(255)' : 'INT';
+    upStatements.push(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${fkType};`);
     upStatements.push(`ALTER TABLE \`${table}\` ADD FOREIGN KEY (\`${column}\`) REFERENCES \`${references.references}\`(\`${references.column}\`) ON DELETE SET NULL;`);
     downStatements.push(`ALTER TABLE \`${table}\` DROP FOREIGN KEY \`${column}\`;`);
     downStatements.push(`ALTER TABLE \`${table}\` DROP COLUMN \`${column}\`;`);
@@ -70,9 +76,12 @@ export async function generateMigration(description = 'migration') {
   // Removed foreign keys
   for (const { model, column, references } of diff.removedForeignKeys) {
     const table = previousSnapshot[model].table;
+    // Resolve FK column type from the referenced table's PK type in previous snapshot
+    const refModel = Object.entries(previousSnapshot).find(([, s]) => s.table === references.references);
+    const fkType = refModel && refModel[1].idType === 'string' ? 'VARCHAR(255)' : 'INT';
     upStatements.push(`ALTER TABLE \`${table}\` DROP FOREIGN KEY \`${column}\`;`);
     upStatements.push(`ALTER TABLE \`${table}\` DROP COLUMN \`${column}\`;`);
-    downStatements.push(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` INT;`);
+    downStatements.push(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${fkType};`);
     downStatements.push(`ALTER TABLE \`${table}\` ADD FOREIGN KEY (\`${column}\`) REFERENCES \`${references.references}\`(\`${references.column}\`) ON DELETE SET NULL;`);
   }
 

@@ -1,6 +1,7 @@
 import Orm from '@stonyx/orm';
 import { getMysqlType } from './type-map.js';
-import { pluralize, camelCaseToKebabCase } from '@stonyx/utils/string';
+import { camelCaseToKebabCase } from '@stonyx/utils/string';
+import { pluralize } from '../utils.js';
 import { dbKey } from '../db.js';
 
 function getRelationshipInfo(property) {
@@ -18,7 +19,7 @@ export function introspectModels() {
   const schemas = {};
 
   for (const [modelKey, modelClass] of Object.entries(models)) {
-    const name = modelKey.slice(0, -5).toLowerCase();
+    const name = camelCaseToKebabCase(modelKey.slice(0, -5));
 
     if (name === dbKey) continue;
 
@@ -67,7 +68,7 @@ export function introspectModels() {
   return schemas;
 }
 
-export function buildTableDDL(name, schema) {
+export function buildTableDDL(name, schema, allSchemas = {}) {
   const { table, idType, columns, foreignKeys } = schema;
   const lines = [];
 
@@ -85,7 +86,7 @@ export function buildTableDDL(name, schema) {
 
   // Foreign key columns
   for (const [fkCol, fkDef] of Object.entries(foreignKeys)) {
-    const refIdType = getReferencedIdType(fkDef.references);
+    const refIdType = getReferencedIdType(fkDef.references, allSchemas);
     lines.push(`  \`${fkCol}\` ${refIdType}`);
   }
 
@@ -101,8 +102,15 @@ export function buildTableDDL(name, schema) {
   return `CREATE TABLE IF NOT EXISTS \`${table}\` (\n${lines.join(',\n')}\n)`;
 }
 
-function getReferencedIdType(tableName) {
-  // Default to INT for FK columns — matches the most common id type
+function getReferencedIdType(tableName, allSchemas) {
+  // Look up the referenced table's PK type from schemas
+  for (const schema of Object.values(allSchemas)) {
+    if (schema.table === tableName) {
+      return schema.idType === 'string' ? 'VARCHAR(255)' : 'INT';
+    }
+  }
+
+  // Default to INT if referenced table not found in schemas
   return 'INT';
 }
 
