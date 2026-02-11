@@ -23,6 +23,7 @@ import setupRestServer from './setup-rest-server.js';
 import baseTransforms from './transforms.js';
 import Store from './store.js';
 import Serializer from './serializer.js';
+import { setup } from '@stonyx/events';
 
 const defaultOptions = {
   dbType: 'json'
@@ -74,10 +75,30 @@ export default class Orm {
     // Wait for imports before db & rest server setup
     await Promise.all(promises);
 
-    if (this.options.dbType !== 'none') {
+    // Setup event names for hooks after models are loaded
+    const eventNames = [];
+    const operations = ['list', 'get', 'create', 'update', 'delete'];
+    const timings = ['before', 'after'];
+
+    for (const modelName of Orm.store.data.keys()) {
+      for (const timing of timings) {
+        for (const operation of operations) {
+          eventNames.push(`${timing}:${operation}:${modelName}`);
+        }
+      }
+    }
+
+    setup(eventNames);
+
+    if (config.orm.mysql) {
+      const { default: MysqlDB } = await import('./mysql/mysql-db.js');
+      this.mysqlDb = new MysqlDB();
+      this.db = this.mysqlDb;
+      promises.push(this.mysqlDb.init());
+    } else if (this.options.dbType !== 'none') {
       const db = new DB();
       this.db = db;
-      
+
       promises.push(db.init());
     }
 
@@ -87,6 +108,14 @@ export default class Orm {
 
     Orm.ready = await Promise.all(promises);
     Orm.initialized = true;
+  }
+
+  async startup() {
+    if (this.mysqlDb) await this.mysqlDb.startup();
+  }
+
+  async shutdown() {
+    if (this.mysqlDb) await this.mysqlDb.shutdown();
   }
 
   static get db() {

@@ -1,0 +1,320 @@
+import { getPool, closePool } from './connection.js';
+import { ensureMigrationsTable, getAppliedMigrations, getMigrationFiles, applyMigration, parseMigrationFile } from './migration-runner.js';
+import { introspectModels, getTopologicalOrder, schemasToSnapshot } from './schema-introspector.js';
+import { loadLatestSnapshot, detectSchemaDrift } from './migration-generator.js';
+import { buildInsert, buildUpdate, buildDelete, buildSelect } from './query-builder.js';
+import { createRecord, store } from '@stonyx/orm';
+import { confirm } from '@stonyx/utils/prompt';
+import { readFile } from '@stonyx/utils/file';
+import { pluralize } from '../utils.js';
+import config from 'stonyx/config';
+import log from 'stonyx/log';
+import path from 'path';
+
+const defaultDeps = {
+  getPool, closePool, ensureMigrationsTable, getAppliedMigrations,
+  getMigrationFiles, applyMigration, parseMigrationFile,
+  introspectModels, getTopologicalOrder, schemasToSnapshot,
+  loadLatestSnapshot, detectSchemaDrift,
+  buildInsert, buildUpdate, buildDelete, buildSelect,
+  createRecord, store, confirm, readFile, pluralize, config, log, path
+};
+
+export default class MysqlDB {
+  constructor(deps = {}) {
+    if (MysqlDB.instance) return MysqlDB.instance;
+    MysqlDB.instance = this;
+
+    this.deps = { ...defaultDeps, ...deps };
+    this.pool = null;
+    this.mysqlConfig = this.deps.config.orm.mysql;
+  }
+
+  async init() {
+    this.pool = await this.deps.getPool(this.mysqlConfig);
+    await this.deps.ensureMigrationsTable(this.pool, this.mysqlConfig.migrationsTable);
+    await this.loadAllRecords();
+  }
+
+  async startup() {
+    const migrationsPath = this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir);
+
+    // Check for pending migrations
+    const applied = await this.deps.getAppliedMigrations(this.pool, this.mysqlConfig.migrationsTable);
+    const files = await this.deps.getMigrationFiles(migrationsPath);
+    const pending = files.filter(f => !applied.includes(f));
+
+    if (pending.length > 0) {
+      this.deps.log.db(`${pending.length} pending migration(s) found.`);
+
+      const shouldApply = await this.deps.confirm(`${pending.length} pending migration(s) found. Apply now?`);
+
+      if (shouldApply) {
+        for (const filename of pending) {
+          const content = await this.deps.readFile(this.deps.path.join(migrationsPath, filename));
+          const { up } = this.deps.parseMigrationFile(content);
+
+          await this.deps.applyMigration(this.pool, filename, up, this.mysqlConfig.migrationsTable);
+          this.deps.log.db(`Applied migration: ${filename}`);
+        }
+
+        // Reload records after applying migrations
+        await this.loadAllRecords();
+      } else {
+        this.deps.log.warn('Skipping pending migrations. Schema may be outdated.');
+      }
+    } else if (files.length === 0) {
+      const schemas = this.deps.introspectModels();
+      const modelCount = Object.keys(schemas).length;
+
+      if (modelCount > 0) {
+        const shouldGenerate = await this.deps.confirm(
+          `No migrations found but ${modelCount} model(s) detected. Generate and apply initial migration?`
+        );
+
+        if (shouldGenerate) {
+          const { generateMigration } = await import('./migration-generator.js');
+          const result = await generateMigration('initial_setup');
+
+          if (result) {
+            const { up } = this.deps.parseMigrationFile(result.content);
+            await this.deps.applyMigration(this.pool, result.filename, up, this.mysqlConfig.migrationsTable);
+            this.deps.log.db(`Applied migration: ${result.filename}`);
+            await this.loadAllRecords();
+          }
+        } else {
+          this.deps.log.warn('Skipping initial migration. Tables may not exist.');
+        }
+      }
+    }
+
+    // Check for schema drift
+    const schemas = this.deps.introspectModels();
+    const snapshot = await this.deps.loadLatestSnapshot(this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir));
+
+    if (Object.keys(snapshot).length > 0) {
+      const drift = this.deps.detectSchemaDrift(schemas, snapshot);
+
+      if (drift.hasChanges) {
+        this.deps.log.warn('Schema drift detected: models have changed since the last migration.');
+        this.deps.log.warn('Run `stonyx db:generate-migration` to create a new migration.');
+      }
+    }
+  }
+
+  async shutdown() {
+    await this.deps.closePool();
+    this.pool = null;
+  }
+
+  async save() {
+    // No-op: MySQL persists data immediately via persist()
+  }
+
+  async loadAllRecords() {
+    const schemas = this.deps.introspectModels();
+    const order = this.deps.getTopologicalOrder(schemas);
+
+    for (const modelName of order) {
+      const schema = schemas[modelName];
+      const { sql, values } = this.deps.buildSelect(schema.table);
+
+      try {
+        const [rows] = await this.pool.execute(sql, values);
+
+        for (const row of rows) {
+          const rawData = this._rowToRawData(row, schema);
+          this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false });
+        }
+      } catch (error) {
+        // Table may not exist yet (pre-migration) — skip gracefully
+        if (error.code === 'ER_NO_SUCH_TABLE') {
+          this.deps.log.db(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+  }
+
+  _rowToRawData(row, schema) {
+    const rawData = { ...row };
+
+    for (const [col, mysqlType] of Object.entries(schema.columns)) {
+      if (rawData[col] == null) continue;
+
+      // Convert boolean columns from MySQL TINYINT(1) 0/1 to false/true
+      if (mysqlType === 'TINYINT(1)') {
+        rawData[col] = !!rawData[col];
+      }
+
+      // Parse JSON columns back to JS values (custom transforms stored as JSON)
+      if (mysqlType === 'JSON' && typeof rawData[col] === 'string') {
+        try { rawData[col] = JSON.parse(rawData[col]); } catch { /* keep raw string */ }
+      }
+    }
+
+    // Map FK columns back to relationship keys
+    // e.g., owner_id → owner (the belongsTo handler expects the id value under the relationship key name)
+    for (const [fkCol, fkDef] of Object.entries(schema.foreignKeys)) {
+      const relName = fkCol.replace(/_id$/, '');
+
+      if (rawData[fkCol] !== undefined) {
+        rawData[relName] = rawData[fkCol];
+        delete rawData[fkCol];
+      }
+    }
+
+    // Remove timestamp columns — managed by MySQL
+    delete rawData.created_at;
+    delete rawData.updated_at;
+
+    return rawData;
+  }
+
+  async persist(operation, modelName, context, response) {
+    switch (operation) {
+      case 'create':
+        return this._persistCreate(modelName, context, response);
+      case 'update':
+        return this._persistUpdate(modelName, context, response);
+      case 'delete':
+        return this._persistDelete(modelName, context);
+    }
+  }
+
+  async _persistCreate(modelName, context, response) {
+    const schemas = this.deps.introspectModels();
+    const schema = schemas[modelName];
+
+    if (!schema) return;
+
+    const recordId = response?.data?.id;
+    const record = recordId != null ? this.deps.store.get(modelName, isNaN(recordId) ? recordId : parseInt(recordId)) : null;
+
+    if (!record) return;
+
+    const insertData = this._recordToRow(record, schema);
+
+    // For auto-increment models, remove the pending ID
+    const isPendingId = record.__data.__pendingMysqlId;
+
+    if (isPendingId) {
+      delete insertData.id;
+    } else if (insertData.id !== undefined) {
+      // Keep user-provided ID (string IDs or explicit numeric IDs)
+    }
+
+    const { sql, values } = this.deps.buildInsert(schema.table, insertData);
+
+    const [result] = await this.pool.execute(sql, values);
+
+    // Re-key the record in the store if MySQL generated the ID
+    if (isPendingId && result.insertId) {
+      const pendingId = record.id;
+      const realId = result.insertId;
+      const modelStore = this.deps.store.get(modelName);
+
+      modelStore.delete(pendingId);
+      record.__data.id = realId;
+      record.id = realId;
+      modelStore.set(realId, record);
+
+      // Update the response data with the real ID
+      if (response?.data) {
+        response.data.id = realId;
+      }
+
+      delete record.__data.__pendingMysqlId;
+    }
+  }
+
+  async _persistUpdate(modelName, context, response) {
+    const schemas = this.deps.introspectModels();
+    const schema = schemas[modelName];
+
+    if (!schema) return;
+
+    const record = context.record;
+    if (!record) return;
+
+    const id = record.id;
+    const oldState = context.oldState || {};
+    const currentData = record.__data;
+
+    // Build a diff of changed columns
+    const changedData = {};
+
+    for (const [col] of Object.entries(schema.columns)) {
+      if (currentData[col] !== oldState[col]) {
+        changedData[col] = currentData[col] ?? null;
+      }
+    }
+
+    // Check FK changes too
+    for (const fkCol of Object.keys(schema.foreignKeys)) {
+      const relName = fkCol.replace(/_id$/, '');
+      const currentFkValue = record.__relationships[relName]?.id ?? null;
+      const oldFkValue = oldState[relName] ?? null;
+
+      if (currentFkValue !== oldFkValue) {
+        changedData[fkCol] = currentFkValue;
+      }
+    }
+
+    if (Object.keys(changedData).length === 0) return;
+
+    const { sql, values } = this.deps.buildUpdate(schema.table, id, changedData);
+    await this.pool.execute(sql, values);
+  }
+
+  async _persistDelete(modelName, context) {
+    const schemas = this.deps.introspectModels();
+    const schema = schemas[modelName];
+
+    if (!schema) return;
+
+    const id = context.recordId;
+    if (id == null) return;
+
+    const { sql, values } = this.deps.buildDelete(schema.table, id);
+    await this.pool.execute(sql, values);
+  }
+
+  _recordToRow(record, schema) {
+    const row = {};
+    const data = record.__data;
+
+    // ID
+    if (data.id !== undefined) {
+      row.id = data.id;
+    }
+
+    // Attribute columns
+    for (const [col, mysqlType] of Object.entries(schema.columns)) {
+      if (data[col] !== undefined) {
+        // JSON columns: stringify non-string values for MySQL JSON storage
+        row[col] = mysqlType === 'JSON' && typeof data[col] !== 'string'
+          ? JSON.stringify(data[col])
+          : data[col];
+      }
+    }
+
+    // FK columns from relationships
+    for (const fkCol of Object.keys(schema.foreignKeys)) {
+      const relName = fkCol.replace(/_id$/, '');
+      const related = record.__relationships[relName];
+
+      if (related) {
+        row[fkCol] = related.id;
+      } else if (data[relName] !== undefined) {
+        // Raw FK value (e.g., from create payload)
+        row[fkCol] = data[relName];
+      }
+    }
+
+    return row;
+  }
+}

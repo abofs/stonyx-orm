@@ -90,14 +90,29 @@ export function updateRecord(record, rawData, userOptions={}) {
 
 /**
  * gets the next available id based on last record entry.
- * 
- * Note/TODO: Records going into a db should get their id from the db instead
- * Atm, i think the best way to do that would be as an id override that happens after the
- * record is created
+ *
+ * In MySQL mode with numeric IDs, assigns a temporary pending ID.
+ * MySQL's AUTO_INCREMENT provides the real ID after INSERT.
  */
 function assignRecordId(modelName, rawData) {
   if (rawData.id) return;
 
+  // In MySQL mode with numeric IDs, defer to MySQL auto-increment
+  if (Orm.instance?.mysqlDb && !isStringIdModel(modelName)) {
+    rawData.id = `__pending_${Date.now()}_${Math.random()}`;
+    rawData.__pendingMysqlId = true;
+    return;
+  }
+
   const modelStore = Array.from(store.get(modelName).values());
   rawData.id = modelStore.length ? modelStore.at(-1).id + 1 : 1;
+}
+
+function isStringIdModel(modelName) {
+  const { modelClass } = Orm.instance.getRecordClasses(modelName);
+  if (!modelClass) return false;
+
+  const model = new modelClass(modelName);
+
+  return model.id?.type === 'string';
 }

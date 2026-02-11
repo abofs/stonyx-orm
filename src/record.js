@@ -1,5 +1,7 @@
 import { store } from './index.js';
 import { getComputedProperties } from "./serializer.js";
+import { camelCaseToKebabCase } from '@stonyx/utils/string';
+import { pluralize } from './utils.js';
 export default class Record {
   __data = {};
   __relationships = {};
@@ -8,6 +10,7 @@ export default class Record {
   constructor(model, serializer) {
     this.__model = model;
     this.__serializer = serializer;
+
   }
 
   serialize(rawData, options={}) {
@@ -51,8 +54,11 @@ export default class Record {
   toJSON(options = {}) {
     if (!this.__serialized) throw new Error('Record must be serialized before being converted to JSON');
 
+    const { fields, baseUrl } = options;
     const { __data:data } = this;
-    const { fields } = options;
+    const modelName = this.__model.__name;
+    const pluralizedModelName = pluralize(modelName);
+    const recordId = data.id;
     const relationships = {};
     const attributes = {};
 
@@ -69,19 +75,40 @@ export default class Record {
 
     for (const [key, childRecord] of Object.entries(this.__relationships)) {
       if (fields && !fields.has(key)) continue;
-      relationships[key] = {
-        data: Array.isArray(childRecord)
+
+      const relationshipData = Array.isArray(childRecord)
         ? childRecord.map(r => ({ type: r.__model.__name, id: r.id }))
-        : childRecord ? { type: childRecord.__model.__name, id: childRecord.id } : null
+        : childRecord ? { type: childRecord.__model.__name, id: childRecord.id } : null;
+
+      // Dasherize the key for URL paths (e.g., accessLinks -> access-links)
+      const dasherizedKey = camelCaseToKebabCase(key);
+
+      relationships[dasherizedKey] = { data: relationshipData };
+
+      // Add links to relationship if baseUrl provided
+      if (baseUrl) {
+        relationships[dasherizedKey].links = {
+          self: `${baseUrl}/${pluralizedModelName}/${recordId}/relationships/${dasherizedKey}`,
+          related: `${baseUrl}/${pluralizedModelName}/${recordId}/${dasherizedKey}`
+        };
+      }
+    }
+
+    const result = {
+      attributes,
+      relationships,
+      id: recordId,
+      type: modelName,
+    };
+
+    // Add resource links if baseUrl provided
+    if (baseUrl) {
+      result.links = {
+        self: `${baseUrl}/${pluralizedModelName}/${recordId}`
       };
     }
 
-    return {
-      attributes,
-      relationships,
-      id: data.id,
-      type: this.__model.__name,
-    };
+    return result;
   }
 
   unload(options={}) {

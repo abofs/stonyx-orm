@@ -2,11 +2,11 @@
  * Sample access control that grants access to all models except for owner Angela
  */
 export default class GlobalAccess {
-  models = ['owner', 'animal', 'trait']; // * instead of an array will allow access to all models
+  models = ['owner', 'animal', 'trait', 'category', 'phone-number']; // * instead of an array will allow access to all models
   
   // Custom logic here
   access(request) {
-    const { url } = request; // destructure url from express request object
+    const { originalUrl: url } = request; // destructure originalUrl from express request object
 
     // Returning false explicitly denies access
     if (url.endsWith('/owners/angela')) return false;

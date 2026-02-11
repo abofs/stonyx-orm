@@ -1,6 +1,9 @@
 import { Request } from '@stonyx/rest-server';
-import { createRecord, store } from '@stonyx/orm';
-import { pluralize } from '@stonyx/utils/string';
+import Orm, { createRecord, updateRecord, store } from '@stonyx/orm';
+import { camelCaseToKebabCase } from '@stonyx/utils/string';
+import { pluralize } from './utils.js';
+import { getBeforeHooks, getAfterHooks } from './hooks.js';
+import config from 'stonyx/config';
 
 const methodAccessMap = {
   GET: 'read',
@@ -9,14 +12,61 @@ const methodAccessMap = {
   PATCH: 'update',
 };
 
+const WRITE_OPERATIONS = new Set(['create', 'update', 'delete']);
+
+// Helper to detect relationship type from function
+function getRelationshipInfo(property) {
+  if (typeof property !== 'function') return null;
+  const fnStr = property.toString();
+  if (fnStr.includes(`getRelationships('belongsTo',`)) {
+    return { type: 'belongsTo', isArray: false };
+  }
+  if (fnStr.includes(`getRelationships('hasMany',`)) {
+    return { type: 'hasMany', isArray: true };
+  }
+  return null;
+}
+
+// Helper to introspect model relationships
+function getModelRelationships(modelName) {
+  const { modelClass } = Orm.instance.getRecordClasses(modelName);
+  if (!modelClass) return {};
+
+  const model = new modelClass(modelName);
+  const relationships = {};
+
+  for (const [key, property] of Object.entries(model)) {
+    if (key.startsWith('__')) continue;
+    const info = getRelationshipInfo(property);
+    if (info) {
+      relationships[key] = info;
+    }
+  }
+
+  return relationships;
+}
+
+// Helper to build base URL from request
+function getBaseUrl(request) {
+  const protocol = request.protocol || 'http';
+  const host = request.get('host');
+  return `${protocol}://${host}`;
+}
+
 function getId({ id }) {
   if (isNaN(id)) return id;
 
   return parseInt(id);
 }
 
-function buildResponse(data, includeParam, recordOrRecords) {
+function buildResponse(data, includeParam, recordOrRecords, options = {}) {
+  const { links, baseUrl } = options;
   const response = { data };
+
+  // Add top-level links
+  if (links) {
+    response.links = links;
+  }
 
   if (!includeParam) return response;
 
@@ -25,7 +75,7 @@ function buildResponse(data, includeParam, recordOrRecords) {
 
   const includedRecords = collectIncludedRecords(recordOrRecords, includes);
   if (includedRecords.length > 0) {
-    response.included = includedRecords.map(record => record.toJSON());
+    response.included = includedRecords.map(record => record.toJSON({ baseUrl }));
   }
 
   return response;
@@ -163,80 +213,284 @@ export default class OrmRequest extends Request {
   constructor({ model, access }) {
     super(...arguments);
 
+    this.model = model;
     this.access = access;
     const pluralizedModel = pluralize(model);
 
-    this.handlers = {
-      get: {
-        [`/${pluralizedModel}`]: (request, { filter: accessFilter }) => {
-          const allRecords = Array.from(store.get(model).values());
+    const modelRelationships = getModelRelationships(model);
 
-          const queryFilters = parseFilters(request.query);
-          const queryFilterPredicate = createFilterPredicate(queryFilters);
-          const fieldsMap = parseFields(request.query);
-          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
+    // Define raw handlers first
+    const getCollectionHandler = (request, { filter: accessFilter }) => {
+      const allRecords = Array.from(store.get(model).values());
 
-          let recordsToReturn = allRecords;
-          if (accessFilter) recordsToReturn = recordsToReturn.filter(accessFilter);
-          if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate);
+      const queryFilters = parseFilters(request.query);
+      const queryFilterPredicate = createFilterPredicate(queryFilters);
+      const fieldsMap = parseFields(request.query);
+      const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-          const data = recordsToReturn.map(record => record.toJSON({ fields: modelFields }));
-          return buildResponse(data, request.query?.include, recordsToReturn);
-        },
+      let recordsToReturn = allRecords;
+      if (accessFilter) recordsToReturn = recordsToReturn.filter(accessFilter);
+      if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate);
 
-        [`/${pluralizedModel}/:id`]: (request) => {
-          const record = store.get(model, getId(request.params));
-          if (!record) return 404;
+      const baseUrl = getBaseUrl(request);
+      const data = recordsToReturn.map(record => record.toJSON({ fields: modelFields, baseUrl }));
 
-          const fieldsMap = parseFields(request.query);
-          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
+      return buildResponse(data, request.query?.include, recordsToReturn, {
+        links: { self: `${baseUrl}/${pluralizedModel}` },
+        baseUrl
+      });
+    };
 
-          return buildResponse(record.toJSON({ fields: modelFields }), request.query?.include, record);
-        }
-      },
+    const getSingleHandler = (request) => {
+      const record = store.get(model, getId(request.params));
+      if (!record) return 404;
 
-      patch: {
-        [`/${pluralizedModel}/:id`]: async ({ body, params }) => {
-          const record = store.get(model, getId(params));
-          const { attributes } = body?.data || {};
+      const fieldsMap = parseFields(request.query);
+      const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-          if (!attributes) return 400; // Bad request
+      const baseUrl = getBaseUrl(request);
+      return buildResponse(record.toJSON({ fields: modelFields, baseUrl }), request.query?.include, record, {
+        links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
+        baseUrl
+      });
+    };
 
-          // Apply updates 1 by 1 to utilize built-in transform logic, ignore id key
-          for (const [key, value] of Object.entries(attributes)) {
-            if (!record.hasOwnProperty(key)) continue;
-            if (key === 'id') continue;
+    const createHandler = ({ body, query }) => {
+      const { type, id, attributes, relationships: rels } = body?.data || {};
 
-            record[key] = value
-          };
+      if (!type) return 400; // Bad request
 
-          return { data: record.toJSON() };
-        }
-      },
+      const fieldsMap = parseFields(query);
+      const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-      post: {
-        [`/${pluralizedModel}`]: ({ body, query }) => {
-          const { type, attributes } = body?.data || {};
+      // Check for duplicate ID
+      if (id !== undefined && store.get(model, id)) return 409; // Conflict
 
-          if (!type) return 400; // Bad request
+      const { id: _ignoredId, ...sanitizedAttributes } = attributes || {};
 
-          const fieldsMap = parseFields(query);
-          const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
-          // Check for duplicate ID
-          if (attributes?.id !== undefined && store.get(model, attributes.id)) return 409; // Conflict
-
-          const record = createRecord(model, attributes, { serialize: false });
-
-          return { data: record.toJSON({ fields: modelFields }) };
-        }
-      },
-
-      delete: {
-        [`/${pluralizedModel}/:id`]: ({ params }) => {
-          store.remove(model, getId(params));
+      // Extract relationship IDs from JSON:API relationships object
+      if (rels) {
+        for (const [key, value] of Object.entries(rels)) {
+          const relData = value?.data;
+          if (relData && relData.id !== undefined) {
+            sanitizedAttributes[key] = relData.id;
+          }
         }
       }
+
+      const recordAttributes = id !== undefined ? { id, ...sanitizedAttributes } : sanitizedAttributes;
+      const record = createRecord(model, recordAttributes, { serialize: false });
+
+      return { data: record.toJSON({ fields: modelFields }) };
+    };
+
+    const updateHandler = async ({ body, params }) => {
+      const record = store.get(model, getId(params));
+      const { attributes, relationships: rels } = body?.data || {};
+
+      if (!attributes && !rels) return 400; // Bad request
+
+      // Apply attribute updates 1 by 1 to utilize built-in transform logic, ignore id key
+      if (attributes) {
+        for (const [key, value] of Object.entries(attributes)) {
+          if (!record.hasOwnProperty(key)) continue;
+          if (key === 'id') continue;
+
+          record[key] = value
+        };
+      }
+
+      // Apply relationship updates via updateRecord to properly resolve references
+      if (rels) {
+        const relUpdates = {};
+        for (const [key, value] of Object.entries(rels)) {
+          const relData = value?.data;
+          if (relData && relData.id !== undefined) {
+            relUpdates[key] = relData.id;
+          }
+        }
+        if (Object.keys(relUpdates).length > 0) {
+          updateRecord(record, relUpdates);
+        }
+      }
+
+      return { data: record.toJSON() };
+    };
+
+    const deleteHandler = ({ params }) => {
+      store.remove(model, getId(params));
+      return 204;
+    };
+
+    // Wrap handlers with hooks
+    this.handlers = {
+      get: {
+        '/': this._withHooks('list', getCollectionHandler),
+        '/:id': this._withHooks('get', getSingleHandler),
+        ...this._generateRelationshipRoutes(model, pluralizedModel, modelRelationships)
+      },
+      patch: {
+        '/:id': this._withHooks('update', updateHandler)
+      },
+      post: {
+        '/': this._withHooks('create', createHandler)
+      },
+      delete: {
+        '/:id': this._withHooks('delete', deleteHandler)
+      }
     }
+  }
+
+  // Wraps a handler with before/after hook execution
+  _withHooks(operation, handler) {
+    return async (request, state) => {
+      // Build context object for hooks
+      const context = {
+        model: this.model,
+        operation,
+        request,
+        params: request.params,
+        body: request.body,
+        query: request.query,
+        state,
+      };
+
+      // Capture old state for operations that modify data
+      if (operation === 'update' || operation === 'delete') {
+        const existingRecord = store.get(this.model, getId(request.params));
+        if (existingRecord) {
+          // Deep copy the record's data to preserve old state
+          context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
+        }
+        if (operation === 'delete') {
+          context.recordId = getId(request.params);
+        }
+      }
+
+      // Run before hooks sequentially (can halt by returning a value)
+      for (const hook of getBeforeHooks(operation, this.model)) {
+        const result = await hook(context);
+        if (result !== undefined) {
+          // Hook returned a value - halt operation and return result
+          return result;
+        }
+      }
+
+      // Execute main handler
+      const response = await handler(request, state);
+
+      // Persist to MySQL for write operations
+      if (Orm.instance.mysqlDb && WRITE_OPERATIONS.has(operation)) {
+        await Orm.instance.mysqlDb.persist(operation, this.model, context, response);
+      }
+
+      // Add response and relevant records to context
+      context.response = response;
+
+      if (operation === 'get' && response?.data && !Array.isArray(response.data)) {
+        context.record = store.get(this.model, getId(request.params));
+      } else if (operation === 'list' && response?.data) {
+        context.records = Array.from(store.get(this.model).values());
+      } else if (operation === 'create' && response?.data?.id) {
+        // For create, get the record from store using the ID from the response
+        const recordId = isNaN(response.data.id) ? response.data.id : parseInt(response.data.id);
+        context.record = store.get(this.model, recordId);
+      } else if (operation === 'update' && response?.data) {
+        context.record = store.get(this.model, getId(request.params));
+      } else if (operation === 'delete') {
+        // For delete, the record may no longer exist, but we have oldState
+        context.recordId = getId(request.params);
+      }
+
+      // Run after hooks sequentially
+      for (const hook of getAfterHooks(operation, this.model)) {
+        await hook(context);
+      }
+
+      // Auto-save DB after write operations when configured
+      if (config.orm.db.autosave === 'onUpdate' && WRITE_OPERATIONS.has(operation)) {
+        await Orm.db.save();
+      }
+
+      return response;
+    };
+  }
+
+  _generateRelationshipRoutes(model, pluralizedModel, modelRelationships) {
+    const routes = {};
+
+    for (const [relationshipName, info] of Object.entries(modelRelationships)) {
+      // Dasherize the relationship name for URL paths (e.g., accessLinks -> access-links)
+      const dasherizedName = camelCaseToKebabCase(relationshipName);
+
+      // Related resource route: GET /:id/{relationship}
+      routes[`/:id/${dasherizedName}`] = (request) => {
+        const record = store.get(model, getId(request.params));
+        if (!record) return 404;
+
+        const relatedData = record.__relationships[relationshipName];
+        const baseUrl = getBaseUrl(request);
+
+        let data;
+        if (info.isArray) {
+          // hasMany - return array
+          data = (relatedData || []).map(r => r.toJSON({ baseUrl }));
+        } else {
+          // belongsTo - return single or null
+          data = relatedData ? relatedData.toJSON({ baseUrl }) : null;
+        }
+
+        return {
+          links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}/${dasherizedName}` },
+          data
+        };
+      };
+
+      // Relationship linkage route: GET /:id/relationships/{relationship}
+      routes[`/:id/relationships/${dasherizedName}`] = (request) => {
+        const record = store.get(model, getId(request.params));
+        if (!record) return 404;
+
+        const relatedData = record.__relationships[relationshipName];
+        const baseUrl = getBaseUrl(request);
+
+        let data;
+        if (info.isArray) {
+          // hasMany - return array of linkage objects
+          data = (relatedData || []).map(r => ({ type: r.__model.__name, id: r.id }));
+        } else {
+          // belongsTo - return single linkage or null
+          data = relatedData ? { type: relatedData.__model.__name, id: relatedData.id } : null;
+        }
+
+        return {
+          links: {
+            self: `${baseUrl}/${pluralizedModel}/${request.params.id}/relationships/${dasherizedName}`,
+            related: `${baseUrl}/${pluralizedModel}/${request.params.id}/${dasherizedName}`
+          },
+          data
+        };
+      };
+    }
+
+    // Catch-all for invalid relationship names on related resource route
+    routes[`/:id/:relationship`] = (request) => {
+      const record = store.get(model, getId(request.params));
+      if (!record) return 404;
+
+      // If we reach here, relationship doesn't exist (valid ones were registered above)
+      return 404;
+    };
+
+    // Catch-all for invalid relationship names on relationship linkage route
+    routes[`/:id/relationships/:relationship`] = (request) => {
+      const record = store.get(model, getId(request.params));
+      if (!record) return 404;
+
+      return 404;
+    };
+
+    return routes;
   }
 
   auth(request, state) {
