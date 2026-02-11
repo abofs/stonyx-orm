@@ -4,6 +4,7 @@
 
 - [Usage Patterns](usage-patterns.md) — Model definitions, serializers, transforms, CRUD, DB schema, persistence, access control, REST API, and include parameters
 - [Middleware Hooks System](hooks.md) — Before/after hooks for CRUD operations, halting, context object, change detection, and testing
+- [Code Style Rules](code-style-rules.md) — Strict prettier/eslint rules to apply across all Stonyx projects
 
 ---
 
@@ -69,11 +70,11 @@ stonyx-orm/
 │   └── mysql/
 │       ├── mysql-db.js           # MySQL driver (CRUD persistence, record loading)
 │       ├── connection.js         # mysql2 connection pool
-│       ├── query-builder.js      # SQL builders (INSERT/UPDATE/DELETE/SELECT)
+│       ├── query-builder.js      # SQL builders (INSERT/UPDATE/DELETE/SELECT) with identifier validation
 │       ├── schema-introspector.js # Model-to-MySQL schema introspection
 │       ├── migration-generator.js # Schema diff and .sql migration generation
 │       ├── migration-runner.js   # Migration apply/rollback with transactions
-│       └── type-map.js           # ORM attr types -> MySQL column types
+│       └── type-map.js           # ORM attr types -> MySQL column types (supports custom transform mysqlType)
 ├── config/
 │   └── environment.js            # Default configuration
 ├── test/

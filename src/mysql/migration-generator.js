@@ -130,8 +130,8 @@ export function diffSnapshots(previous, current) {
   for (const name of Object.keys(current)) {
     if (!previous[name]) continue;
 
-    const prevCols = previous[name].columns || {};
-    const currCols = current[name].columns || {};
+    const { columns: prevCols = {} } = previous[name];
+    const { columns: currCols = {} } = current[name];
 
     // Added columns
     for (const [col, type] of Object.entries(currCols)) {

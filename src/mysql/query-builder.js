@@ -1,5 +1,19 @@
+const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+
+export function validateIdentifier(name, context = 'identifier') {
+  if (!name || typeof name !== 'string' || !SAFE_IDENTIFIER.test(name)) {
+    throw new Error(`Invalid SQL ${context}: "${name}". Identifiers must match ${SAFE_IDENTIFIER}`);
+  }
+
+  return name;
+}
+
 export function buildInsert(table, data) {
+  validateIdentifier(table, 'table name');
+
   const keys = Object.keys(data);
+  keys.forEach(k => validateIdentifier(k, 'column name'));
+
   const placeholders = keys.map(() => '?');
   const values = keys.map(k => data[k]);
 
@@ -9,7 +23,11 @@ export function buildInsert(table, data) {
 }
 
 export function buildUpdate(table, id, data) {
+  validateIdentifier(table, 'table name');
+
   const keys = Object.keys(data);
+  keys.forEach(k => validateIdentifier(k, 'column name'));
+
   const setClauses = keys.map(k => `\`${k}\` = ?`);
   const values = [...keys.map(k => data[k]), id];
 
@@ -19,6 +37,8 @@ export function buildUpdate(table, id, data) {
 }
 
 export function buildDelete(table, id) {
+  validateIdentifier(table, 'table name');
+
   return {
     sql: `DELETE FROM \`${table}\` WHERE \`id\` = ?`,
     values: [id],
@@ -26,11 +46,15 @@ export function buildDelete(table, id) {
 }
 
 export function buildSelect(table, conditions) {
+  validateIdentifier(table, 'table name');
+
   if (!conditions || Object.keys(conditions).length === 0) {
     return { sql: `SELECT * FROM \`${table}\``, values: [] };
   }
 
   const keys = Object.keys(conditions);
+  keys.forEach(k => validateIdentifier(k, 'column name'));
+
   const whereClauses = keys.map(k => `\`${k}\` = ?`);
   const values = keys.map(k => conditions[k]);
 

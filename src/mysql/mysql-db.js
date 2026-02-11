@@ -142,10 +142,17 @@ export default class MysqlDB {
   _rowToRawData(row, schema) {
     const rawData = { ...row };
 
-    // Convert boolean columns from MySQL TINYINT(1) 0/1 to false/true
     for (const [col, mysqlType] of Object.entries(schema.columns)) {
-      if (mysqlType === 'TINYINT(1)' && rawData[col] != null) {
+      if (rawData[col] == null) continue;
+
+      // Convert boolean columns from MySQL TINYINT(1) 0/1 to false/true
+      if (mysqlType === 'TINYINT(1)') {
         rawData[col] = !!rawData[col];
+      }
+
+      // Parse JSON columns back to JS values (custom transforms stored as JSON)
+      if (mysqlType === 'JSON' && typeof rawData[col] === 'string') {
+        try { rawData[col] = JSON.parse(rawData[col]); } catch { /* keep raw string */ }
       }
     }
 
@@ -286,9 +293,12 @@ export default class MysqlDB {
     }
 
     // Attribute columns
-    for (const col of Object.keys(schema.columns)) {
+    for (const [col, mysqlType] of Object.entries(schema.columns)) {
       if (data[col] !== undefined) {
-        row[col] = data[col];
+        // JSON columns: stringify non-string values for MySQL JSON storage
+        row[col] = mysqlType === 'JSON' && typeof data[col] !== 'string'
+          ? JSON.stringify(data[col])
+          : data[col];
       }
     }
 

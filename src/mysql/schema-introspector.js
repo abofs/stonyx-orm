@@ -29,6 +29,8 @@ export function introspectModels() {
     const relationships = { belongsTo: {}, hasMany: {} };
     let idType = 'number';
 
+    const transforms = Orm.instance.transforms;
+
     for (const [key, property] of Object.entries(model)) {
       if (key.startsWith('__')) continue;
 
@@ -42,7 +44,7 @@ export function introspectModels() {
         if (key === 'id') {
           idType = property.type;
         } else {
-          columns[key] = getMysqlType(property.type);
+          columns[key] = getMysqlType(property.type, transforms[property.type]);
         }
       }
     }
