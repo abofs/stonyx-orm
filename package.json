@@ -4,7 +4,7 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.2.1-beta.6",
+  "version": "0.2.1-beta.7",
   "description": "",
   "main": "src/main.js",
   "type": "module",
@@ -50,7 +50,7 @@
     }
   },
   "devDependencies": {
-    "@stonyx/rest-server": "0.2.1-beta.4",
+    "@stonyx/rest-server": "0.2.1-beta.5",
     "@stonyx/utils": "0.2.3-beta.3",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
