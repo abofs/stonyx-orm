@@ -12,8 +12,8 @@ importers:
         specifier: 0.2.1-beta.3
         version: 0.2.1-beta.3
       '@stonyx/events':
-        specifier: 0.1.1-beta.2
-        version: 0.1.1-beta.2
+        specifier: 0.1.1-beta.3
+        version: 0.1.1-beta.3
       mysql2:
         specifier: ^3.0.0
         version: 3.16.3
@@ -48,8 +48,8 @@ packages:
   '@stonyx/cron@0.2.1-beta.3':
     resolution: {integrity: sha512-k75hw+APMBFH7BQddULnBuREYe+EE2wlQETSlK6k5Mwtt9CM4KisZoAcHIdjoiEEV6EdJmz52SmezP7qbthxkw==}
 
-  '@stonyx/events@0.1.1-beta.2':
-    resolution: {integrity: sha512-IkUX4xvxcsl4V49+epEBB+m8TWS+23R7uWHQgoBM4vCTb90z3r8fXE/2Ig0KuAqT2or++so7V+O1Op0qi+zb0g==}
+  '@stonyx/events@0.1.1-beta.3':
+    resolution: {integrity: sha512-ZRSYt9LAynmkZ9Eemf+sAVMmOA/SZdIPzrZ4GJyoLZsoght2qWSevGhSyfBH2b9TQb1zGqVV49sybPC5167uQg==}
 
   '@stonyx/rest-server@0.2.1-beta.4':
     resolution: {integrity: sha512-mSm8+iPP62OBkZWHMk7WEe73CjBZOX51sRO0pY+4XNLgvz3OKrY3+MgH0q0YmAlP2cJXbMlFugORFYfgzfa5lQ==}
@@ -453,7 +453,7 @@ snapshots:
     dependencies:
       stonyx: 0.2.3-beta.2
 
-  '@stonyx/events@0.1.1-beta.2': {}
+  '@stonyx/events@0.1.1-beta.3': {}
 
   '@stonyx/rest-server@0.2.1-beta.4':
     dependencies:
