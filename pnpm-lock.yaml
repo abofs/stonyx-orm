@@ -9,24 +9,24 @@ importers:
   .:
     dependencies:
       '@stonyx/cron':
-        specifier: 0.2.1-beta.0
-        version: 0.2.1-beta.0
+        specifier: 0.2.1-beta.3
+        version: 0.2.1-beta.3
       '@stonyx/events':
-        specifier: 0.1.1-beta.1
-        version: 0.1.1-beta.1
+        specifier: 0.1.1-beta.2
+        version: 0.1.1-beta.2
       mysql2:
         specifier: ^3.0.0
         version: 3.16.3
       stonyx:
-        specifier: 0.2.3-beta.0
-        version: 0.2.3-beta.0
-    devDependencies:
-      '@stonyx/rest-server':
-        specifier: 0.2.1-beta.1
-        version: 0.2.1-beta.1
-      '@stonyx/utils':
         specifier: 0.2.3-beta.2
         version: 0.2.3-beta.2
+    devDependencies:
+      '@stonyx/rest-server':
+        specifier: 0.2.1-beta.4
+        version: 0.2.1-beta.4
+      '@stonyx/utils':
+        specifier: 0.2.3-beta.3
+        version: 0.2.3-beta.3
       qunit:
         specifier: ^2.24.1
         version: 2.24.1
@@ -45,17 +45,17 @@ packages:
   '@sinonjs/samsam@8.0.3':
     resolution: {integrity: sha512-hw6HbX+GyVZzmaYNh82Ecj1vdGZrqVIn/keDTg63IgAwiQPO+xCz99uG6Woqgb4tM0mUiFENKZ4cqd7IX94AXQ==}
 
-  '@stonyx/cron@0.2.1-beta.0':
-    resolution: {integrity: sha512-sf90QENd6rAPhW1+lFxC5hxVaPYCrFkZc/6FwU+mBmkTQeL1sk7oVX/46MjlHpPh+bIVRys1mcKkTVPsweALZQ==}
+  '@stonyx/cron@0.2.1-beta.3':
+    resolution: {integrity: sha512-k75hw+APMBFH7BQddULnBuREYe+EE2wlQETSlK6k5Mwtt9CM4KisZoAcHIdjoiEEV6EdJmz52SmezP7qbthxkw==}
 
-  '@stonyx/events@0.1.1-beta.1':
-    resolution: {integrity: sha512-6K4cPksZMhUZ0RfYTA9PIACkZ1JPbEaSwyt7X6XBgxFHxG9oC7mRqVxE1bF1U5hmL29loiE7hHgMwFLyJ/Uhbw==}
+  '@stonyx/events@0.1.1-beta.2':
+    resolution: {integrity: sha512-IkUX4xvxcsl4V49+epEBB+m8TWS+23R7uWHQgoBM4vCTb90z3r8fXE/2Ig0KuAqT2or++so7V+O1Op0qi+zb0g==}
 
-  '@stonyx/rest-server@0.2.1-beta.1':
-    resolution: {integrity: sha512-lbrL3s9XrZm/pDYRlD7w97fgjuacZmmgmErvbQw0xlvCAVMHx9FqVxurAVCeJEhIQzn7Phn2pWF1f3gRrfLuyw==}
+  '@stonyx/rest-server@0.2.1-beta.4':
+    resolution: {integrity: sha512-mSm8+iPP62OBkZWHMk7WEe73CjBZOX51sRO0pY+4XNLgvz3OKrY3+MgH0q0YmAlP2cJXbMlFugORFYfgzfa5lQ==}
 
-  '@stonyx/utils@0.2.3-beta.2':
-    resolution: {integrity: sha512-GsKNqYPtf2SpvcDTvWB+TBee7uzDeLWXjXDHwSQR/Y6wTMbjH6YtU4gaITB19P74vGe/4Xwpuf+3UTeM0/3PjQ==}
+  '@stonyx/utils@0.2.3-beta.3':
+    resolution: {integrity: sha512-CLmz/DPgNWU7IXJYQXzmAdph65iapp6mHnvKZQULrd6IdKPGb6KlVMVL29yuyXg0fOapkkoPV4Xf6PmksSE8bw==}
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -389,11 +389,9 @@ packages:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
 
-  stonyx@0.2.2:
-    resolution: {integrity: sha512-X37/2R2YklI+CX4wKHckPg2pFmOL1hk0CwOMvn7E00sE+8JjhmbHvAeTI+0t50kufBsXKREPX3FBHVUd4Yi4Fw==}
-
-  stonyx@0.2.3-beta.0:
-    resolution: {integrity: sha512-1S5BpvoVryCX75LqwuiiRv3Gdpe+uAtNHyWVnyu3VjaHi19fLCtQDMUKVxVOMcQTslwd1zkxMNKDc4SHKFRHIw==}
+  stonyx@0.2.3-beta.2:
+    resolution: {integrity: sha512-w2XmOMmqxbPqs6/ph+GlxHYMG3+BRo/FAnXA8EPBDy+ooh6i8SwjdjUcoqREMeV6zYUCrm63ztUjQ2TCKnW2vw==}
+    hasBin: true
 
   supports-color@7.2.0:
     resolution: {integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==}
@@ -451,21 +449,21 @@ snapshots:
       '@sinonjs/commons': 3.0.1
       type-detect: 4.1.0
 
-  '@stonyx/cron@0.2.1-beta.0':
+  '@stonyx/cron@0.2.1-beta.3':
     dependencies:
-      stonyx: 0.2.2
+      stonyx: 0.2.3-beta.2
 
-  '@stonyx/events@0.1.1-beta.1': {}
+  '@stonyx/events@0.1.1-beta.2': {}
 
-  '@stonyx/rest-server@0.2.1-beta.1':
+  '@stonyx/rest-server@0.2.1-beta.4':
     dependencies:
       cors: 2.8.6
       express: 5.2.1
-      stonyx: 0.2.2
+      stonyx: 0.2.3-beta.2
     transitivePeerDependencies:
       - supports-color
 
-  '@stonyx/utils@0.2.3-beta.2': {}
+  '@stonyx/utils@0.2.3-beta.3': {}
 
   accepts@2.0.0:
     dependencies:
@@ -834,11 +832,7 @@ snapshots:
 
   statuses@2.0.2: {}
 
-  stonyx@0.2.2:
-    dependencies:
-      node-chronicle: 0.2.0
-
-  stonyx@0.2.3-beta.0:
+  stonyx@0.2.3-beta.2:
     dependencies:
       node-chronicle: 0.2.0
 
