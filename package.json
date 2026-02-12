@@ -4,7 +4,7 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.2.1-beta.5",
+  "version": "0.2.1-beta.6",
   "description": "",
   "main": "src/main.js",
   "type": "module",
@@ -39,7 +39,7 @@
   "dependencies": {
     "stonyx": "0.2.3-beta.2",
     "@stonyx/events": "0.1.1-beta.3",
-    "@stonyx/cron": "0.2.1-beta.3"
+    "@stonyx/cron": "0.2.1-beta.4"
   },
   "peerDependencies": {
     "mysql2": "^3.0.0"

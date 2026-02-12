@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@stonyx/cron':
-        specifier: 0.2.1-beta.3
-        version: 0.2.1-beta.3
+        specifier: 0.2.1-beta.4
+        version: 0.2.1-beta.4
       '@stonyx/events':
         specifier: 0.1.1-beta.3
         version: 0.1.1-beta.3
@@ -45,8 +45,8 @@ packages:
   '@sinonjs/samsam@8.0.3':
     resolution: {integrity: sha512-hw6HbX+GyVZzmaYNh82Ecj1vdGZrqVIn/keDTg63IgAwiQPO+xCz99uG6Woqgb4tM0mUiFENKZ4cqd7IX94AXQ==}
 
-  '@stonyx/cron@0.2.1-beta.3':
-    resolution: {integrity: sha512-k75hw+APMBFH7BQddULnBuREYe+EE2wlQETSlK6k5Mwtt9CM4KisZoAcHIdjoiEEV6EdJmz52SmezP7qbthxkw==}
+  '@stonyx/cron@0.2.1-beta.4':
+    resolution: {integrity: sha512-aqdb1zBLy1MWZuIpolw+A9EUwDSVwTPYOVUDoGE4GInLFXontlvBHQPsO3qeWOUuorgJR5eqO9xBxPzFvpuFpg==}
 
   '@stonyx/events@0.1.1-beta.3':
     resolution: {integrity: sha512-ZRSYt9LAynmkZ9Eemf+sAVMmOA/SZdIPzrZ4GJyoLZsoght2qWSevGhSyfBH2b9TQb1zGqVV49sybPC5167uQg==}
@@ -449,7 +449,7 @@ snapshots:
       '@sinonjs/commons': 3.0.1
       type-detect: 4.1.0
 
-  '@stonyx/cron@0.2.1-beta.3':
+  '@stonyx/cron@0.2.1-beta.4':
     dependencies:
       stonyx: 0.2.3-beta.2
 
