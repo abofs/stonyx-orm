@@ -21,15 +21,6 @@ export default class Store {
   }
 
   /**
-   * Synchronous memory-only access (explicit name).
-   * Identical to get() — reads from the in-memory Map only.
-   * Use when you KNOW the record is in memory (memory: true models).
-   */
-  peek(key, id) {
-    return this.get(key, id);
-  }
-
-  /**
    * Async authoritative read. Always queries MySQL for memory: false models.
    * For memory: true models, returns from store (already loaded on boot).
    * @param {string} modelName - The model name

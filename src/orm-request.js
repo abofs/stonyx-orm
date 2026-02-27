@@ -388,16 +388,16 @@ export default class OrmRequest extends Request {
       context.response = response;
 
       if (operation === 'get' && response?.data && !Array.isArray(response.data)) {
-        context.record = store.peek(this.model, getId(request.params));
+        context.record = store.get(this.model, getId(request.params));
       } else if (operation === 'list' && response?.data) {
-        const modelStore = store.peek(this.model);
+        const modelStore = store.get(this.model);
         context.records = modelStore ? Array.from(modelStore.values()) : [];
       } else if (operation === 'create' && response?.data?.id) {
         // For create, get the record from store using the ID from the response
         const recordId = isNaN(response.data.id) ? response.data.id : parseInt(response.data.id);
-        context.record = store.peek(this.model, recordId);
+        context.record = store.get(this.model, recordId);
       } else if (operation === 'update' && response?.data) {
-        context.record = store.peek(this.model, getId(request.params));
+        context.record = store.get(this.model, getId(request.params));
       } else if (operation === 'delete') {
         // For delete, the record may no longer exist, but we have oldState
         context.recordId = getId(request.params);

@@ -8,7 +8,6 @@ function createStore() {
   Store.instance = null;
   const store = new Store();
 
-  // Set up a model store with some records
   const userStore = new Map();
   userStore.set(1, { id: 1, name: 'Alice', __data: { id: 1, name: 'Alice' } });
   userStore.set(2, { id: 2, name: 'Bob', __data: { id: 2, name: 'Bob' } });
@@ -18,42 +17,6 @@ function createStore() {
 
   return store;
 }
-
-module('[Unit] Store.peek', function(hooks) {
-  hooks.afterEach(function() {
-    Store.instance = null;
-    sinon.restore();
-  });
-
-  test('peek returns a record from in-memory store', function(assert) {
-    const store = createStore();
-
-    const record = store.peek('user', 1);
-    assert.strictEqual(record.name, 'Alice', 'returns correct record');
-  });
-
-  test('peek returns undefined for missing record', function(assert) {
-    const store = createStore();
-
-    const record = store.peek('user', 999);
-    assert.strictEqual(record, undefined, 'returns undefined for missing record');
-  });
-
-  test('peek returns the model Map when no ID given', function(assert) {
-    const store = createStore();
-
-    const userMap = store.peek('user');
-    assert.ok(userMap instanceof Map, 'returns a Map');
-    assert.strictEqual(userMap.size, 2, 'map has correct size');
-  });
-
-  test('peek is identical to get', function(assert) {
-    const store = createStore();
-
-    assert.strictEqual(store.peek('user', 1), store.get('user', 1), 'peek and get return same reference');
-    assert.strictEqual(store.peek('user'), store.get('user'), 'peek and get return same Map');
-  });
-});
 
 module('[Unit] Store.find', function(hooks) {
   hooks.afterEach(function() {
@@ -175,7 +138,7 @@ module('[Unit] Store.query', function(hooks) {
 
   test('query always hits MySQL when available', async function(assert) {
     const store = createStore();
-    store._memoryResolver = () => true; // even for memory:true models
+    store._memoryResolver = () => true;
 
     const mockRecords = [{ id: 1 }];
     store._mysqlDb = {
