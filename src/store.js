@@ -9,10 +9,116 @@ export default class Store {
     this.data = new Map();
   }
 
+  /**
+   * Synchronous memory-only access.
+   * Returns the record if it exists in the in-memory store, undefined otherwise.
+   * Does NOT query the database. Alias: peek()
+   */
   get(key, id) {
     if (!id) return this.data.get(key);
 
     return this.data.get(key)?.get(id);
+  }
+
+  /**
+   * Synchronous memory-only access (explicit name).
+   * Identical to get() — reads from the in-memory Map only.
+   * Use when you KNOW the record is in memory (memory: true models).
+   */
+  peek(key, id) {
+    return this.get(key, id);
+  }
+
+  /**
+   * Async authoritative read. Always queries MySQL for memory: false models.
+   * For memory: true models, returns from store (already loaded on boot).
+   * @param {string} modelName - The model name
+   * @param {string|number} id - The record ID
+   * @returns {Promise<Record|undefined>}
+   */
+  async find(modelName, id) {
+    // For memory: true models, the store is authoritative
+    if (this._isMemoryModel(modelName)) {
+      return this.get(modelName, id);
+    }
+
+    // For memory: false models, always query MySQL
+    if (this._mysqlDb) {
+      return this._mysqlDb.findRecord(modelName, id);
+    }
+
+    // Fallback to store (JSON mode or no MySQL)
+    return this.get(modelName, id);
+  }
+
+  /**
+   * Async read for all records of a model. Always queries MySQL for memory: false models.
+   * For memory: true models, returns from store.
+   * @param {string} modelName - The model name
+   * @param {Object} [conditions] - Optional WHERE conditions
+   * @returns {Promise<Record[]>}
+   */
+  async findAll(modelName, conditions) {
+    // For memory: true models without conditions, return from store
+    if (this._isMemoryModel(modelName) && !conditions) {
+      const modelStore = this.get(modelName);
+      return modelStore ? Array.from(modelStore.values()) : [];
+    }
+
+    // For memory: false models (or filtered queries), always query MySQL
+    if (this._mysqlDb) {
+      return this._mysqlDb.findAll(modelName, conditions);
+    }
+
+    // Fallback to store (JSON mode)
+    const modelStore = this.get(modelName);
+    return modelStore ? Array.from(modelStore.values()) : [];
+  }
+
+  /**
+   * Async query — always hits MySQL, never reads from memory cache.
+   * Use for complex queries, aggregations, or when you need guaranteed freshness.
+   * @param {string} modelName - The model name
+   * @param {Object} conditions - WHERE conditions
+   * @returns {Promise<Record[]>}
+   */
+  async query(modelName, conditions = {}) {
+    if (this._mysqlDb) {
+      return this._mysqlDb.findAll(modelName, conditions);
+    }
+
+    // Fallback: filter in-memory store
+    const modelStore = this.get(modelName);
+    if (!modelStore) return [];
+
+    const records = Array.from(modelStore.values());
+
+    if (Object.keys(conditions).length === 0) return records;
+
+    return records.filter(record =>
+      Object.entries(conditions).every(([key, value]) => record.__data[key] === value)
+    );
+  }
+
+  /**
+   * Set by Orm during init — resolves memory flag for a model name.
+   * @type {Function|null}
+   */
+  _memoryResolver = null;
+
+  /**
+   * Set by Orm during init — reference to the MysqlDB instance for on-demand queries.
+   * @type {MysqlDB|null}
+   */
+  _mysqlDb = null;
+
+  /**
+   * Check if a model is configured for in-memory storage.
+   * @private
+   */
+  _isMemoryModel(modelName) {
+    if (this._memoryResolver) return this._memoryResolver(modelName);
+    return true; // default to memory if resolver not set yet
   }
 
   set(key, value) {

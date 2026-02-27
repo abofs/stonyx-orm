@@ -27,3 +27,9 @@ export { store, relationships } from './main.js';
 export { Model, Serializer }; // base classes
 export { attr, belongsTo, hasMany, createRecord, updateRecord }; // helpers
 export { beforeHook, afterHook, clearHook, clearAllHooks } from './hooks.js'; // middleware hooks
+
+// Re-export store methods for convenience
+// store.peek(model, id)  — sync, memory-only (same as store.get)
+// store.find(model, id)  — async, MySQL for memory:false models
+// store.findAll(model)   — async, all records
+// store.query(model, conditions) — async, always hits MySQL
