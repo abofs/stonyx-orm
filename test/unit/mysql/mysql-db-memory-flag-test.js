@@ -290,3 +290,97 @@ module('[Unit] MysqlDB.findAll — Collection Query', function(hooks) {
     assert.deepEqual(records, [], 'returns empty array when table does not exist');
   });
 });
+
+module('[Unit] MysqlDB._evictIfNotMemory — Store Leak Prevention', function(hooks) {
+  hooks.beforeEach(function() {
+    MysqlDB.instance = null;
+  });
+
+  hooks.afterEach(function() {
+    MysqlDB.instance = null;
+    sinon.restore();
+  });
+
+  test('evicts record from store when memory resolver returns false', function(assert) {
+    const modelStore = new Map();
+    modelStore.set(42, { id: 42, name: 'test' });
+
+    const deps = createMockDeps({
+      store: {
+        get: sinon.stub().returns(modelStore),
+        _memoryResolver: (name) => name !== 'alert',
+      }
+    });
+
+    const db = new MysqlDB(deps);
+
+    db._evictIfNotMemory('alert', { id: 42 });
+
+    assert.notOk(modelStore.has(42), 'record removed from store');
+  });
+
+  test('does not evict record when memory resolver returns true', function(assert) {
+    const modelStore = new Map();
+    modelStore.set(1, { id: 1, name: 'session' });
+
+    const deps = createMockDeps({
+      store: {
+        get: sinon.stub().returns(modelStore),
+        _memoryResolver: () => true,
+      }
+    });
+
+    const db = new MysqlDB(deps);
+
+    db._evictIfNotMemory('session', { id: 1 });
+
+    assert.ok(modelStore.has(1), 'record stays in store');
+  });
+
+  test('does nothing when no memory resolver is set', function(assert) {
+    const modelStore = new Map();
+    modelStore.set(1, { id: 1 });
+
+    const deps = createMockDeps({
+      store: {
+        get: sinon.stub().returns(modelStore),
+        _memoryResolver: null,
+      }
+    });
+
+    const db = new MysqlDB(deps);
+
+    db._evictIfNotMemory('alert', { id: 1 });
+
+    assert.ok(modelStore.has(1), 'record untouched when no resolver');
+  });
+
+  test('findRecord does not leave memory:false records in store', async function(assert) {
+    const modelStore = new Map();
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'alert': { table: 'alerts', columns: { message: 'VARCHAR(255)' }, foreignKeys: {} }
+      }),
+      buildSelect: sinon.stub().returns({ sql: 'SELECT * FROM `alerts` WHERE `id` = ?', values: [1] }),
+      createRecord: sinon.stub().callsFake((name, data) => {
+        const record = { id: data.id, __data: data, __model: { __name: name } };
+        modelStore.set(data.id, record);
+        return record;
+      }),
+      store: {
+        get: sinon.stub().callsFake((name) => name === 'alert' ? modelStore : undefined),
+        _memoryResolver: (name) => name !== 'alert',
+      }
+    });
+
+    const db = new MysqlDB(deps);
+    db.pool = { execute: sinon.stub().resolves([[{ id: 1, message: 'test' }]]) };
+
+    const record = await db.findRecord('alert', 1);
+
+    assert.ok(record, 'record was returned');
+    assert.strictEqual(record.id, 1, 'correct record returned');
+    assert.notOk(modelStore.has(1), 'record was evicted from store after creation');
+  });
+});

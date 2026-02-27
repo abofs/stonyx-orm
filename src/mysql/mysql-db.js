@@ -120,8 +120,6 @@ export default class MysqlDB {
     const order = this.deps.getTopologicalOrder(schemas);
     const Orm = (await import('@stonyx/orm')).default;
 
-    const Orm = (await import('@stonyx/orm')).default;
-
     for (const modelName of order) {
       // Check the model's memory flag — skip non-memory models
       const { modelClass } = Orm.instance.getRecordClasses(modelName);
@@ -180,7 +178,13 @@ export default class MysqlDB {
       if (rows.length === 0) return undefined;
 
       const rawData = this._rowToRawData(rows[0], schema);
-      return this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false });
+      const record = this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false });
+
+      // Don't let memory:false records accumulate in the store
+      // The caller keeps the reference; the store doesn't retain it
+      this._evictIfNotMemory(modelName, record);
+
+      return record;
     } catch (error) {
       if (error.code === 'ER_NO_SUCH_TABLE') return undefined;
       throw error;
@@ -204,13 +208,36 @@ export default class MysqlDB {
     try {
       const [rows] = await this.pool.execute(sql, values);
 
-      return rows.map(row => {
+      const records = rows.map(row => {
         const rawData = this._rowToRawData(row, schema);
         return this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false });
       });
+
+      // Don't let memory:false records accumulate in the store
+      for (const record of records) {
+        this._evictIfNotMemory(modelName, record);
+      }
+
+      return records;
     } catch (error) {
       if (error.code === 'ER_NO_SUCH_TABLE') return [];
       throw error;
+    }
+  }
+
+  /**
+   * Remove a record from the in-memory store if its model has memory: false.
+   * The record object itself survives — the caller retains the reference.
+   * This prevents on-demand queries from leaking records into the store.
+   * @private
+   */
+  _evictIfNotMemory(modelName, record) {
+    const store = this.deps.store;
+
+    // Use the memory resolver if available (set by Orm.init)
+    if (store._memoryResolver && !store._memoryResolver(modelName)) {
+      const modelStore = store.get?.(modelName) ?? store.data?.get(modelName);
+      if (modelStore) modelStore.delete(record.id);
     }
   }
 

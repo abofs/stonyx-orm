@@ -388,10 +388,9 @@ export default class OrmRequest extends Request {
       context.response = response;
 
       if (operation === 'get' && response?.data && !Array.isArray(response.data)) {
-        context.record = store.get(this.model, getId(request.params));
+        context.record = await store.find(this.model, getId(request.params));
       } else if (operation === 'list' && response?.data) {
-        const modelStore = store.get(this.model);
-        context.records = modelStore ? Array.from(modelStore.values()) : [];
+        context.records = await store.findAll(this.model);
       } else if (operation === 'create' && response?.data?.id) {
         // For create, get the record from store using the ID from the response
         const recordId = isNaN(response.data.id) ? response.data.id : parseInt(response.data.id);

@@ -12,7 +12,7 @@ export default class Store {
   /**
    * Synchronous memory-only access.
    * Returns the record if it exists in the in-memory store, undefined otherwise.
-   * Does NOT query the database. Alias: peek()
+   * Does NOT query the database. For memory:false models, use find() instead.
    */
   get(key, id) {
     if (!id) return this.data.get(key);
@@ -61,9 +61,17 @@ export default class Store {
       return this._mysqlDb.findAll(modelName, conditions);
     }
 
-    // Fallback to store (JSON mode)
+    // Fallback to store (JSON mode) — apply conditions in-memory if provided
     const modelStore = this.get(modelName);
-    return modelStore ? Array.from(modelStore.values()) : [];
+    if (!modelStore) return [];
+
+    const records = Array.from(modelStore.values());
+
+    if (!conditions || Object.keys(conditions).length === 0) return records;
+
+    return records.filter(record =>
+      Object.entries(conditions).every(([key, value]) => record.__data[key] === value)
+    );
   }
 
   /**
