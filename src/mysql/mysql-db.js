@@ -33,7 +33,7 @@ export default class MysqlDB {
   async init() {
     this.pool = await this.deps.getPool(this.mysqlConfig);
     await this.deps.ensureMigrationsTable(this.pool, this.mysqlConfig.migrationsTable);
-    await this.loadAllRecords();
+    await this.loadMemoryRecords();
   }
 
   async startup() {
@@ -59,7 +59,7 @@ export default class MysqlDB {
         }
 
         // Reload records after applying migrations
-        await this.loadAllRecords();
+        await this.loadMemoryRecords();
       } else {
         this.deps.log.warn('Skipping pending migrations. Schema may be outdated.');
       }
@@ -80,7 +80,7 @@ export default class MysqlDB {
             const { up } = this.deps.parseMigrationFile(result.content);
             await this.deps.applyMigration(this.pool, result.filename, up, this.mysqlConfig.migrationsTable);
             this.deps.log.db(`Applied migration: ${result.filename}`);
-            await this.loadAllRecords();
+            await this.loadMemoryRecords();
           }
         } else {
           this.deps.log.warn('Skipping initial migration. Tables may not exist.');
@@ -111,11 +111,23 @@ export default class MysqlDB {
     // No-op: MySQL persists data immediately via persist()
   }
 
-  async loadAllRecords() {
+  /**
+   * Loads only models with memory: true into the in-memory store on startup.
+   * Models with memory: false are skipped — accessed on-demand via find()/findAll().
+   */
+  async loadMemoryRecords() {
     const schemas = this.deps.introspectModels();
     const order = this.deps.getTopologicalOrder(schemas);
+    const Orm = (await import('@stonyx/orm')).default;
 
     for (const modelName of order) {
+      // Check the model's memory flag — skip non-memory models
+      const { modelClass } = Orm.instance.getRecordClasses(modelName);
+      if (modelClass?.memory === false) {
+        this.deps.log.db(`Skipping memory load for '${modelName}' (memory: false)`);
+        continue;
+      }
+
       const schema = schemas[modelName];
       const { sql, values } = this.deps.buildSelect(schema.table);
 
@@ -136,7 +148,97 @@ export default class MysqlDB {
         throw error;
       }
     }
+  }
 
+  /**
+   * @deprecated Use loadMemoryRecords() instead. Kept for backward compatibility.
+   */
+  async loadAllRecords() {
+    return this.loadMemoryRecords();
+  }
+
+  /**
+   * Find a single record by ID from MySQL.
+   * Does NOT cache the result in the store for memory: false models.
+   * @param {string} modelName
+   * @param {string|number} id
+   * @returns {Promise<Record|undefined>}
+   */
+  async findRecord(modelName, id) {
+    const schemas = this.deps.introspectModels();
+    const schema = schemas[modelName];
+
+    if (!schema) return undefined;
+
+    const { sql, values } = this.deps.buildSelect(schema.table, { id });
+
+    try {
+      const [rows] = await this.pool.execute(sql, values);
+
+      if (rows.length === 0) return undefined;
+
+      const rawData = this._rowToRawData(rows[0], schema);
+      const record = this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false });
+
+      // Don't let memory:false records accumulate in the store
+      // The caller keeps the reference; the store doesn't retain it
+      this._evictIfNotMemory(modelName, record);
+
+      return record;
+    } catch (error) {
+      if (error.code === 'ER_NO_SUCH_TABLE') return undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * Find all records of a model from MySQL, with optional conditions.
+   * @param {string} modelName
+   * @param {Object} [conditions] - Optional WHERE conditions (key-value pairs)
+   * @returns {Promise<Record[]>}
+   */
+  async findAll(modelName, conditions) {
+    const schemas = this.deps.introspectModels();
+    const schema = schemas[modelName];
+
+    if (!schema) return [];
+
+    const { sql, values } = this.deps.buildSelect(schema.table, conditions);
+
+    try {
+      const [rows] = await this.pool.execute(sql, values);
+
+      const records = rows.map(row => {
+        const rawData = this._rowToRawData(row, schema);
+        return this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false });
+      });
+
+      // Don't let memory:false records accumulate in the store
+      for (const record of records) {
+        this._evictIfNotMemory(modelName, record);
+      }
+
+      return records;
+    } catch (error) {
+      if (error.code === 'ER_NO_SUCH_TABLE') return [];
+      throw error;
+    }
+  }
+
+  /**
+   * Remove a record from the in-memory store if its model has memory: false.
+   * The record object itself survives — the caller retains the reference.
+   * This prevents on-demand queries from leaking records into the store.
+   * @private
+   */
+  _evictIfNotMemory(modelName, record) {
+    const store = this.deps.store;
+
+    // Use the memory resolver if available (set by Orm.init)
+    if (store._memoryResolver && !store._memoryResolver(modelName)) {
+      const modelStore = store.get?.(modelName) ?? store.data?.get(modelName);
+      if (modelStore) modelStore.delete(record.id);
+    }
   }
 
   _rowToRawData(row, schema) {

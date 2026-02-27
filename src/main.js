@@ -106,6 +106,17 @@ export default class Orm {
       promises.push(setupRestServer(restServer.route, paths.access, restServer.metaRoute));
     }
 
+    // Wire up memory resolver so store.find() can check model memory flags
+    Orm.store._memoryResolver = (modelName) => {
+      const { modelClass } = this.getRecordClasses(modelName);
+      return modelClass?.memory !== false;
+    };
+
+    // Wire up MySQL reference for on-demand queries from store.find()/findAll()
+    if (this.mysqlDb) {
+      Orm.store._mysqlDb = this.mysqlDb;
+    }
+
     Orm.ready = await Promise.all(promises);
     Orm.initialized = true;
   }

@@ -220,8 +220,8 @@ export default class OrmRequest extends Request {
     const modelRelationships = getModelRelationships(model);
 
     // Define raw handlers first
-    const getCollectionHandler = (request, { filter: accessFilter }) => {
-      const allRecords = Array.from(store.get(model).values());
+    const getCollectionHandler = async (request, { filter: accessFilter }) => {
+      const allRecords = await store.findAll(model);
 
       const queryFilters = parseFilters(request.query);
       const queryFilterPredicate = createFilterPredicate(queryFilters);
@@ -241,8 +241,8 @@ export default class OrmRequest extends Request {
       });
     };
 
-    const getSingleHandler = (request) => {
-      const record = store.get(model, getId(request.params));
+    const getSingleHandler = async (request) => {
+      const record = await store.find(model, getId(request.params));
       if (!record) return 404;
 
       const fieldsMap = parseFields(request.query);
@@ -255,7 +255,7 @@ export default class OrmRequest extends Request {
       });
     };
 
-    const createHandler = ({ body, query }) => {
+    const createHandler = async ({ body, query }) => {
       const { type, id, attributes, relationships: rels } = body?.data || {};
 
       if (!type) return 400; // Bad request
@@ -264,7 +264,7 @@ export default class OrmRequest extends Request {
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
       // Check for duplicate ID
-      if (id !== undefined && store.get(model, id)) return 409; // Conflict
+      if (id !== undefined && await store.find(model, id)) return 409; // Conflict
 
       const { id: _ignoredId, ...sanitizedAttributes } = attributes || {};
 
@@ -285,7 +285,7 @@ export default class OrmRequest extends Request {
     };
 
     const updateHandler = async ({ body, params }) => {
-      const record = store.get(model, getId(params));
+      const record = await store.find(model, getId(params));
       const { attributes, relationships: rels } = body?.data || {};
 
       if (!attributes && !rels) return 400; // Bad request
@@ -357,7 +357,7 @@ export default class OrmRequest extends Request {
 
       // Capture old state for operations that modify data
       if (operation === 'update' || operation === 'delete') {
-        const existingRecord = store.get(this.model, getId(request.params));
+        const existingRecord = await store.find(this.model, getId(request.params));
         if (existingRecord) {
           // Deep copy the record's data to preserve old state
           context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
@@ -388,9 +388,9 @@ export default class OrmRequest extends Request {
       context.response = response;
 
       if (operation === 'get' && response?.data && !Array.isArray(response.data)) {
-        context.record = store.get(this.model, getId(request.params));
+        context.record = await store.find(this.model, getId(request.params));
       } else if (operation === 'list' && response?.data) {
-        context.records = Array.from(store.get(this.model).values());
+        context.records = await store.findAll(this.model);
       } else if (operation === 'create' && response?.data?.id) {
         // For create, get the record from store using the ID from the response
         const recordId = isNaN(response.data.id) ? response.data.id : parseInt(response.data.id);
@@ -424,8 +424,8 @@ export default class OrmRequest extends Request {
       const dasherizedName = camelCaseToKebabCase(relationshipName);
 
       // Related resource route: GET /:id/{relationship}
-      routes[`/:id/${dasherizedName}`] = (request) => {
-        const record = store.get(model, getId(request.params));
+      routes[`/:id/${dasherizedName}`] = async (request) => {
+        const record = await store.find(model, getId(request.params));
         if (!record) return 404;
 
         const relatedData = record.__relationships[relationshipName];
@@ -447,8 +447,8 @@ export default class OrmRequest extends Request {
       };
 
       // Relationship linkage route: GET /:id/relationships/{relationship}
-      routes[`/:id/relationships/${dasherizedName}`] = (request) => {
-        const record = store.get(model, getId(request.params));
+      routes[`/:id/relationships/${dasherizedName}`] = async (request) => {
+        const record = await store.find(model, getId(request.params));
         if (!record) return 404;
 
         const relatedData = record.__relationships[relationshipName];
@@ -474,8 +474,8 @@ export default class OrmRequest extends Request {
     }
 
     // Catch-all for invalid relationship names on related resource route
-    routes[`/:id/:relationship`] = (request) => {
-      const record = store.get(model, getId(request.params));
+    routes[`/:id/:relationship`] = async (request) => {
+      const record = await store.find(model, getId(request.params));
       if (!record) return 404;
 
       // If we reach here, relationship doesn't exist (valid ones were registered above)
@@ -483,8 +483,8 @@ export default class OrmRequest extends Request {
     };
 
     // Catch-all for invalid relationship names on relationship linkage route
-    routes[`/:id/relationships/:relationship`] = (request) => {
-      const record = store.get(model, getId(request.params));
+    routes[`/:id/relationships/:relationship`] = async (request) => {
+      const record = await store.find(model, getId(request.params));
       if (!record) return 404;
 
       return 404;

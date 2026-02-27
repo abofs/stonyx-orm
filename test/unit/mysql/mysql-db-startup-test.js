@@ -120,11 +120,11 @@ module('[Unit] MysqlDB Startup', function(hooks) {
     const db = new MysqlDB(deps);
     db.pool = { execute: sinon.stub().resolves([[]]) };
 
-    const loadSpy = sinon.spy(db, 'loadAllRecords');
+    const loadSpy = sinon.spy(db, 'loadMemoryRecords');
 
     await db.startup();
 
-    assert.ok(loadSpy.calledOnce, 'loadAllRecords was called after migrations applied');
+    assert.ok(loadSpy.calledOnce, 'loadMemoryRecords was called after migrations applied');
   });
 
   test('checks schema drift and warns when drift detected', async function(assert) {
