@@ -1,7 +1,7 @@
 import { store } from './index.js';
 import { getComputedProperties } from "./serializer.js";
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
-import { pluralize } from './utils.js';
+import { getPluralName } from './plural-registry.js';
 export default class Record {
   __data = {};
   __relationships = {};
@@ -57,7 +57,7 @@ export default class Record {
     const { fields, baseUrl } = options;
     const { __data:data } = this;
     const modelName = this.__model.__name;
-    const pluralizedModelName = pluralize(modelName);
+    const pluralizedModelName = getPluralName(modelName);
     const recordId = data.id;
     const relationships = {};
     const attributes = {};

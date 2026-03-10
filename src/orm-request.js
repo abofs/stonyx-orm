@@ -1,7 +1,7 @@
 import { Request } from '@stonyx/rest-server';
 import Orm, { createRecord, updateRecord, store } from '@stonyx/orm';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
-import { pluralize } from './utils.js';
+import { getPluralName } from './plural-registry.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
 import config from 'stonyx/config';
 
@@ -215,7 +215,7 @@ export default class OrmRequest extends Request {
 
     this.model = model;
     this.access = access;
-    const pluralizedModel = pluralize(model);
+    const pluralizedModel = getPluralName(model);
 
     const modelRelationships = getModelRelationships(model);
 

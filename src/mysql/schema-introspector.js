@@ -1,7 +1,7 @@
 import Orm from '@stonyx/orm';
 import { getMysqlType } from './type-map.js';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
-import { pluralize } from '../utils.js';
+import { getPluralName } from '../plural-registry.js';
 import { dbKey } from '../db.js';
 
 function getRelationshipInfo(property) {
@@ -53,13 +53,13 @@ export function introspectModels() {
     for (const relName of Object.keys(relationships.belongsTo)) {
       const fkColumn = `${relName}_id`;
       foreignKeys[fkColumn] = {
-        references: pluralize(relName),
+        references: getPluralName(relName),
         column: 'id',
       };
     }
 
     schemas[name] = {
-      table: pluralize(name),
+      table: getPluralName(name),
       idType,
       columns,
       foreignKeys,
