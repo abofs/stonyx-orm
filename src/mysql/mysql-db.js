@@ -6,7 +6,7 @@ import { buildInsert, buildUpdate, buildDelete, buildSelect } from './query-buil
 import { createRecord, store } from '@stonyx/orm';
 import { confirm } from '@stonyx/utils/prompt';
 import { readFile } from '@stonyx/utils/file';
-import { pluralize } from '../utils.js';
+import { getPluralName } from '../plural-registry.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
 import path from 'path';
@@ -17,7 +17,7 @@ const defaultDeps = {
   introspectModels, getTopologicalOrder, schemasToSnapshot,
   loadLatestSnapshot, detectSchemaDrift,
   buildInsert, buildUpdate, buildDelete, buildSelect,
-  createRecord, store, confirm, readFile, pluralize, config, log, path
+  createRecord, store, confirm, readFile, getPluralName, config, log, path
 };
 
 export default class MysqlDB {

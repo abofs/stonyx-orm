@@ -26,7 +26,7 @@ function createMockDeps(overrides = {}) {
     store: { get: sinon.stub() },
     confirm: sinon.stub().resolves(true),
     readFile: sinon.stub().resolves(''),
-    pluralize: sinon.stub(),
+    getPluralName: sinon.stub(),
     config: {
       rootPath: '/app',
       orm: {
