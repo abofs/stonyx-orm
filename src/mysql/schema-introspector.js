@@ -51,9 +51,10 @@ export function introspectModels() {
 
     // Build foreign keys from belongsTo relationships
     for (const relName of Object.keys(relationships.belongsTo)) {
+      const modelName = camelCaseToKebabCase(relName);
       const fkColumn = `${relName}_id`;
       foreignKeys[fkColumn] = {
-        references: getPluralName(relName),
+        references: getPluralName(modelName),
         column: 'id',
       };
     }
@@ -130,7 +131,7 @@ export function getTopologicalOrder(schemas) {
 
     // Visit dependencies (belongsTo targets) first
     for (const relName of Object.keys(schema.relationships.belongsTo)) {
-      visit(relName);
+      visit(camelCaseToKebabCase(relName));
     }
 
     order.push(name);
