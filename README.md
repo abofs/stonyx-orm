@@ -109,6 +109,22 @@ export default class OwnerModel extends Model {
 }
 ```
 
+### Overriding Plural Names
+
+By default, model names are auto-pluralized for REST routes, JSON:API URLs, and DB table names (e.g., `animal` → `animals`). When auto-pluralization produces the wrong result, override it with `static pluralName`:
+
+```js
+import { Model, attr } from '@stonyx/orm';
+
+export default class PersonModel extends Model {
+  static pluralName = 'people';
+
+  name = attr('string');
+}
+```
+
+The override is picked up automatically during ORM initialization. All routes, JSON:API type references, and MySQL table names will use the overridden value.
+
 ## Serializers
 
 Based on the following sample payload structure which represents a poorly structure third-party data source:
