@@ -22,8 +22,8 @@ importers:
         version: 0.2.3-beta.4
     devDependencies:
       '@stonyx/rest-server':
-        specifier: 0.2.1-beta.11
-        version: 0.2.1-beta.11
+        specifier: 0.2.1-beta.12
+        version: 0.2.1-beta.12
       '@stonyx/utils':
         specifier: 0.2.3-beta.4
         version: 0.2.3-beta.4
@@ -51,8 +51,8 @@ packages:
   '@stonyx/events@0.1.1-beta.5':
     resolution: {integrity: sha512-qWUTeWG/jyOc3k0qd8y7xzRyZn76hqQdyjaNC6P6Nj2aKLjjXriT4pxfOYnGhQdXLiepaNbSxWEQvNV9v0KWgw==}
 
-  '@stonyx/rest-server@0.2.1-beta.11':
-    resolution: {integrity: sha512-mg/jbfjZ1bQ96L0rGAyQFg0sDzWdJgPWF5oFuivu4apeaJZZ5U08n+vpdsvXIkJRhOGQQfleMIEyv9HLwU6pjA==}
+  '@stonyx/rest-server@0.2.1-beta.12':
+    resolution: {integrity: sha512-Bup0UVMTcjz8MmADcapuPTFh8fcsY3xiKW7G+u3WWgQVqtDLp7it7+PCHE53cIwO1PGqTWJhw+X2jY1G9ApMTg==}
 
   '@stonyx/utils@0.2.3-beta.4':
     resolution: {integrity: sha512-3w2nTh9UqHSnhCKWP92ynupOYLuECkQKB2Xlex8x4UTJb9hgCMtcn+D0XGHX85AjgsW9VaL0p9cTE5LurXi/fA==}
@@ -455,7 +455,7 @@ snapshots:
 
   '@stonyx/events@0.1.1-beta.5': {}
 
-  '@stonyx/rest-server@0.2.1-beta.11':
+  '@stonyx/rest-server@0.2.1-beta.12':
     dependencies:
       cors: 2.8.6
       express: 5.2.1
