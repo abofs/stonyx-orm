@@ -26,7 +26,7 @@ function createMockDeps(overrides = {}) {
     store: { get: sinon.stub() },
     confirm: sinon.stub().resolves(true),
     readFile: sinon.stub().resolves('-- UP\nCREATE TABLE t (id INT);\n-- DOWN\nDROP TABLE t;'),
-    pluralize: sinon.stub(),
+    getPluralName: sinon.stub(),
     config: {
       rootPath: '/app',
       orm: {

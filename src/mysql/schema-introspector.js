@@ -1,7 +1,7 @@
 import Orm from '@stonyx/orm';
 import { getMysqlType } from './type-map.js';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
-import { pluralize } from '../utils.js';
+import { getPluralName } from '../plural-registry.js';
 import { dbKey } from '../db.js';
 
 function getRelationshipInfo(property) {
@@ -51,15 +51,16 @@ export function introspectModels() {
 
     // Build foreign keys from belongsTo relationships
     for (const relName of Object.keys(relationships.belongsTo)) {
+      const modelName = camelCaseToKebabCase(relName);
       const fkColumn = `${relName}_id`;
       foreignKeys[fkColumn] = {
-        references: pluralize(relName),
+        references: getPluralName(modelName),
         column: 'id',
       };
     }
 
     schemas[name] = {
-      table: pluralize(name),
+      table: getPluralName(name),
       idType,
       columns,
       foreignKeys,
@@ -130,7 +131,7 @@ export function getTopologicalOrder(schemas) {
 
     // Visit dependencies (belongsTo targets) first
     for (const relName of Object.keys(schema.relationships.belongsTo)) {
-      visit(relName);
+      visit(camelCaseToKebabCase(relName));
     }
 
     order.push(name);

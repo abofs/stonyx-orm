@@ -65,6 +65,7 @@ stonyx-orm/
 │   ├── migrate.js                # JSON DB mode migration (file <-> directory)
 │   ├── commands.js               # CLI commands (db:migrate-*, etc.)
 │   ├── utils.js                  # Pluralize wrapper for dasherized names
+│   ├── plural-registry.js        # Plural name registry (populated at init, supports Model.pluralName overrides)
 │   ├── exports/
 │   │   └── db.js                 # Convenience re-export of DB instance
 │   └── mysql/
@@ -150,6 +151,7 @@ The ORM supports two storage modes, configured via `db.mode`:
 - Models: `{PascalCase}Model` (e.g., `AnimalModel`)
 - Serializers: `{PascalCase}Serializer` (e.g., `AnimalSerializer`)
 - Transforms: Original filename (e.g., `animal.js`)
+- Plural names: Auto-pluralized by default (e.g., `animal` → `animals`). Override with `static pluralName` on the model class (e.g., `static pluralName = 'people'`). All call sites use `getPluralName()` from the plural registry, **not** `pluralize()` directly.
 
 ---
 

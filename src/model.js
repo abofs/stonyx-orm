@@ -10,6 +10,7 @@ export default class Model {
    * Override in subclass: static memory = false;
    */
   static memory = true;
+  static pluralName = undefined;
 
   id = attr('number');
 

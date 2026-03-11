@@ -31,6 +31,23 @@ export default class AnimalModel extends Model {
 - Use `hasMany(modelName)` for one-to-many
 - Getters work as computed properties
 - Relationships auto-establish bidirectionally
+- Override auto-pluralization with `static pluralName` (see [Overriding Plural Names](#overriding-plural-names))
+
+### Overriding Plural Names
+
+By default, model names are auto-pluralized (e.g., `animal` → `animals`) for REST routes, JSON:API URLs, and DB table names. When auto-pluralization produces the wrong result, override it with `static pluralName`:
+
+```javascript
+import { Model, attr } from '@stonyx/orm';
+
+export default class PersonModel extends Model {
+  static pluralName = 'people';
+
+  name = attr('string');
+}
+```
+
+The override is picked up automatically during ORM initialization — no additional registration is needed. All internal call sites (REST routes, JSON:API type references, MySQL table names, foreign key references) use the overridden value.
 
 ## 2. Serializers (Data Transformation)
 

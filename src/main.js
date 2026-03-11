@@ -19,6 +19,7 @@ import config from 'stonyx/config';
 import log from 'stonyx/log';
 import { forEachFileImport } from '@stonyx/utils/file';
 import { kebabCaseToPascalCase, pluralize } from '@stonyx/utils/string';
+import { registerPluralName } from './plural-registry.js';
 import setupRestServer from './setup-rest-server.js';
 import baseTransforms from './transforms.js';
 import Store from './store.js';
@@ -66,7 +67,10 @@ export default class Orm {
         // Transforms keep their original name, everything else gets converted to PascalCase with the type suffix
         const alias = type === 'Transform' ? name : `${kebabCaseToPascalCase(name)}${type}`;
 
-        if (type === 'Model') Orm.store.set(name, new Map());
+        if (type === 'Model') {
+          Orm.store.set(name, new Map());
+          registerPluralName(name, exported);
+        }
 
         return this[pluralize(lowerCaseType)][alias] = exported;
       }, { ignoreAccessFailure: true, rawName: true, recursive: true, recursiveNaming: true });
