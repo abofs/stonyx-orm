@@ -1,4 +1,4 @@
-import { introspectModels, buildTableDDL, schemasToSnapshot, getTopologicalOrder } from './schema-introspector.js';
+import { introspectModels, introspectViews, buildTableDDL, buildViewDDL, schemasToSnapshot, viewSchemasToSnapshot, getTopologicalOrder } from './schema-introspector.js';
 import { readFile, createFile, createDirectory, fileExists } from '@stonyx/utils/file';
 import path from 'path';
 import config from 'stonyx/config';
@@ -16,9 +16,18 @@ export async function generateMigration(description = 'migration') {
   const previousSnapshot = await loadLatestSnapshot(migrationsPath);
   const diff = diffSnapshots(previousSnapshot, currentSnapshot);
 
+  // Don't return early — check view changes too before deciding
   if (!diff.hasChanges) {
-    log.db('No schema changes detected.');
-    return null;
+    // Check if there are view changes before returning null
+    const viewSchemasPrelim = introspectViews();
+    const currentViewSnapshotPrelim = viewSchemasToSnapshot(viewSchemasPrelim);
+    const previousViewSnapshotPrelim = extractViewsFromSnapshot(previousSnapshot);
+    const viewDiffPrelim = diffViewSnapshots(previousViewSnapshotPrelim, currentViewSnapshotPrelim);
+
+    if (!viewDiffPrelim.hasChanges) {
+      log.db('No schema changes detected.');
+      return null;
+    }
   }
 
   const upStatements = [];
@@ -85,17 +94,71 @@ export async function generateMigration(description = 'migration') {
     downStatements.push(`ALTER TABLE \`${table}\` ADD FOREIGN KEY (\`${column}\`) REFERENCES \`${references.references}\`(\`${references.column}\`) ON DELETE SET NULL;`);
   }
 
+  // View migrations — views are created AFTER tables (dependency order)
+  const viewSchemas = introspectViews();
+  const currentViewSnapshot = viewSchemasToSnapshot(viewSchemas);
+  const previousViewSnapshot = extractViewsFromSnapshot(previousSnapshot);
+  const viewDiff = diffViewSnapshots(previousViewSnapshot, currentViewSnapshot);
+
+  if (viewDiff.hasChanges) {
+    upStatements.push('');
+    upStatements.push('-- Views');
+    downStatements.push('');
+    downStatements.push('-- Views');
+
+    // Added views
+    for (const name of viewDiff.addedViews) {
+      try {
+        const ddl = buildViewDDL(name, viewSchemas[name], schemas);
+        upStatements.push(ddl + ';');
+        downStatements.unshift(`DROP VIEW IF EXISTS \`${viewSchemas[name].viewName}\`;`);
+      } catch (error) {
+        upStatements.push(`-- WARNING: Could not generate DDL for view '${name}': ${error.message}`);
+      }
+    }
+
+    // Removed views
+    for (const name of viewDiff.removedViews) {
+      upStatements.push(`-- WARNING: View '${name}' was removed. Uncomment to drop view:`);
+      upStatements.push(`-- DROP VIEW IF EXISTS \`${previousViewSnapshot[name].viewName}\`;`);
+      downStatements.push(`-- Recreate view for removed view '${name}' manually if needed`);
+    }
+
+    // Changed views (source or aggregates changed)
+    for (const name of viewDiff.changedViews) {
+      try {
+        const ddl = buildViewDDL(name, viewSchemas[name], schemas);
+        upStatements.push(ddl + ';');
+      } catch (error) {
+        upStatements.push(`-- WARNING: Could not generate DDL for changed view '${name}': ${error.message}`);
+      }
+    }
+  }
+
+  const combinedHasChanges = diff.hasChanges || viewDiff.hasChanges;
+
+  if (!combinedHasChanges) {
+    log.db('No schema changes detected.');
+    return null;
+  }
+
+  // Merge view snapshot into the main snapshot
+  const combinedSnapshot = { ...currentSnapshot };
+  for (const [name, viewSnap] of Object.entries(currentViewSnapshot)) {
+    combinedSnapshot[name] = viewSnap;
+  }
+
   const sanitizedDescription = description.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
   const timestamp = Math.floor(Date.now() / 1000);
   const filename = `${timestamp}_${sanitizedDescription}.sql`;
   const content = `-- UP\n${upStatements.join('\n')}\n\n-- DOWN\n${downStatements.join('\n')}\n`;
 
   await createFile(path.join(migrationsPath, filename), content);
-  await createFile(path.join(migrationsPath, '.snapshot.json'), JSON.stringify(currentSnapshot, null, 2));
+  await createFile(path.join(migrationsPath, '.snapshot.json'), JSON.stringify(combinedSnapshot, null, 2));
 
   log.db(`Migration generated: ${filename}`);
 
-  return { filename, content, snapshot: currentSnapshot };
+  return { filename, content, snapshot: combinedSnapshot };
 }
 
 export async function loadLatestSnapshot(migrationsPath) {
@@ -185,4 +248,39 @@ export function diffSnapshots(previous, current) {
 export function detectSchemaDrift(schemas, snapshot) {
   const current = schemasToSnapshot(schemas);
   return diffSnapshots(snapshot, current);
+}
+
+export function extractViewsFromSnapshot(snapshot) {
+  const views = {};
+  for (const [name, entry] of Object.entries(snapshot)) {
+    if (entry.isView) views[name] = entry;
+  }
+  return views;
+}
+
+export function diffViewSnapshots(previous, current) {
+  const addedViews = [];
+  const removedViews = [];
+  const changedViews = [];
+
+  for (const name of Object.keys(current)) {
+    if (!previous[name]) {
+      addedViews.push(name);
+    } else if (
+      current[name].viewQuery !== previous[name].viewQuery ||
+      current[name].source !== previous[name].source
+    ) {
+      changedViews.push(name);
+    }
+  }
+
+  for (const name of Object.keys(previous)) {
+    if (!current[name]) {
+      removedViews.push(name);
+    }
+  }
+
+  const hasChanges = addedViews.length > 0 || removedViews.length > 0 || changedViews.length > 0;
+
+  return { hasChanges, addedViews, removedViews, changedViews };
 }

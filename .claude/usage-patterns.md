@@ -232,3 +232,69 @@ GET /scenes/e001-s001?include=slides.dialogue.character
 - `traverseIncludePath()` - Recursively traverses relationship paths
 - `collectIncludedRecords()` - Orchestrates traversal and deduplication
 - All implemented in [src/orm-request.js](src/orm-request.js)
+
+## 10. Views (Read-Only Computed Data)
+
+Views are read-only projections that compute derived data from existing models. They work in both JSON mode (in-memory) and MySQL mode (auto-generated SQL VIEWs). See the full guide at [views.md](views.md).
+
+### Defining a View
+
+```javascript
+// views/owner-stats.js
+import { View, attr, belongsTo, count, avg } from '@stonyx/orm';
+
+export default class OwnerStatsView extends View {
+  static source = 'owner';  // Required: model whose records produce view records
+
+  animalCount = count('pets');     // COUNT of hasMany relationship
+  averageAge = avg('pets', 'age'); // AVG of a field on related records
+  owner = belongsTo('owner');      // Link back to source record
+}
+```
+
+### Aggregate Helpers
+
+| Helper | Example | JS Behavior | MySQL |
+|--------|---------|-------------|-------|
+| `count(rel)` | `count('pets')` | `records.length` | `COUNT(table.id)` |
+| `avg(rel, field)` | `avg('pets', 'age')` | Average of values | `AVG(table.field)` |
+| `sum(rel, field)` | `sum('pets', 'age')` | Sum of values | `SUM(table.field)` |
+| `min(rel, field)` | `min('pets', 'age')` | Minimum value | `MIN(table.field)` |
+| `max(rel, field)` | `max('pets', 'age')` | Maximum value | `MAX(table.field)` |
+
+### Resolve Map (Escape Hatch)
+
+For fields that can't be expressed as aggregates:
+
+```javascript
+export default class OwnerStatsView extends View {
+  static source = 'owner';
+  static resolve = {
+    gender: 'gender',              // String path from source data
+    score: (owner) => owner.__data.age * 10,  // Function
+  };
+
+  gender = attr('string');  // Must also define as attr()
+  score = attr('number');
+  animalCount = count('pets');
+}
+```
+
+### Querying Views
+
+```javascript
+const stats = await store.findAll('owner-stats');
+const stat = await store.find('owner-stats', ownerId);
+```
+
+### Read-Only Enforcement
+
+```javascript
+createRecord('owner-stats', data);   // Throws: Cannot create records for read-only view
+updateRecord(viewRecord, data);       // Throws: Cannot update records for read-only view
+store.remove('owner-stats', id);      // Throws: Cannot remove records from read-only view
+```
+
+### REST API
+
+Only GET endpoints are mounted for views — no POST, PATCH, or DELETE.

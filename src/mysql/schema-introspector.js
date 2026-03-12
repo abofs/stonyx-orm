@@ -3,6 +3,7 @@ import { getMysqlType } from './type-map.js';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from '../plural-registry.js';
 import { dbKey } from '../db.js';
+import { AggregateProperty } from '../aggregates.js';
 
 function getRelationshipInfo(property) {
   if (typeof property !== 'function') return null;
@@ -142,6 +143,145 @@ export function getTopologicalOrder(schemas) {
   }
 
   return order;
+}
+
+export function introspectViews() {
+  const orm = Orm.instance;
+  if (!orm.views) return {};
+
+  const schemas = {};
+
+  for (const [viewKey, viewClass] of Object.entries(orm.views)) {
+    const name = camelCaseToKebabCase(viewKey.slice(0, -4)); // Remove 'View' suffix
+
+    const source = viewClass.source;
+    if (!source) continue;
+
+    const model = new viewClass(name);
+    const columns = {};
+    const foreignKeys = {};
+    const aggregates = {};
+    const relationships = { belongsTo: {}, hasMany: {} };
+
+    for (const [key, property] of Object.entries(model)) {
+      if (key.startsWith('__')) continue;
+      if (key === 'id') continue;
+
+      if (property instanceof AggregateProperty) {
+        aggregates[key] = property;
+        continue;
+      }
+
+      const relType = getRelationshipInfo(property);
+
+      if (relType === 'belongsTo') {
+        relationships.belongsTo[key] = true;
+        const modelName = camelCaseToKebabCase(key);
+        const fkColumn = `${key}_id`;
+        foreignKeys[fkColumn] = {
+          references: getPluralName(modelName),
+          column: 'id',
+        };
+      } else if (relType === 'hasMany') {
+        relationships.hasMany[key] = true;
+      } else if (property?.constructor?.name === 'ModelProperty') {
+        const transforms = Orm.instance.transforms;
+        columns[key] = getMysqlType(property.type, transforms[property.type]);
+      }
+    }
+
+    schemas[name] = {
+      viewName: getPluralName(name),
+      source,
+      columns,
+      foreignKeys,
+      aggregates,
+      relationships,
+      isView: true,
+      memory: viewClass.memory !== false ? false : false, // Views default to memory:false
+    };
+  }
+
+  return schemas;
+}
+
+export function buildViewDDL(name, viewSchema, modelSchemas = {}) {
+  if (!viewSchema.source) {
+    throw new Error(`View '${name}' must define a source model`);
+  }
+
+  const sourceModelName = viewSchema.source;
+  const sourceSchema = modelSchemas[sourceModelName];
+  const sourceTable = sourceSchema
+    ? sourceSchema.table
+    : getPluralName(sourceModelName);
+
+  const selectColumns = [];
+  const joins = [];
+  const hasAggregates = Object.keys(viewSchema.aggregates || {}).length > 0;
+
+  // Source table primary key
+  selectColumns.push(`\`${sourceTable}\`.\`id\` AS \`id\``);
+
+  // Aggregate columns
+  for (const [key, aggProp] of Object.entries(viewSchema.aggregates || {})) {
+    const relName = aggProp.relationship;
+    const relModelName = camelCaseToKebabCase(relName);
+    const relTable = getPluralName(relModelName);
+
+    if (aggProp.aggregateType === 'count') {
+      selectColumns.push(`${aggProp.mysqlFunction}(\`${relTable}\`.\`id\`) AS \`${key}\``);
+    } else {
+      const field = aggProp.field;
+      selectColumns.push(`${aggProp.mysqlFunction}(\`${relTable}\`.\`${field}\`) AS \`${key}\``);
+    }
+
+    // Add LEFT JOIN for the relationship if not already added
+    const joinKey = `${relTable}`;
+    if (!joins.find(j => j.table === joinKey)) {
+      // Determine the FK column: the related table has a belongsTo back to the source
+      const fkColumn = `${sourceModelName}_id`;
+      joins.push({
+        table: relTable,
+        condition: `\`${relTable}\`.\`${fkColumn}\` = \`${sourceTable}\`.\`id\``
+      });
+    }
+  }
+
+  // Regular columns (from resolve map string paths or direct attr fields)
+  for (const [key, mysqlType] of Object.entries(viewSchema.columns || {})) {
+    selectColumns.push(`\`${sourceTable}\`.\`${key}\` AS \`${key}\``);
+  }
+
+  // Build JOIN clauses
+  const joinClauses = joins.map(j =>
+    `LEFT JOIN \`${j.table}\` ON ${j.condition}`
+  ).join('\n  ');
+
+  // Build GROUP BY
+  const groupBy = hasAggregates ? `\nGROUP BY \`${sourceTable}\`.\`id\`` : '';
+
+  const viewName = viewSchema.viewName;
+  const sql = `CREATE OR REPLACE VIEW \`${viewName}\` AS\nSELECT\n  ${selectColumns.join(',\n  ')}\nFROM \`${sourceTable}\`${joinClauses ? '\n  ' + joinClauses : ''}${groupBy}`;
+
+  return sql;
+}
+
+export function viewSchemasToSnapshot(viewSchemas) {
+  const snapshot = {};
+
+  for (const [name, schema] of Object.entries(viewSchemas)) {
+    snapshot[name] = {
+      viewName: schema.viewName,
+      source: schema.source,
+      columns: { ...schema.columns },
+      foreignKeys: { ...schema.foreignKeys },
+      isView: true,
+      viewQuery: buildViewDDL(name, schema),
+    };
+  }
+
+  return snapshot;
 }
 
 export function schemasToSnapshot(schemas) {
