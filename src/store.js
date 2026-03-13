@@ -1,5 +1,6 @@
-import { relationships } from '@stonyx/orm';
+import Orm, { relationships } from '@stonyx/orm';
 import { TYPES } from './relationships.js';
+import ViewResolver from './view-resolver.js';
 
 export default class Store {
   constructor() {
@@ -28,6 +29,12 @@ export default class Store {
    * @returns {Promise<Record|undefined>}
    */
   async find(modelName, id) {
+    // For views in non-MySQL mode, use view resolver
+    if (Orm.instance?.isView?.(modelName) && !this._mysqlDb) {
+      const resolver = new ViewResolver(modelName);
+      return resolver.resolveOne(id);
+    }
+
     // For memory: true models, the store is authoritative
     if (this._isMemoryModel(modelName)) {
       return this.get(modelName, id);
@@ -50,6 +57,18 @@ export default class Store {
    * @returns {Promise<Record[]>}
    */
   async findAll(modelName, conditions) {
+    // For views in non-MySQL mode, use view resolver
+    if (Orm.instance?.isView?.(modelName) && !this._mysqlDb) {
+      const resolver = new ViewResolver(modelName);
+      const records = await resolver.resolveAll();
+
+      if (!conditions || Object.keys(conditions).length === 0) return records;
+
+      return records.filter(record =>
+        Object.entries(conditions).every(([key, value]) => record.__data[key] === value)
+      );
+    }
+
     // For memory: true models without conditions, return from store
     if (this._isMemoryModel(modelName) && !conditions) {
       const modelStore = this.get(modelName);
@@ -125,6 +144,11 @@ export default class Store {
   }
 
   remove(key, id) {
+    // Guard: read-only views cannot have records removed
+    if (Orm.instance?.isView?.(key)) {
+      throw new Error(`Cannot remove records from read-only view '${key}'`);
+    }
+
     if (id) return this.unloadRecord(key, id);
 
     this.unloadAllRecords(key);

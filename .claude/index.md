@@ -3,6 +3,7 @@
 ## Detailed Guides
 
 - [Usage Patterns](usage-patterns.md) — Model definitions, serializers, transforms, CRUD, DB schema, persistence, access control, REST API, and include parameters
+- [Views](views.md) — Read-only computed views with aggregate helpers, in-memory resolver, and MySQL VIEW auto-generation
 - [Middleware Hooks System](hooks.md) — Before/after hooks for CRUD operations, halting, context object, change detection, and testing
 - [Code Style Rules](code-style-rules.md) — Strict prettier/eslint rules to apply across all Stonyx projects
 
@@ -21,6 +22,7 @@
 5. **REST API Generation**: Auto-generated RESTful endpoints with access control
 6. **Data Transformation**: Custom type conversion and formatting
 7. **Middleware Hooks**: Before/after hooks for all CRUD operations with halting capability
+8. **Views**: Read-only computed projections over model data with aggregate helpers (count, avg, sum, min, max)
 
 ---
 
@@ -38,6 +40,9 @@
 8. **Include Logic** (inline in [src/orm-request.js](src/orm-request.js)) - Parses include query params, traverses relationships, collects and deduplicates included records
 9. **Hooks** ([src/hooks.js](src/hooks.js)) - Middleware-based hook registry for CRUD lifecycle
 10. **MySQL Driver** ([src/mysql/mysql-db.js](src/mysql/mysql-db.js)) - MySQL persistence, migrations, schema introspection. Loads records in topological order. `_rowToRawData()` converts TINYINT(1) → boolean, remaps FK columns, strips timestamps.
+11. **View** ([src/view.js](src/view.js)) - Read-only base class for computed views (does NOT extend Model)
+12. **Aggregates** ([src/aggregates.js](src/aggregates.js)) - AggregateProperty class + helper functions (count, avg, sum, min, max)
+13. **ViewResolver** ([src/view-resolver.js](src/view-resolver.js)) - In-memory view resolver (iterates source model, computes aggregates + resolve map)
 
 ### Project Structure
 
@@ -66,6 +71,9 @@ stonyx-orm/
 │   ├── commands.js               # CLI commands (db:migrate-*, etc.)
 │   ├── utils.js                  # Pluralize wrapper for dasherized names
 │   ├── plural-registry.js        # Plural name registry (populated at init, supports Model.pluralName overrides)
+│   ├── view.js                   # View base class (read-only, source, resolve, memory)
+│   ├── aggregates.js             # AggregateProperty + count/avg/sum/min/max helpers
+│   ├── view-resolver.js          # In-memory view resolver
 │   ├── exports/
 │   │   └── db.js                 # Convenience re-export of DB instance
 │   └── mysql/
@@ -86,6 +94,7 @@ stonyx-orm/
 │       ├── serializers/          # Example serializers
 │       ├── transforms/           # Custom transforms
 │       ├── access/               # Access control
+│       ├── views/                # Example views
 │       ├── db-schema.js          # DB schema
 │       └── payload.js            # Test data
 └── package.json
@@ -103,7 +112,8 @@ config.orm = {
     model: './models',
     serializer: './serializers',
     transform: './transforms',
-    access: './access'
+    access: './access',
+    view: './views'
   },
   db: {
     autosave: 'false',
@@ -229,9 +239,10 @@ The ORM supports two storage modes, configured via `db.mode`:
 **Import the ORM:**
 ```javascript
 import {
-  Orm, Model, Serializer, attr, hasMany, belongsTo,
+  Orm, Model, View, Serializer, attr, hasMany, belongsTo,
   createRecord, updateRecord, store,
-  beforeHook, afterHook, clearHook, clearAllHooks
+  beforeHook, afterHook, clearHook, clearAllHooks,
+  count, avg, sum, min, max
 } from '@stonyx/orm';
 ```
 

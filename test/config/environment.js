@@ -6,7 +6,8 @@ export default {
       access: './test/sample/access',
       model: './test/sample/models',
       serializer: './test/sample/serializers',
-      transform: './test/sample/transforms'
+      transform: './test/sample/transforms',
+      view: './test/sample/views'
     },
     db: {
       file: './test/sample/db.json',

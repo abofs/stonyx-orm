@@ -37,6 +37,7 @@ export default class Orm {
   
   models = {};
   serializers = {};
+  views = {};
   transforms = { ...baseTransforms };
   warnings = new Set();
 
@@ -79,14 +80,28 @@ export default class Orm {
     // Wait for imports before db & rest server setup
     await Promise.all(promises);
 
+    // Discover views from paths.view (separate from model/serializer/transform)
+    if (paths.view) {
+      await forEachFileImport(paths.view, (exported, { name }) => {
+        const alias = `${kebabCaseToPascalCase(name)}View`;
+        Orm.store.set(name, new Map());
+        registerPluralName(name, exported);
+        this.views[alias] = exported;
+      }, { ignoreAccessFailure: true, rawName: true, recursive: true, recursiveNaming: true });
+    }
+
     // Setup event names for hooks after models are loaded
     const eventNames = [];
     const operations = ['list', 'get', 'create', 'update', 'delete'];
+    const viewOperations = ['list', 'get'];
     const timings = ['before', 'after'];
 
     for (const modelName of Orm.store.data.keys()) {
+      const isView = this.isView(modelName);
+      const ops = isView ? viewOperations : operations;
+
       for (const timing of timings) {
-        for (const operation of operations) {
+        for (const operation of ops) {
           eventNames.push(`${timing}:${operation}:${modelName}`);
         }
       }
@@ -141,11 +156,25 @@ export default class Orm {
 
   getRecordClasses(modelName) {
     const modelClassPrefix = kebabCaseToPascalCase(modelName);
-  
+
+    // Check views first, then models
+    const viewClass = this.views[`${modelClassPrefix}View`];
+    if (viewClass) {
+      return {
+        modelClass: viewClass,
+        serializerClass: this.serializers[`${modelClassPrefix}Serializer`] || Serializer
+      };
+    }
+
     return {
       modelClass: this.models[`${modelClassPrefix}Model`],
       serializerClass: this.serializers[`${modelClassPrefix}Serializer`] || Serializer
     };
+  }
+
+  isView(modelName) {
+    const modelClassPrefix = kebabCaseToPascalCase(modelName);
+    return !!this.views[`${modelClassPrefix}View`];
   }
 
   // Queue warnings to avoid the same error from being logged in the same iteration

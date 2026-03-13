@@ -14,6 +14,11 @@ export function createRecord(modelName, rawData={}, userOptions={}) {
 
   if (!initialized && !options.isDbRecord) throw new Error('ORM is not ready');
 
+  // Guard: read-only views cannot have records created directly
+  if (orm?.isView?.(modelName) && !options.isDbRecord) {
+    throw new Error(`Cannot create records for read-only view '${modelName}'`);
+  }
+
   const modelStore = store.get(modelName);
   const globalRelationships = relationships.get('global');
   const pendingRelationships = relationships.get('pending');
@@ -82,6 +87,12 @@ export function createRecord(modelName, rawData={}, userOptions={}) {
 
 export function updateRecord(record, rawData, userOptions={}) {
   if (!rawData) throw new Error('rawData must be passed in to updateRecord call');
+
+  // Guard: read-only views cannot be updated
+  const modelName = record?.__model?.__name;
+  if (modelName && Orm.instance?.isView?.(modelName)) {
+    throw new Error(`Cannot update records for read-only view '${modelName}'`);
+  }
 
   const options = { ...defaultOptions, ...userOptions, update:true };
 
