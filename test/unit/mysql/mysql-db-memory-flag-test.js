@@ -56,7 +56,7 @@ function mockOrmModule(memoryModels = {}) {
     default: {
       instance: {
         getRecordClasses(modelName) {
-          const memory = memoryModels[modelName] !== undefined ? memoryModels[modelName] : true;
+          const memory = memoryModels[modelName] !== undefined ? memoryModels[modelName] : false;
           return { modelClass: { memory } };
         }
       }
