@@ -65,7 +65,7 @@ export function introspectModels() {
       columns,
       foreignKeys,
       relationships,
-      memory: modelClass.memory !== false, // default true for backward compat
+      memory: modelClass.memory === true,
     };
   }
 

@@ -117,7 +117,7 @@ export default class Store {
    */
   _isMemoryModel(modelName) {
     if (this._memoryResolver) return this._memoryResolver(modelName);
-    return true; // default to memory if resolver not set yet
+    return false; // default to non-memory if resolver not set yet
   }
 
   set(key, value) {
