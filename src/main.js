@@ -128,7 +128,7 @@ export default class Orm {
     // Wire up memory resolver so store.find() can check model memory flags
     Orm.store._memoryResolver = (modelName) => {
       const { modelClass } = this.getRecordClasses(modelName);
-      return modelClass?.memory !== false;
+      return modelClass?.memory === true;
     };
 
     // Wire up MySQL reference for on-demand queries from store.find()/findAll()
