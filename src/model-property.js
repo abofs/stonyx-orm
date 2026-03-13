@@ -22,8 +22,8 @@ export default class ModelProperty {
       return this._value = newValue;
     }
 
-    if (newValue === undefined || newValue === null) return;
+    if (newValue === undefined) return;
 
-    this._value = Orm.instance.transforms[this.type](newValue);
+    this._value = newValue === null ? null : Orm.instance.transforms[this.type](newValue);
   }
 }
