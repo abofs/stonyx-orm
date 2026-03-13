@@ -39,6 +39,16 @@ export default class ViewResolver {
       }
     }
 
+    const groupByField = viewClass.groupBy;
+
+    if (groupByField) {
+      return this._resolveGroupBy(sourceRecords, groupByField, aggregateFields, regularFields, resolveMap, viewClass);
+    }
+
+    return this._resolvePerRecord(sourceRecords, aggregateFields, regularFields, resolveMap, viewClass);
+  }
+
+  _resolvePerRecord(sourceRecords, aggregateFields, regularFields, resolveMap, viewClass) {
     const results = [];
 
     for (const sourceRecord of sourceRecords) {
@@ -78,6 +88,76 @@ export default class ViewResolver {
         if (typeof value === 'function' && key !== 'id') {
           // This is a relationship handler — pass the source record id
           rawData[key] = sourceRecord.id;
+        }
+      }
+
+      // Clear existing record from store to allow re-resolution
+      const viewStore = store.get(this.viewName);
+      if (viewStore?.has(rawData.id)) {
+        viewStore.delete(rawData.id);
+      }
+
+      const record = createRecord(this.viewName, rawData, { isDbRecord: true });
+      results.push(record);
+    }
+
+    return results;
+  }
+
+  _resolveGroupBy(sourceRecords, groupByField, aggregateFields, regularFields, resolveMap, viewClass) {
+    // Group source records by the groupBy field value
+    const groups = new Map();
+    for (const record of sourceRecords) {
+      const key = record.__data?.[groupByField] ?? record[groupByField];
+      if (!groups.has(key)) {
+        groups.set(key, []);
+      }
+      groups.get(key).push(record);
+    }
+
+    const results = [];
+
+    for (const [groupKey, groupRecords] of groups) {
+      const rawData = { id: groupKey };
+
+      // Compute aggregate fields
+      for (const [key, aggProp] of Object.entries(aggregateFields)) {
+        if (aggProp.relationship === undefined) {
+          // Field-level aggregate — compute over group records directly
+          rawData[key] = aggProp.compute(groupRecords);
+        } else {
+          // Relationship aggregate — flatten related records across all group members
+          const allRelated = [];
+          for (const record of groupRecords) {
+            const relatedRecords = record.__relationships?.[aggProp.relationship]
+              || record[aggProp.relationship];
+            if (Array.isArray(relatedRecords)) {
+              allRelated.push(...relatedRecords);
+            }
+          }
+          rawData[key] = aggProp.compute(allRelated);
+        }
+      }
+
+      // Apply resolve map entries — functions receive the group array
+      for (const [key, resolver] of Object.entries(resolveMap)) {
+        if (typeof resolver === 'function') {
+          rawData[key] = resolver(groupRecords);
+        } else if (typeof resolver === 'string') {
+          // String path — take value from first record in group
+          const first = groupRecords[0];
+          rawData[key] = get(first.__data || first, resolver)
+            ?? get(first, resolver);
+        }
+      }
+
+      // Map regular attr fields from first record if not already set
+      for (const key of Object.keys(regularFields)) {
+        if (rawData[key] !== undefined) continue;
+        const first = groupRecords[0];
+        const sourceValue = first.__data?.[key] ?? first[key];
+        if (sourceValue !== undefined) {
+          rawData[key] = sourceValue;
         }
       }
 

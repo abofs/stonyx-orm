@@ -193,6 +193,7 @@ export function introspectViews() {
     schemas[name] = {
       viewName: getPluralName(name),
       source,
+      groupBy: viewClass.groupBy || undefined,
       columns,
       foreignKeys,
       aggregates,
@@ -219,32 +220,46 @@ export function buildViewDDL(name, viewSchema, modelSchemas = {}) {
   const selectColumns = [];
   const joins = [];
   const hasAggregates = Object.keys(viewSchema.aggregates || {}).length > 0;
+  const groupByField = viewSchema.groupBy;
 
-  // Source table primary key
-  selectColumns.push(`\`${sourceTable}\`.\`id\` AS \`id\``);
+  // ID column: groupBy field or source table PK
+  if (groupByField) {
+    selectColumns.push(`\`${sourceTable}\`.\`${groupByField}\` AS \`id\``);
+  } else {
+    selectColumns.push(`\`${sourceTable}\`.\`id\` AS \`id\``);
+  }
 
   // Aggregate columns
   for (const [key, aggProp] of Object.entries(viewSchema.aggregates || {})) {
-    const relName = aggProp.relationship;
-    const relModelName = camelCaseToKebabCase(relName);
-    const relTable = getPluralName(relModelName);
-
-    if (aggProp.aggregateType === 'count') {
-      selectColumns.push(`${aggProp.mysqlFunction}(\`${relTable}\`.\`id\`) AS \`${key}\``);
+    if (aggProp.relationship === undefined) {
+      // Field-level aggregate (groupBy views)
+      if (aggProp.aggregateType === 'count') {
+        selectColumns.push(`COUNT(*) AS \`${key}\``);
+      } else {
+        selectColumns.push(`${aggProp.mysqlFunction}(\`${sourceTable}\`.\`${aggProp.field}\`) AS \`${key}\``);
+      }
     } else {
-      const field = aggProp.field;
-      selectColumns.push(`${aggProp.mysqlFunction}(\`${relTable}\`.\`${field}\`) AS \`${key}\``);
-    }
+      // Relationship aggregate
+      const relName = aggProp.relationship;
+      const relModelName = camelCaseToKebabCase(relName);
+      const relTable = getPluralName(relModelName);
 
-    // Add LEFT JOIN for the relationship if not already added
-    const joinKey = `${relTable}`;
-    if (!joins.find(j => j.table === joinKey)) {
-      // Determine the FK column: the related table has a belongsTo back to the source
-      const fkColumn = `${sourceModelName}_id`;
-      joins.push({
-        table: relTable,
-        condition: `\`${relTable}\`.\`${fkColumn}\` = \`${sourceTable}\`.\`id\``
-      });
+      if (aggProp.aggregateType === 'count') {
+        selectColumns.push(`${aggProp.mysqlFunction}(\`${relTable}\`.\`id\`) AS \`${key}\``);
+      } else {
+        const field = aggProp.field;
+        selectColumns.push(`${aggProp.mysqlFunction}(\`${relTable}\`.\`${field}\`) AS \`${key}\``);
+      }
+
+      // Add LEFT JOIN for the relationship if not already added
+      const joinKey = `${relTable}`;
+      if (!joins.find(j => j.table === joinKey)) {
+        const fkColumn = `${sourceModelName}_id`;
+        joins.push({
+          table: relTable,
+          condition: `\`${relTable}\`.\`${fkColumn}\` = \`${sourceTable}\`.\`id\``
+        });
+      }
     }
   }
 
@@ -259,7 +274,12 @@ export function buildViewDDL(name, viewSchema, modelSchemas = {}) {
   ).join('\n  ');
 
   // Build GROUP BY
-  const groupBy = hasAggregates ? `\nGROUP BY \`${sourceTable}\`.\`id\`` : '';
+  let groupBy = '';
+  if (groupByField) {
+    groupBy = `\nGROUP BY \`${sourceTable}\`.\`${groupByField}\``;
+  } else if (hasAggregates) {
+    groupBy = `\nGROUP BY \`${sourceTable}\`.\`id\``;
+  }
 
   const viewName = viewSchema.viewName;
   const sql = `CREATE OR REPLACE VIEW \`${viewName}\` AS\nSELECT\n  ${selectColumns.join(',\n  ')}\nFROM \`${sourceTable}\`${joinClauses ? '\n  ' + joinClauses : ''}${groupBy}`;
@@ -274,6 +294,7 @@ export function viewSchemasToSnapshot(viewSchemas) {
     snapshot[name] = {
       viewName: schema.viewName,
       source: schema.source,
+      ...(schema.groupBy ? { groupBy: schema.groupBy } : {}),
       columns: { ...schema.columns },
       foreignKeys: { ...schema.foreignKeys },
       isView: true,

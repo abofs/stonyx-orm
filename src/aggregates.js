@@ -64,18 +64,30 @@ export function count(relationship) {
   return new AggregateProperty('count', relationship);
 }
 
-export function avg(relationship, field) {
-  return new AggregateProperty('avg', relationship, field);
+export function avg(relationshipOrField, field) {
+  if (field !== undefined) {
+    return new AggregateProperty('avg', relationshipOrField, field);
+  }
+  return new AggregateProperty('avg', undefined, relationshipOrField);
 }
 
-export function sum(relationship, field) {
-  return new AggregateProperty('sum', relationship, field);
+export function sum(relationshipOrField, field) {
+  if (field !== undefined) {
+    return new AggregateProperty('sum', relationshipOrField, field);
+  }
+  return new AggregateProperty('sum', undefined, relationshipOrField);
 }
 
-export function min(relationship, field) {
-  return new AggregateProperty('min', relationship, field);
+export function min(relationshipOrField, field) {
+  if (field !== undefined) {
+    return new AggregateProperty('min', relationshipOrField, field);
+  }
+  return new AggregateProperty('min', undefined, relationshipOrField);
 }
 
-export function max(relationship, field) {
-  return new AggregateProperty('max', relationship, field);
+export function max(relationshipOrField, field) {
+  if (field !== undefined) {
+    return new AggregateProperty('max', relationshipOrField, field);
+  }
+  return new AggregateProperty('max', undefined, relationshipOrField);
 }

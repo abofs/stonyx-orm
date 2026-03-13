@@ -37,6 +37,7 @@ export default class OwnerStatsView extends View {
 | Property | Default | Description |
 |----------|---------|-------------|
 | `source` | `undefined` | **(Required)** The model name whose records produce view records |
+| `groupBy` | `undefined` | Field name to group source records by (one view record per unique value) |
 | `resolve` | `undefined` | Optional escape-hatch map for custom derivations |
 | `memory` | `false` | `false` = computed on demand; `true` = cached on startup |
 | `readOnly` | `true` | **Enforced** — cannot be overridden to `false` |
@@ -89,6 +90,76 @@ export default class OwnerStatsView extends View {
 ```
 
 **Important:** Each resolve map entry needs a corresponding `attr()` field definition on the view.
+
+## GroupBy Views
+
+GroupBy views produce one view record per unique value of a field on the source model, with aggregates computed within each group.
+
+### Defining a GroupBy View
+
+```javascript
+import { View, attr, count, avg, sum } from '@stonyx/orm';
+
+export default class AnimalCountBySizeView extends View {
+  static source = 'animal';
+  static groupBy = 'size';    // Group animals by their size field
+
+  id = attr('string');         // The group key becomes the id
+  animalCount = count();       // Count records in each group
+  averageAge = avg('age');     // Average of 'age' field within each group
+}
+```
+
+### Aggregate Helpers in GroupBy Views
+
+In groupBy views, aggregate helpers operate on the group's records rather than on relationships:
+
+| Helper | GroupBy Behavior | MySQL Translation |
+|--------|-----------------|-------------------|
+| `count()` | Number of records in the group | `COUNT(*)` |
+| `sum('field')` | Sum of field across group records | `SUM(source.field)` |
+| `avg('field')` | Average of field across group records | `AVG(source.field)` |
+| `min('field')` | Minimum field value in the group | `MIN(source.field)` |
+| `max('field')` | Maximum field value in the group | `MAX(source.field)` |
+
+Relationship aggregates (e.g., `count('traits')`) also work — they flatten related records across all group members and aggregate the combined set.
+
+### Resolve Map in GroupBy Views
+
+The resolve map behaves differently in groupBy views:
+- **Function resolvers** receive the **array of group records** (not a single record)
+- **String path resolvers** take the value from the **first record** in the group
+
+```javascript
+export default class LeagueStatsView extends View {
+  static source = 'game-stats';
+  static groupBy = 'competition';
+
+  static resolve = {
+    totalGoals: (groupRecords) => {
+      return groupRecords.reduce((sum, r) => {
+        const fs = r.__data.finalScore;
+        return fs ? sum + fs[0] + fs[1] : sum;
+      }, 0);
+    },
+  };
+
+  matchCount = count();
+  totalGoals = attr('number');
+}
+```
+
+### MySQL DDL for GroupBy Views
+
+```sql
+CREATE OR REPLACE VIEW `animal-count-by-sizes` AS
+SELECT
+  `animals`.`size` AS `id`,
+  COUNT(*) AS `animalCount`,
+  AVG(`animals`.`age`) AS `averageAge`
+FROM `animals`
+GROUP BY `animals`.`size`
+```
 
 ## Querying Views
 

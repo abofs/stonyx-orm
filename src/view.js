@@ -5,6 +5,7 @@ export default class View {
   static readOnly = true;
   static pluralName = undefined;
   static source = undefined;
+  static groupBy = undefined;
   static resolve = undefined;
 
   id = attr('number');
