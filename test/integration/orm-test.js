@@ -228,6 +228,20 @@ module('[Integration] ORM', function(hooks) {
       animal.size = 'medium';
     });
 
+    test('updateRecord with null clears the field', function(assert) {
+      const owner = store.get('owner', 'bob');
+
+      assert.equal(owner.age, 44, 'age starts as 44');
+
+      updateRecord(owner, { age: null });
+
+      assert.strictEqual(owner.age, null, 'age is null after updateRecord with null');
+      assert.strictEqual(owner.__data.age, null, '__data.age is null');
+
+      // Revert change
+      owner.age = 44;
+    });
+
     test('db saves correct serialized data and relationships', async function(assert) {
       await Orm.db.save();
       parsedFileData = await readFile(config.orm.db.file, { json: true });
@@ -430,6 +444,30 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(data.type, 'animal');
       assert.equal(data.id, targetId);
       assert.equal(data.attributes.size, 'small');
+    });
+
+    test('PATCH with null attribute clears the field', async function(assert) {
+      const owner = store.get('owner', 'bob');
+
+      assert.equal(owner.age, 44, 'age starts as 44');
+
+      const response = await fetch(`${endpoint}/owners/bob`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: {
+            type: 'owner',
+            id: 'bob',
+            attributes: { age: null }
+          }
+        })
+      });
+
+      assert.equal(response.status, 200);
+      assert.strictEqual(owner.age, null, 'age is null after PATCH with null');
+
+      // Revert change
+      owner.age = 44;
     });
 
     test('delete call for schema records work as expected', async function(assert) {
