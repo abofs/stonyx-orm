@@ -42,10 +42,14 @@
     "@stonyx/cron": "0.2.1-beta.12"
   },
   "peerDependencies": {
-    "mysql2": "^3.0.0"
+    "mysql2": "^3.0.0",
+    "@stonyx/rest-server": ">=0.2.1-beta.14"
   },
   "peerDependenciesMeta": {
     "mysql2": {
+      "optional": true
+    },
+    "@stonyx/rest-server": {
       "optional": true
     }
   },
