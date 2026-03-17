@@ -7,11 +7,16 @@ import { dbKey } from '../db.js';
 function getRelationshipInfo(property) {
   if (typeof property !== 'function') return null;
   const fnStr = property.toString();
+  const modelName = property.__relatedModelName || null;
 
-  if (fnStr.includes(`getRelationships('belongsTo',`)) return 'belongsTo';
-  if (fnStr.includes(`getRelationships('hasMany',`)) return 'hasMany';
+  if (fnStr.includes(`getRelationships('belongsTo',`)) return { type: 'belongsTo', modelName };
+  if (fnStr.includes(`getRelationships('hasMany',`)) return { type: 'hasMany', modelName };
 
   return null;
+}
+
+function sanitizeTableName(name) {
+  return name.replace(/\//g, '_');
 }
 
 export function introspectModels() {
@@ -34,12 +39,12 @@ export function introspectModels() {
     for (const [key, property] of Object.entries(model)) {
       if (key.startsWith('__')) continue;
 
-      const relType = getRelationshipInfo(property);
+      const relInfo = getRelationshipInfo(property);
 
-      if (relType === 'belongsTo') {
-        relationships.belongsTo[key] = true;
-      } else if (relType === 'hasMany') {
-        relationships.hasMany[key] = true;
+      if (relInfo?.type === 'belongsTo') {
+        relationships.belongsTo[key] = relInfo.modelName;
+      } else if (relInfo?.type === 'hasMany') {
+        relationships.hasMany[key] = relInfo.modelName;
       } else if (property?.constructor?.name === 'ModelProperty') {
         if (key === 'id') {
           idType = property.type;
@@ -50,17 +55,16 @@ export function introspectModels() {
     }
 
     // Build foreign keys from belongsTo relationships
-    for (const relName of Object.keys(relationships.belongsTo)) {
-      const modelName = camelCaseToKebabCase(relName);
+    for (const [relName, targetModelName] of Object.entries(relationships.belongsTo)) {
       const fkColumn = `${relName}_id`;
       foreignKeys[fkColumn] = {
-        references: getPluralName(modelName),
+        references: sanitizeTableName(getPluralName(targetModelName)),
         column: 'id',
       };
     }
 
     schemas[name] = {
-      table: getPluralName(name),
+      table: sanitizeTableName(getPluralName(name)),
       idType,
       columns,
       foreignKeys,
@@ -73,7 +77,8 @@ export function introspectModels() {
 }
 
 export function buildTableDDL(name, schema, allSchemas = {}) {
-  const { table, idType, columns, foreignKeys } = schema;
+  const { idType, columns, foreignKeys } = schema;
+  const table = sanitizeTableName(schema.table);
   const lines = [];
 
   // Primary key
@@ -100,7 +105,8 @@ export function buildTableDDL(name, schema, allSchemas = {}) {
 
   // Foreign key constraints
   for (const [fkCol, fkDef] of Object.entries(foreignKeys)) {
-    lines.push(`  FOREIGN KEY (\`${fkCol}\`) REFERENCES \`${fkDef.references}\`(\`${fkDef.column}\`) ON DELETE SET NULL`);
+    const refTable = sanitizeTableName(fkDef.references);
+    lines.push(`  FOREIGN KEY (\`${fkCol}\`) REFERENCES \`${refTable}\`(\`${fkDef.column}\`) ON DELETE SET NULL`);
   }
 
   return `CREATE TABLE IF NOT EXISTS \`${table}\` (\n${lines.join(',\n')}\n)`;
@@ -130,8 +136,8 @@ export function getTopologicalOrder(schemas) {
     if (!schema) return;
 
     // Visit dependencies (belongsTo targets) first
-    for (const relName of Object.keys(schema.relationships.belongsTo)) {
-      visit(camelCaseToKebabCase(relName));
+    for (const targetModelName of Object.values(schema.relationships.belongsTo)) {
+      visit(targetModelName);
     }
 
     order.push(name);

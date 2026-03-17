@@ -19,21 +19,21 @@ function smartLockSchemas() {
       idType: 'string',
       columns: {},
       foreignKeys: { user_id: { references: 'users', column: 'id' } },
-      relationships: { belongsTo: { user: true }, hasMany: { 'access-link': true } },
+      relationships: { belongsTo: { user: 'user' }, hasMany: { 'access-link': true } },
     },
     session: {
       table: 'sessions',
       idType: 'string',
       columns: { expiration: 'INT', selectedDevice: 'VARCHAR(255)' },
       foreignKeys: { user_id: { references: 'users', column: 'id' } },
-      relationships: { belongsTo: { user: true }, hasMany: {} },
+      relationships: { belongsTo: { user: 'user' }, hasMany: {} },
     },
     'access-link': {
       table: 'access-links',
       idType: 'string',
       columns: { expiration: 'INT', active: 'TINYINT(1)' },
       foreignKeys: { device_id: { references: 'devices', column: 'id' } },
-      relationships: { belongsTo: { device: true }, hasMany: {} },
+      relationships: { belongsTo: { device: 'device' }, hasMany: {} },
     },
   };
 }
@@ -53,7 +53,7 @@ function numericPkSchemas() {
       idType: 'number',
       columns: { title: 'VARCHAR(255)' },
       foreignKeys: { author_id: { references: 'authors', column: 'id' } },
-      relationships: { belongsTo: { author: true }, hasMany: {} },
+      relationships: { belongsTo: { author: 'author' }, hasMany: {} },
     },
   };
 }
@@ -167,5 +167,77 @@ module('[Unit] Migration Generator — diffSnapshots', function() {
     assert.true(diff.hasChanges, 'should detect changes');
     assert.strictEqual(diff.addedForeignKeys.length, 1, 'should have 1 added FK');
     assert.strictEqual(diff.addedForeignKeys[0].column, 'user_id', 'FK column is user_id');
+  });
+});
+
+module('[Unit] Schema Introspector — FK reference naming (Bug #1)', function() {
+
+  test('topological order resolves correctly when belongsTo property names differ from model names', function(assert) {
+    const schemas = {
+      game: {
+        table: 'games',
+        idType: 'number',
+        columns: {},
+        foreignKeys: { homeStanding_id: { references: 'standings', column: 'id' } },
+        relationships: { belongsTo: { homeStanding: 'standing', awayStanding: 'standing' }, hasMany: {} },
+      },
+      standing: {
+        table: 'standings',
+        idType: 'number',
+        columns: { score: 'INT' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+      },
+    };
+
+    const order = getTopologicalOrder(schemas);
+    const gameIdx = order.indexOf('game');
+    const standingIdx = order.indexOf('standing');
+
+    assert.true(standingIdx >= 0, 'standing should be in the order');
+    assert.true(gameIdx >= 0, 'game should be in the order');
+    assert.true(standingIdx < gameIdx, 'standing (dependency) should come before game');
+  });
+});
+
+module('[Unit] Schema Introspector — slash in table names (Bug #2)', function() {
+
+  test('buildTableDDL converts slashes to underscores in table names for subdirectory models', function(assert) {
+    const schemas = {
+      'game-stats/standing': {
+        table: 'game-stats/standings',
+        idType: 'number',
+        columns: { score: 'INT' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+      },
+    };
+    const ddl = buildTableDDL('game-stats/standing', schemas['game-stats/standing'], schemas);
+
+    assert.true(ddl.includes('game-stats_standings'), 'table name should use underscores instead of slashes');
+    assert.false(ddl.includes('game-stats/standings'), 'table name should not contain slashes');
+  });
+
+  test('buildTableDDL converts slashes to underscores in FK REFERENCES for subdirectory models', function(assert) {
+    const schemas = {
+      game: {
+        table: 'games',
+        idType: 'number',
+        columns: {},
+        foreignKeys: { homeStanding_id: { references: 'game-stats/standings', column: 'id' } },
+        relationships: { belongsTo: { homeStanding: 'game-stats/standing' }, hasMany: {} },
+      },
+      'game-stats/standing': {
+        table: 'game-stats/standings',
+        idType: 'number',
+        columns: { score: 'INT' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+      },
+    };
+    const ddl = buildTableDDL('game', schemas.game, schemas);
+
+    assert.true(ddl.includes('REFERENCES `game-stats_standings`'), 'FK REFERENCES should use underscores instead of slashes');
+    assert.false(ddl.includes('REFERENCES `game-stats/standings`'), 'FK REFERENCES should not contain slashes');
   });
 });
