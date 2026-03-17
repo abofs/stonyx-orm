@@ -41,7 +41,7 @@ export default async function(route, accessPath, metaRoute) {
   // Remove "/" prefix and name mount point accordingly
   const name = route === '/' ? 'index' : (route[0] === '/' ? route.slice(1) : route);
 
-  // Configure endpoints for models with access configuration
+  // Configure endpoints for models and views with access configuration
   for (const [model, access] of Object.entries(accessFiles)) {
     const pluralizedModel = getPluralName(model);
     const modelName = name === 'index' ? pluralizedModel : `${name}/${pluralizedModel}`;

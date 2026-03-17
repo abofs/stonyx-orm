@@ -323,21 +323,27 @@ export default class OrmRequest extends Request {
     };
 
     // Wrap handlers with hooks
+    const isView = Orm.instance?.isView?.(model);
+
     this.handlers = {
       get: {
         '/': this._withHooks('list', getCollectionHandler),
         '/:id': this._withHooks('get', getSingleHandler),
         ...this._generateRelationshipRoutes(model, pluralizedModel, modelRelationships)
       },
-      patch: {
+    };
+
+    // Views are read-only — no write endpoints
+    if (!isView) {
+      this.handlers.patch = {
         '/:id': this._withHooks('update', updateHandler)
-      },
-      post: {
+      };
+      this.handlers.post = {
         '/': this._withHooks('create', createHandler)
-      },
-      delete: {
+      };
+      this.handlers.delete = {
         '/:id': this._withHooks('delete', deleteHandler)
-      }
+      };
     }
   }
 

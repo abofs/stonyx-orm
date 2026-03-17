@@ -1,6 +1,6 @@
 import { getPool, closePool } from './connection.js';
 import { ensureMigrationsTable, getAppliedMigrations, getMigrationFiles, applyMigration, parseMigrationFile } from './migration-runner.js';
-import { introspectModels, getTopologicalOrder, schemasToSnapshot } from './schema-introspector.js';
+import { introspectModels, introspectViews, getTopologicalOrder, schemasToSnapshot } from './schema-introspector.js';
 import { loadLatestSnapshot, detectSchemaDrift } from './migration-generator.js';
 import { buildInsert, buildUpdate, buildDelete, buildSelect } from './query-builder.js';
 import { createRecord, store } from '@stonyx/orm';
@@ -14,7 +14,7 @@ import path from 'path';
 const defaultDeps = {
   getPool, closePool, ensureMigrationsTable, getAppliedMigrations,
   getMigrationFiles, applyMigration, parseMigrationFile,
-  introspectModels, getTopologicalOrder, schemasToSnapshot,
+  introspectModels, introspectViews, getTopologicalOrder, schemasToSnapshot,
   loadLatestSnapshot, detectSchemaDrift,
   buildInsert, buildUpdate, buildDelete, buildSelect,
   createRecord, store, confirm, readFile, getPluralName, config, log, path
@@ -148,6 +148,35 @@ export default class MysqlDB {
         throw error;
       }
     }
+
+    // Load views with memory: true
+    const viewSchemas = this.deps.introspectViews();
+
+    for (const [viewName, viewSchema] of Object.entries(viewSchemas)) {
+      const { modelClass: viewClass } = Orm.instance.getRecordClasses(viewName);
+      if (viewClass?.memory !== true) {
+        this.deps.log.db(`Skipping memory load for view '${viewName}' (memory: false)`);
+        continue;
+      }
+
+      const schema = { table: viewSchema.viewName, columns: viewSchema.columns || {}, foreignKeys: viewSchema.foreignKeys || {} };
+      const { sql, values } = this.deps.buildSelect(schema.table);
+
+      try {
+        const [rows] = await this.pool.execute(sql, values);
+
+        for (const row of rows) {
+          const rawData = this._rowToRawData(row, schema);
+          this.deps.createRecord(viewName, rawData, { isDbRecord: true, serialize: false, transform: false });
+        }
+      } catch (error) {
+        if (error.code === 'ER_NO_SUCH_TABLE') {
+          this.deps.log.db(`View '${viewSchema.viewName}' does not exist yet. Skipping load for '${viewName}'.`);
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 
   /**
@@ -166,7 +195,16 @@ export default class MysqlDB {
    */
   async findRecord(modelName, id) {
     const schemas = this.deps.introspectModels();
-    const schema = schemas[modelName];
+    let schema = schemas[modelName];
+
+    // Check views if not found in models
+    if (!schema) {
+      const viewSchemas = this.deps.introspectViews();
+      const viewSchema = viewSchemas[modelName];
+      if (viewSchema) {
+        schema = { table: viewSchema.viewName, columns: viewSchema.columns || {}, foreignKeys: viewSchema.foreignKeys || {} };
+      }
+    }
 
     if (!schema) return undefined;
 
@@ -199,7 +237,16 @@ export default class MysqlDB {
    */
   async findAll(modelName, conditions) {
     const schemas = this.deps.introspectModels();
-    const schema = schemas[modelName];
+    let schema = schemas[modelName];
+
+    // Check views if not found in models
+    if (!schema) {
+      const viewSchemas = this.deps.introspectViews();
+      const viewSchema = viewSchemas[modelName];
+      if (viewSchema) {
+        schema = { table: viewSchema.viewName, columns: viewSchema.columns || {}, foreignKeys: viewSchema.foreignKeys || {} };
+      }
+    }
 
     if (!schema) return [];
 
@@ -277,6 +324,10 @@ export default class MysqlDB {
   }
 
   async persist(operation, modelName, context, response) {
+    // Views are read-only — no-op for all write operations
+    const Orm = (await import('@stonyx/orm')).default;
+    if (Orm.instance?.isView?.(modelName)) return;
+
     switch (operation) {
       case 'create':
         return this._persistCreate(modelName, context, response);

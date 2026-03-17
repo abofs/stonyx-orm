@@ -15,17 +15,20 @@
  */
 
 import Model from './model.js';
+import View from './view.js';
 import Serializer from './serializer.js';
 
 import attr from './attr.js';
 import belongsTo from './belongs-to.js';
 import hasMany from './has-many.js';
 import { createRecord, updateRecord } from './manage-record.js';
+import { count, avg, sum, min, max } from './aggregates.js';
 
 export { default } from './main.js';
 export { store, relationships } from './main.js';
-export { Model, Serializer }; // base classes
+export { Model, View, Serializer }; // base classes
 export { attr, belongsTo, hasMany, createRecord, updateRecord }; // helpers
+export { count, avg, sum, min, max }; // aggregate helpers
 export { beforeHook, afterHook, clearHook, clearAllHooks } from './hooks.js'; // middleware hooks
 
 // Store API:

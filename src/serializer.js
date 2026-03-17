@@ -86,6 +86,13 @@ export default class Serializer {
         continue;
       }
 
+      // Aggregate property handling — use the rawData value, not the aggregate descriptor
+      if (handler?.constructor?.name === 'AggregateProperty') {
+        parsedData[key] = data;
+        record[key] = data;
+        continue;
+      }
+
       // Direct assignment handling
       if (handler?.constructor?.name !== 'ModelProperty') {
         parsedData[key] = handler;

@@ -4,6 +4,7 @@ const {
   ORM_REST_ROUTE,
   ORM_SERIALIZER_PATH,
   ORM_TRANSFORM_PATH,
+  ORM_VIEW_PATH,
   ORM_USE_REST_SERVER,
   DB_AUTO_SAVE,
   DB_FILE,
@@ -36,7 +37,8 @@ export default {
     access: ORM_ACCESS_PATH ?? './access', // Optional for restServer access hooks
     model: ORM_MODEL_PATH ?? './models',
     serializer: ORM_SERIALIZER_PATH ?? './serializers',
-    transform: ORM_TRANSFORM_PATH ?? './transforms'
+    transform: ORM_TRANSFORM_PATH ?? './transforms',
+    view: ORM_VIEW_PATH ?? './views'
   },
   mysql: MYSQL_HOST ? {
     host: MYSQL_HOST ?? 'localhost',
