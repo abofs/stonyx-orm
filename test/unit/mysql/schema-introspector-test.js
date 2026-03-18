@@ -75,12 +75,12 @@ module('[Unit] Schema Introspector — buildTableDDL', function() {
     assert.true(ddl.includes('`author_id` INT'), 'author_id FK should be INT to match authors numeric PK');
   });
 
-  test('access-link DDL has correct table name access-links', function(assert) {
+  test('access-link DDL has correct table name access_links', function(assert) {
     const schemas = smartLockSchemas();
     const ddl = buildTableDDL('access-link', schemas['access-link'], schemas);
 
-    assert.true(ddl.includes('`access-links`'), 'table name should be access-links (pluralized with hyphen)');
-    assert.false(ddl.includes('`access-link`('), 'should not use singular access-link as table name');
+    assert.true(ddl.includes('`access_links`'), 'table name should be access_links (dashes converted to underscores)');
+    assert.false(ddl.includes('`access-links`'), 'should not use dashes in table name');
   });
 
   test('FK constraint references correct table name', function(assert) {
@@ -167,5 +167,83 @@ module('[Unit] Migration Generator — diffSnapshots', function() {
     assert.true(diff.hasChanges, 'should detect changes');
     assert.strictEqual(diff.addedForeignKeys.length, 1, 'should have 1 added FK');
     assert.strictEqual(diff.addedForeignKeys[0].column, 'user_id', 'FK column is user_id');
+  });
+});
+
+module('[Unit] Schema Introspector — FK reference naming (Bug #1)', function() {
+
+  test('topological order resolves correctly when belongsTo property names differ from model names', function(assert) {
+    const schemas = {
+      game: {
+        table: 'games',
+        idType: 'number',
+        columns: {},
+        foreignKeys: { homeStanding_id: { references: 'standings', column: 'id' } },
+        relationships: { belongsTo: { homeStanding: 'standing', awayStanding: 'standing' }, hasMany: {} },
+      },
+      standing: {
+        table: 'standings',
+        idType: 'number',
+        columns: { score: 'INT' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+      },
+    };
+
+    const order = getTopologicalOrder(schemas);
+    const gameIdx = order.indexOf('game');
+    const standingIdx = order.indexOf('standing');
+
+    assert.true(standingIdx >= 0, 'standing should be in the order');
+    assert.true(gameIdx >= 0, 'game should be in the order');
+    assert.true(standingIdx < gameIdx, 'standing (dependency) should come before game');
+  });
+});
+
+module('[Unit] Schema Introspector — MySQL table name sanitization (Bug #2)', function() {
+
+  test('buildTableDDL converts dashes and slashes to underscores in table names', function(assert) {
+    const schemas = {
+      'game-stats/standing': {
+        table: 'game-stats/standings',
+        idType: 'number',
+        columns: { score: 'INT' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+      },
+    };
+    const ddl = buildTableDDL('game-stats/standing', schemas['game-stats/standing'], schemas);
+
+    assert.true(ddl.includes('`game_stats_standings`'), 'table name should use underscores for both dashes and slashes');
+  });
+
+  test('buildTableDDL converts dashes and slashes to underscores in FK REFERENCES', function(assert) {
+    const schemas = {
+      game: {
+        table: 'games',
+        idType: 'number',
+        columns: {},
+        foreignKeys: { homeStanding_id: { references: 'game-stats/standings', column: 'id' } },
+        relationships: { belongsTo: { homeStanding: 'game-stats/standing' }, hasMany: {} },
+      },
+      'game-stats/standing': {
+        table: 'game-stats/standings',
+        idType: 'number',
+        columns: { score: 'INT' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+      },
+    };
+    const ddl = buildTableDDL('game', schemas.game, schemas);
+
+    assert.true(ddl.includes('REFERENCES `game_stats_standings`'), 'FK should reference table with underscores');
+  });
+
+  test('buildTableDDL converts simple dashes to underscores in table names', function(assert) {
+    const schemas = smartLockSchemas();
+    const ddl = buildTableDDL('access-link', schemas['access-link'], schemas);
+
+    assert.true(ddl.includes('`access_links`'), 'access-links should become access_links');
+    assert.false(ddl.includes('`access-links`'), 'should not use dashes in table name');
   });
 });
