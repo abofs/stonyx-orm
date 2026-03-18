@@ -12,17 +12,10 @@ export default {
     db: {
       file: './test/sample/db.json',
       schema: './test/sample/db-schema.js'
-    },
-    mysql: {
-      host: 'localhost',
-      port: 3306,
-      user: 'stonyx_test',
-      password: 'stonyx_test',
-      database: 'stonyx_orm_test',
-      connectionLimit: 5,
-      migrationsDir: 'test/sample/migrations',
-      migrationsTable: '__test_migrations'
     }
+    // NOTE: MySQL test config is NOT here — it lives in test/helpers/mysql-test-helper.js.
+    // Adding a mysql block here causes the ORM to initialize MysqlDB during setupIntegrationTests,
+    // which breaks non-MySQL tests and causes race conditions with MySQL test setup.
   },
   restServer: {
     dir: './test/sample/requests'
