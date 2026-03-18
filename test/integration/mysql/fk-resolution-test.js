@@ -1,15 +1,12 @@
 import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { canConnectToMysql, setupMysqlTests, pool } from '../../helpers/mysql-test-helper.js';
+import { setupMysqlTests, pool, skipIfNoMysql } from '../../helpers/mysql-test-helper.js';
 import MysqlDB from '../../../src/mysql/mysql-db.js';
 import { introspectModels, introspectViews } from '../../../src/mysql/schema-introspector.js';
 import { buildInsert, buildUpdate, buildDelete, buildSelect } from '../../../src/mysql/query-builder.js';
 import { createRecord, store } from '@stonyx/orm';
 
-const mysqlAvailable = await canConnectToMysql();
-const moduleFunc = mysqlAvailable || !process.env.CI ? QUnit.module : QUnit.module.skip;
-
-moduleFunc('[Integration] MySQL — FK Resolution', function (hooks) {
+QUnit.module('[Integration] MySQL — FK Resolution', function (hooks) {
   setupIntegrationTests(hooks);
   setupMysqlTests(hooks, { tables: ['category', 'owner', 'animal', 'trait', 'phone-number'] });
 
@@ -32,6 +29,8 @@ moduleFunc('[Integration] MySQL — FK Resolution', function (hooks) {
   }
 
   QUnit.test('_recordToRow extracts FK value from relationship', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const db = createDb();
     const schemas = introspectModels();
     const animalSchema = schemas['animal'];
@@ -49,6 +48,8 @@ moduleFunc('[Integration] MySQL — FK Resolution', function (hooks) {
   });
 
   QUnit.test('round-trip: insert with FK and read back with FK remapped', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const db = createDb();
 
     // Insert owner directly into MySQL
@@ -75,6 +76,8 @@ moduleFunc('[Integration] MySQL — FK Resolution', function (hooks) {
   });
 
   QUnit.test('findAll with FK condition filters correctly', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const db = createDb();
 
     // Insert 2 owners
@@ -92,6 +95,8 @@ moduleFunc('[Integration] MySQL — FK Resolution', function (hooks) {
   });
 
   QUnit.test('trait belongsTo category with string FK', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const db = createDb();
 
     // Insert category with string ID

@@ -15,9 +15,11 @@ const TEST_MYSQL_CONFIG = {
 // Shared pool reference — importable by test files
 export let pool = null;
 
+// Flag for tests to check — set during setupMysqlTests hooks.before
+export let mysqlSkipped = false;
+
 /**
- * Check if MySQL is reachable. Call BEFORE module declaration.
- * Returns true if connectable, false otherwise.
+ * Check if MySQL is reachable.
  */
 export async function canConnectToMysql() {
   try {
@@ -30,18 +32,37 @@ export async function canConnectToMysql() {
 }
 
 /**
+ * Returns true if the test should be skipped (call at start of each test).
+ * Usage: if (skipIfNoMysql(assert)) return;
+ */
+export function skipIfNoMysql(assert) {
+  if (mysqlSkipped) {
+    assert.expect(0);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Setup MySQL integration test lifecycle.
  * Must be called AFTER setupIntegrationTests(hooks) so Orm.instance exists.
- *
- * @param {object} hooks - QUnit module hooks
- * @param {object} options
- * @param {string[]} options.tables - Model names to create tables for (e.g. ['owner', 'animal'])
+ * Handles connectivity check internally — no top-level await needed.
  */
 export function setupMysqlTests(hooks, { tables = [] } = {}) {
   let tableOrder = [];
-  let tableNames = {}; // model name → MySQL table name, cached once
+  let tableNames = {};
 
   hooks.before(async function () {
+    // Check connectivity
+    const available = await canConnectToMysql();
+    if (!available) {
+      if (process.env.CI) {
+        mysqlSkipped = true;
+        return; // Skip setup in CI when MySQL unavailable
+      }
+      // Locally, let it fail naturally by proceeding (pool creation will error)
+    }
+
     // Create pool
     pool = mysql.createPool(TEST_MYSQL_CONFIG);
 
@@ -55,7 +76,7 @@ export function setupMysqlTests(hooks, { tables = [] } = {}) {
     // Filter to requested tables, maintaining topological order
     tableOrder = fullOrder.filter(name => tables.includes(name));
 
-    // Cache table name mapping (avoids re-introspecting in afterEach/after)
+    // Cache table name mapping
     for (const name of tableOrder) {
       tableNames[name] = schemas[name].table;
     }
@@ -68,15 +89,13 @@ export function setupMysqlTests(hooks, { tables = [] } = {}) {
   });
 
   hooks.beforeEach(function () {
-    // Reset MysqlDB singleton before each test (per spec)
     MysqlDB.instance = null;
   });
 
   hooks.afterEach(async function () {
-    // Reset MysqlDB singleton between tests
     MysqlDB.instance = null;
+    if (mysqlSkipped || !pool) return;
 
-    // Truncate all tables (disable FK checks to avoid constraint errors)
     await pool.execute('SET FOREIGN_KEY_CHECKS=0');
     for (const name of tableOrder) {
       await pool.execute(`TRUNCATE TABLE \`${tableNames[name]}\``);
@@ -85,20 +104,19 @@ export function setupMysqlTests(hooks, { tables = [] } = {}) {
   });
 
   hooks.after(async function () {
-    // Drop tables in reverse topological order (children first)
+    if (mysqlSkipped || !pool) return;
+
     await pool.execute('SET FOREIGN_KEY_CHECKS=0');
     for (const name of [...tableOrder].reverse()) {
       await pool.execute(`DROP TABLE IF EXISTS \`${tableNames[name]}\``);
     }
     await pool.execute('SET FOREIGN_KEY_CHECKS=1');
 
-    // Close pool
     if (pool) {
       await pool.end();
       pool = null;
     }
 
-    // Clean up singleton
     MysqlDB.instance = null;
   });
 }

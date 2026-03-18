@@ -1,17 +1,16 @@
 import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { canConnectToMysql, setupMysqlTests, pool } from '../../helpers/mysql-test-helper.js';
+import { setupMysqlTests, pool, skipIfNoMysql } from '../../helpers/mysql-test-helper.js';
 import { introspectModels, introspectViews, buildTableDDL, buildViewDDL, schemasToSnapshot, getTopologicalOrder } from '../../../src/mysql/schema-introspector.js';
 import { diffSnapshots, diffViewSnapshots } from '../../../src/mysql/migration-generator.js';
 
-const mysqlAvailable = await canConnectToMysql();
-const moduleFunc = mysqlAvailable || !process.env.CI ? QUnit.module : QUnit.module.skip;
-
-moduleFunc('[Integration] MySQL — Migration Generation', function (hooks) {
+QUnit.module('[Integration] MySQL — Migration Generation', function (hooks) {
   setupIntegrationTests(hooks);
   setupMysqlTests(hooks, { tables: ['category', 'owner', 'animal', 'trait', 'phone-number'] });
 
   QUnit.test('buildTableDDL produces valid SQL that MySQL accepts', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     // Tables are already created by setupMysqlTests — verify they exist
     const schemas = introspectModels();
     const order = getTopologicalOrder(schemas);
@@ -29,6 +28,8 @@ moduleFunc('[Integration] MySQL — Migration Generation', function (hooks) {
   });
 
   QUnit.test('initial snapshot from models has correct structure', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
     const snapshot = schemasToSnapshot(schemas);
 
@@ -42,6 +43,8 @@ moduleFunc('[Integration] MySQL — Migration Generation', function (hooks) {
   });
 
   QUnit.test('diffSnapshots detects added model', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
     const currentSnapshot = schemasToSnapshot(schemas);
 
@@ -55,6 +58,8 @@ moduleFunc('[Integration] MySQL — Migration Generation', function (hooks) {
   });
 
   QUnit.test('diffSnapshots detects added column', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
     const currentSnapshot = schemasToSnapshot(schemas);
 
@@ -71,6 +76,8 @@ moduleFunc('[Integration] MySQL — Migration Generation', function (hooks) {
   });
 
   QUnit.test('diffSnapshots detects removed column', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
     const currentSnapshot = schemasToSnapshot(schemas);
 
@@ -87,6 +94,8 @@ moduleFunc('[Integration] MySQL — Migration Generation', function (hooks) {
   });
 
   QUnit.test('diffSnapshots detects column type change', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
     const currentSnapshot = schemasToSnapshot(schemas);
 
@@ -104,6 +113,8 @@ moduleFunc('[Integration] MySQL — Migration Generation', function (hooks) {
   });
 
   QUnit.test('ALTER TABLE ADD COLUMN SQL is valid MySQL', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     // Add a test column to owners, verify, then clean up
     await pool.execute('ALTER TABLE `owners` ADD COLUMN `nickname` VARCHAR(255)');
 
@@ -124,6 +135,8 @@ moduleFunc('[Integration] MySQL — Migration Generation', function (hooks) {
   });
 
   QUnit.test('buildViewDDL produces valid SQL for animal-count-by-size view', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['animal-count-by-size'];
