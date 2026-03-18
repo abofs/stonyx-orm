@@ -15,54 +15,15 @@ const TEST_MYSQL_CONFIG = {
 // Shared pool reference — importable by test files
 export let pool = null;
 
-// Flag for tests to check — set during setupMysqlTests hooks.before
-export let mysqlSkipped = false;
-
-/**
- * Check if MySQL is reachable.
- */
-export async function canConnectToMysql() {
-  try {
-    const conn = await mysql.createConnection(TEST_MYSQL_CONFIG);
-    await conn.end();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Returns true if the test should be skipped (call at start of each test).
- * Usage: if (skipIfNoMysql(assert)) return;
- */
-export function skipIfNoMysql(assert) {
-  if (mysqlSkipped) {
-    assert.expect(0);
-    return true;
-  }
-  return false;
-}
-
 /**
  * Setup MySQL integration test lifecycle.
  * Must be called AFTER setupIntegrationTests(hooks) so Orm.instance exists.
- * Handles connectivity check internally — no top-level await needed.
  */
 export function setupMysqlTests(hooks, { tables = [] } = {}) {
   let tableOrder = [];
   let tableNames = {};
 
   hooks.before(async function () {
-    // Check connectivity
-    const available = await canConnectToMysql();
-    if (!available) {
-      if (process.env.CI) {
-        mysqlSkipped = true;
-        return; // Skip setup in CI when MySQL unavailable
-      }
-      // Locally, let it fail naturally by proceeding (pool creation will error)
-    }
-
     // Create pool
     pool = mysql.createPool(TEST_MYSQL_CONFIG);
 
@@ -94,7 +55,7 @@ export function setupMysqlTests(hooks, { tables = [] } = {}) {
 
   hooks.afterEach(async function () {
     MysqlDB.instance = null;
-    if (mysqlSkipped || !pool) return;
+    if (!pool) return;
 
     await pool.execute('SET FOREIGN_KEY_CHECKS=0');
     for (const name of tableOrder) {
@@ -104,7 +65,7 @@ export function setupMysqlTests(hooks, { tables = [] } = {}) {
   });
 
   hooks.after(async function () {
-    if (mysqlSkipped || !pool) return;
+    if (!pool) return;
 
     await pool.execute('SET FOREIGN_KEY_CHECKS=0');
     for (const name of [...tableOrder].reverse()) {

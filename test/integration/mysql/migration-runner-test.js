@@ -1,7 +1,6 @@
 import QUnit from 'qunit';
 import mysql from 'mysql2/promise';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { canConnectToMysql } from '../../helpers/mysql-test-helper.js';
 import { ensureMigrationsTable, getAppliedMigrations, applyMigration, rollbackMigration, parseMigrationFile } from '../../../src/mysql/migration-runner.js';
 
 const TEST_CONFIG = {
@@ -14,24 +13,16 @@ const TEST_CONFIG = {
 const MIGRATIONS_TABLE = '__test_runner_migrations';
 
 let testPool;
-let localSkipped = false;
 
 QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   setupIntegrationTests(hooks);
 
   hooks.before(async function () {
-    const available = await canConnectToMysql();
-    if (!available) {
-      if (process.env.CI) {
-        localSkipped = true;
-        return;
-      }
-    }
     testPool = mysql.createPool(TEST_CONFIG);
   });
 
   hooks.afterEach(async function () {
-    if (localSkipped || !testPool) return;
+    if (!testPool) return;
 
     // Clean up: drop migrations table and test_items table
     await testPool.execute('SET FOREIGN_KEY_CHECKS=0');
@@ -48,8 +39,6 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   });
 
   QUnit.test('ensureMigrationsTable creates the tracking table', async function (assert) {
-    if (localSkipped) { assert.expect(0); return; }
-
     await ensureMigrationsTable(testPool, MIGRATIONS_TABLE);
 
     const [rows] = await testPool.execute(
@@ -61,8 +50,6 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   });
 
   QUnit.test('ensureMigrationsTable is idempotent', async function (assert) {
-    if (localSkipped) { assert.expect(0); return; }
-
     await ensureMigrationsTable(testPool, MIGRATIONS_TABLE);
     await ensureMigrationsTable(testPool, MIGRATIONS_TABLE);
 
@@ -75,8 +62,6 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   });
 
   QUnit.test('applyMigration executes SQL and records in tracking table', async function (assert) {
-    if (localSkipped) { assert.expect(0); return; }
-
     await ensureMigrationsTable(testPool, MIGRATIONS_TABLE);
 
     const upSql = 'CREATE TABLE `test_items` (`id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255))';
@@ -95,8 +80,6 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   });
 
   QUnit.test('re-applying already-applied migration is skipped via pending filter', async function (assert) {
-    if (localSkipped) { assert.expect(0); return; }
-
     await ensureMigrationsTable(testPool, MIGRATIONS_TABLE);
 
     const upSql = 'CREATE TABLE `test_items` (`id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255))';
@@ -111,8 +94,6 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   });
 
   QUnit.test('getAppliedMigrations returns empty array when none applied', async function (assert) {
-    if (localSkipped) { assert.expect(0); return; }
-
     await ensureMigrationsTable(testPool, MIGRATIONS_TABLE);
 
     const applied = await getAppliedMigrations(testPool, MIGRATIONS_TABLE);
@@ -120,8 +101,6 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   });
 
   QUnit.test('applyMigration rolls back on SQL error', async function (assert) {
-    if (localSkipped) { assert.expect(0); return; }
-
     await ensureMigrationsTable(testPool, MIGRATIONS_TABLE);
 
     const badSql = 'CREATE TABLE `test_items` (`id` INT PRIMARY KEY); INSERT INTO `nonexistent_table` VALUES (1)';
@@ -139,8 +118,6 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   });
 
   QUnit.test('rollbackMigration executes DOWN SQL and removes tracking record', async function (assert) {
-    if (localSkipped) { assert.expect(0); return; }
-
     await ensureMigrationsTable(testPool, MIGRATIONS_TABLE);
 
     // First apply a migration
@@ -168,8 +145,6 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
   });
 
   QUnit.test('parseMigrationFile splits UP and DOWN sections', function (assert) {
-    if (localSkipped) { assert.expect(0); return; }
-
     const content = `-- UP
 CREATE TABLE \`items\` (\`id\` INT PRIMARY KEY);
 ALTER TABLE \`items\` ADD COLUMN \`name\` VARCHAR(255);

@@ -1,6 +1,6 @@
 import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { setupMysqlTests, pool, skipIfNoMysql } from '../../helpers/mysql-test-helper.js';
+import { setupMysqlTests, pool } from '../../helpers/mysql-test-helper.js';
 import { introspectModels, introspectViews, getTopologicalOrder } from '../../../src/mysql/schema-introspector.js';
 
 QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
@@ -8,9 +8,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   setupMysqlTests(hooks, { tables: ['category', 'owner', 'animal', 'trait', 'phone-number'] });
 
   QUnit.test('introspectModels returns schemas for all sample models', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const schemas = introspectModels();
+const schemas = introspectModels();
 
     assert.ok(schemas['owner'], 'owner schema exists');
     assert.ok(schemas['animal'], 'animal schema exists');
@@ -20,9 +18,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('owner schema has correct table name, id type, and column types', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const schemas = introspectModels();
+const schemas = introspectModels();
     const owner = schemas['owner'];
 
     assert.strictEqual(owner.table, 'owners', 'table name is owners');
@@ -32,9 +28,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('animal schema has FK to owner', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const schemas = introspectModels();
+const schemas = introspectModels();
     const animal = schemas['animal'];
 
     assert.ok(animal.foreignKeys.owner_id, 'owner_id FK exists');
@@ -43,9 +37,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('all tables created successfully in MySQL', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const expectedTables = ['categories', 'owners', 'animals', 'traits', 'phone-numbers'];
+const expectedTables = ['categories', 'owners', 'animals', 'traits', 'phone-numbers'];
 
     for (const tableName of expectedTables) {
       const [rows] = await pool.execute(
@@ -57,9 +49,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('owner table has correct column types in MySQL', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const [rows] = await pool.execute(
+const [rows] = await pool.execute(
       `SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'owners'
        ORDER BY ORDINAL_POSITION`
@@ -78,9 +68,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('animal table FK constraint references owners', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const [rows] = await pool.execute(
+const [rows] = await pool.execute(
       `SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
        FROM information_schema.KEY_COLUMN_USAGE
        WHERE TABLE_SCHEMA = 'stonyx_orm_test'
@@ -96,9 +84,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('topological order places parents before children', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const schemas = introspectModels();
+const schemas = introspectModels();
     const order = getTopologicalOrder(schemas);
 
     const ownerIdx = order.indexOf('owner');
@@ -111,18 +97,14 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('introspectViews returns schemas for sample views', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const viewSchemas = introspectViews();
+const viewSchemas = introspectViews();
 
     assert.ok(viewSchemas['owner-animal-count'], 'owner-animal-count view schema exists');
     assert.ok(viewSchemas['animal-count-by-size'], 'animal-count-by-size view schema exists');
   });
 
   QUnit.test('owner-animal-count view schema has correct structure', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const viewSchemas = introspectViews();
+const viewSchemas = introspectViews();
     const view = viewSchemas['owner-animal-count'];
 
     assert.strictEqual(view.source, 'owner', 'source is owner');
@@ -132,9 +114,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('animal-count-by-size view schema has groupBy size', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const viewSchemas = introspectViews();
+const viewSchemas = introspectViews();
     const view = viewSchemas['animal-count-by-size'];
 
     assert.strictEqual(view.groupBy, 'size', 'groupBy is size');
