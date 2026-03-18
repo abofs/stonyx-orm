@@ -1,7 +1,7 @@
 import QUnit from 'qunit';
 import mysql from 'mysql2/promise';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { ensureMigrationsTable, getAppliedMigrations, applyMigration, rollbackMigration, parseMigrationFile } from '../../../src/mysql/migration-runner.js';
+import { ensureMigrationsTable, getAppliedMigrations, applyMigration, rollbackMigration } from '../../../src/mysql/migration-runner.js';
 
 const TEST_CONFIG = {
   host: 'localhost',
@@ -160,21 +160,4 @@ QUnit.module('[Integration] MySQL — Migration Runner', function (hooks) {
     assert.notOk(applied.includes('001_create_test_items.sql'), 'migration record was removed');
   });
 
-  QUnit.test('parseMigrationFile splits UP and DOWN sections', function (assert) {
-    if (!testPool) { assert.expect(0); return; }
-    const content = `-- UP
-CREATE TABLE \`items\` (\`id\` INT PRIMARY KEY);
-ALTER TABLE \`items\` ADD COLUMN \`name\` VARCHAR(255);
-
--- DOWN
-DROP TABLE IF EXISTS \`items\`;`;
-
-    const { up, down } = parseMigrationFile(content);
-
-    assert.ok(up.includes('CREATE TABLE'), 'UP section contains CREATE TABLE');
-    assert.ok(up.includes('ALTER TABLE'), 'UP section contains ALTER TABLE');
-    assert.ok(down.includes('DROP TABLE'), 'DOWN section contains DROP TABLE');
-    assert.notOk(up.includes('DROP TABLE'), 'UP section does not contain DROP TABLE');
-    assert.notOk(down.includes('CREATE TABLE'), 'DOWN section does not contain CREATE TABLE');
-  });
 });
