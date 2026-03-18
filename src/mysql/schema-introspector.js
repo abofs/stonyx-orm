@@ -8,16 +8,11 @@ import { AggregateProperty } from '../aggregates.js';
 function getRelationshipInfo(property) {
   if (typeof property !== 'function') return null;
   const fnStr = property.toString();
-  const modelName = property.__relatedModelName || null;
 
-  if (fnStr.includes(`getRelationships('belongsTo',`)) return { type: 'belongsTo', modelName };
-  if (fnStr.includes(`getRelationships('hasMany',`)) return { type: 'hasMany', modelName };
+  if (fnStr.includes(`getRelationships('belongsTo',`)) return 'belongsTo';
+  if (fnStr.includes(`getRelationships('hasMany',`)) return 'hasMany';
 
   return null;
-}
-
-function sanitizeTableName(name) {
-  return name.replace(/[-/]/g, '_');
 }
 
 export function introspectModels() {
@@ -40,12 +35,12 @@ export function introspectModels() {
     for (const [key, property] of Object.entries(model)) {
       if (key.startsWith('__')) continue;
 
-      const relInfo = getRelationshipInfo(property);
+      const relType = getRelationshipInfo(property);
 
-      if (relInfo?.type === 'belongsTo') {
-        relationships.belongsTo[key] = relInfo.modelName;
-      } else if (relInfo?.type === 'hasMany') {
-        relationships.hasMany[key] = relInfo.modelName;
+      if (relType === 'belongsTo') {
+        relationships.belongsTo[key] = true;
+      } else if (relType === 'hasMany') {
+        relationships.hasMany[key] = true;
       } else if (property?.constructor?.name === 'ModelProperty') {
         if (key === 'id') {
           idType = property.type;
@@ -56,16 +51,17 @@ export function introspectModels() {
     }
 
     // Build foreign keys from belongsTo relationships
-    for (const [relName, targetModelName] of Object.entries(relationships.belongsTo)) {
+    for (const relName of Object.keys(relationships.belongsTo)) {
+      const modelName = camelCaseToKebabCase(relName);
       const fkColumn = `${relName}_id`;
       foreignKeys[fkColumn] = {
-        references: sanitizeTableName(getPluralName(targetModelName)),
+        references: getPluralName(modelName),
         column: 'id',
       };
     }
 
     schemas[name] = {
-      table: sanitizeTableName(getPluralName(name)),
+      table: getPluralName(name),
       idType,
       columns,
       foreignKeys,
@@ -78,8 +74,7 @@ export function introspectModels() {
 }
 
 export function buildTableDDL(name, schema, allSchemas = {}) {
-  const { idType, columns, foreignKeys } = schema;
-  const table = sanitizeTableName(schema.table);
+  const { table, idType, columns, foreignKeys } = schema;
   const lines = [];
 
   // Primary key
@@ -106,8 +101,7 @@ export function buildTableDDL(name, schema, allSchemas = {}) {
 
   // Foreign key constraints
   for (const [fkCol, fkDef] of Object.entries(foreignKeys)) {
-    const refTable = sanitizeTableName(fkDef.references);
-    lines.push(`  FOREIGN KEY (\`${fkCol}\`) REFERENCES \`${refTable}\`(\`${fkDef.column}\`) ON DELETE SET NULL`);
+    lines.push(`  FOREIGN KEY (\`${fkCol}\`) REFERENCES \`${fkDef.references}\`(\`${fkDef.column}\`) ON DELETE SET NULL`);
   }
 
   return `CREATE TABLE IF NOT EXISTS \`${table}\` (\n${lines.join(',\n')}\n)`;
@@ -137,8 +131,8 @@ export function getTopologicalOrder(schemas) {
     if (!schema) return;
 
     // Visit dependencies (belongsTo targets) first
-    for (const targetModelName of Object.values(schema.relationships.belongsTo)) {
-      visit(targetModelName);
+    for (const relName of Object.keys(schema.relationships.belongsTo)) {
+      visit(camelCaseToKebabCase(relName));
     }
 
     order.push(name);
@@ -178,17 +172,18 @@ export function introspectViews() {
         continue;
       }
 
-      const relInfo = getRelationshipInfo(property);
+      const relType = getRelationshipInfo(property);
 
-      if (relInfo?.type === 'belongsTo') {
-        relationships.belongsTo[key] = relInfo.modelName;
+      if (relType === 'belongsTo') {
+        relationships.belongsTo[key] = true;
+        const modelName = camelCaseToKebabCase(key);
         const fkColumn = `${key}_id`;
         foreignKeys[fkColumn] = {
-          references: sanitizeTableName(getPluralName(relInfo.modelName)),
+          references: getPluralName(modelName),
           column: 'id',
         };
-      } else if (relInfo?.type === 'hasMany') {
-        relationships.hasMany[key] = relInfo.modelName;
+      } else if (relType === 'hasMany') {
+        relationships.hasMany[key] = true;
       } else if (property?.constructor?.name === 'ModelProperty') {
         const transforms = Orm.instance.transforms;
         columns[key] = getMysqlType(property.type, transforms[property.type]);
@@ -196,7 +191,7 @@ export function introspectViews() {
     }
 
     schemas[name] = {
-      viewName: sanitizeTableName(getPluralName(name)),
+      viewName: getPluralName(name),
       source,
       groupBy: viewClass.groupBy || undefined,
       columns,
@@ -218,9 +213,9 @@ export function buildViewDDL(name, viewSchema, modelSchemas = {}) {
 
   const sourceModelName = viewSchema.source;
   const sourceSchema = modelSchemas[sourceModelName];
-  const sourceTable = sanitizeTableName(sourceSchema
+  const sourceTable = sourceSchema
     ? sourceSchema.table
-    : getPluralName(sourceModelName));
+    : getPluralName(sourceModelName);
 
   const selectColumns = [];
   const joins = [];
@@ -246,7 +241,8 @@ export function buildViewDDL(name, viewSchema, modelSchemas = {}) {
     } else {
       // Relationship aggregate
       const relName = aggProp.relationship;
-      const relTable = sanitizeTableName(getPluralName(relName));
+      const relModelName = camelCaseToKebabCase(relName);
+      const relTable = getPluralName(relModelName);
 
       if (aggProp.aggregateType === 'count') {
         selectColumns.push(`${aggProp.mysqlFunction}(\`${relTable}\`.\`id\`) AS \`${key}\``);
@@ -285,7 +281,7 @@ export function buildViewDDL(name, viewSchema, modelSchemas = {}) {
     groupBy = `\nGROUP BY \`${sourceTable}\`.\`id\``;
   }
 
-  const viewName = sanitizeTableName(viewSchema.viewName);
+  const viewName = viewSchema.viewName;
   const sql = `CREATE OR REPLACE VIEW \`${viewName}\` AS\nSELECT\n  ${selectColumns.join(',\n  ')}\nFROM \`${sourceTable}\`${joinClauses ? '\n  ' + joinClauses : ''}${groupBy}`;
 
   return sql;

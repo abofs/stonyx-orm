@@ -11,7 +11,7 @@ export default function belongsTo(modelName) {
   const pendingHasManyQueue = relationships.get('pending');
   const pendingBelongsToQueue = relationships.get('pendingBelongsTo');
 
-  const fn = (sourceRecord, rawData, options) => {
+  return (sourceRecord, rawData, options) => {
     if (!rawData) return null;
 
     const { __name: sourceModelName } = sourceRecord.__model;
@@ -60,7 +60,4 @@ export default function belongsTo(modelName) {
 
     return output;
   }
-
-  fn.__relatedModelName = modelName;
-  return fn;
 }
