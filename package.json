@@ -37,13 +37,13 @@
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "stonyx": "0.2.3-beta.6",
+    "@stonyx/cron": "0.2.1-beta.15",
     "@stonyx/events": "0.1.1-beta.7",
-    "@stonyx/cron": "0.2.1-beta.15"
+    "stonyx": "0.2.3-beta.6"
   },
   "peerDependencies": {
-    "mysql2": "^3.0.0",
-    "@stonyx/rest-server": ">=0.2.1-beta.14"
+    "@stonyx/rest-server": ">=0.2.1-beta.14",
+    "mysql2": "^3.0.0"
   },
   "peerDependenciesMeta": {
     "mysql2": {
@@ -56,6 +56,7 @@
   "devDependencies": {
     "@stonyx/rest-server": "0.2.1-beta.19",
     "@stonyx/utils": "0.2.3-beta.5",
+    "mysql2": "^3.20.0",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
   }
