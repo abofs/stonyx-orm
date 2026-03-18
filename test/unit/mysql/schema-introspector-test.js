@@ -75,12 +75,12 @@ module('[Unit] Schema Introspector — buildTableDDL', function() {
     assert.true(ddl.includes('`author_id` INT'), 'author_id FK should be INT to match authors numeric PK');
   });
 
-  test('access-link DDL has correct table name access-links', function(assert) {
+  test('access-link DDL has correct table name access_links', function(assert) {
     const schemas = smartLockSchemas();
     const ddl = buildTableDDL('access-link', schemas['access-link'], schemas);
 
-    assert.true(ddl.includes('`access-links`'), 'table name should be access-links (pluralized with hyphen)');
-    assert.false(ddl.includes('`access-link`('), 'should not use singular access-link as table name');
+    assert.true(ddl.includes('`access_links`'), 'table name should be access_links (dashes converted to underscores)');
+    assert.false(ddl.includes('`access-links`'), 'should not use dashes in table name');
   });
 
   test('FK constraint references correct table name', function(assert) {
