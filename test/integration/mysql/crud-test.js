@@ -1,6 +1,6 @@
 import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { setupMysqlTests, pool, skipIfNoMysql } from '../../helpers/mysql-test-helper.js';
+import { setupMysqlTests, pool } from '../../helpers/mysql-test-helper.js';
 import MysqlDB from '../../../src/mysql/mysql-db.js';
 import { introspectModels, introspectViews } from '../../../src/mysql/schema-introspector.js';
 import { buildInsert, buildUpdate, buildDelete, buildSelect } from '../../../src/mysql/query-builder.js';
@@ -29,9 +29,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   }
 
   QUnit.test('_persistCreate inserts a record with string id', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
     const schemas = introspectModels();
     const schema = schemas['owner'];
 
@@ -50,9 +48,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   });
 
   QUnit.test('findRecord reads back a record from MySQL', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
 
     // Insert raw data directly into MySQL
     await pool.execute(
@@ -69,9 +65,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   });
 
   QUnit.test('findAll returns all records', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
 
     // Insert multiple records
     await pool.execute('INSERT INTO `owners` (`id`, `gender`, `age`) VALUES (?, ?, ?)', ['o1', 'male', 20]);
@@ -84,9 +78,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   });
 
   QUnit.test('_persistUpdate writes only changed columns', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
 
     // Insert raw data directly
     await pool.execute(
@@ -107,9 +99,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   });
 
   QUnit.test('_persistUpdate with null clears the column', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
 
     // Insert raw data
     await pool.execute(
@@ -128,9 +118,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   });
 
   QUnit.test('_persistDelete removes the record', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
 
     // Insert raw data
     await pool.execute(
@@ -149,9 +137,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   });
 
   QUnit.test('_rowToRawData converts TINYINT(1) to boolean', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
     const schema = {
       columns: { active: 'TINYINT(1)' },
       foreignKeys: {},
@@ -173,9 +159,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   });
 
   QUnit.test('_rowToRawData parses JSON columns', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
     const schema = {
       columns: { metadata: 'JSON' },
       foreignKeys: {},
@@ -190,9 +174,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
   });
 
   QUnit.test('_rowToRawData remaps FK columns', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
     const schema = {
       columns: {},
       foreignKeys: {

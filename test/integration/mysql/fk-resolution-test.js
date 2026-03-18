@@ -1,6 +1,6 @@
 import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { setupMysqlTests, pool, skipIfNoMysql } from '../../helpers/mysql-test-helper.js';
+import { setupMysqlTests, pool } from '../../helpers/mysql-test-helper.js';
 import MysqlDB from '../../../src/mysql/mysql-db.js';
 import { introspectModels, introspectViews } from '../../../src/mysql/schema-introspector.js';
 import { buildInsert, buildUpdate, buildDelete, buildSelect } from '../../../src/mysql/query-builder.js';
@@ -29,9 +29,7 @@ QUnit.module('[Integration] MySQL — FK Resolution', function (hooks) {
   }
 
   QUnit.test('_recordToRow extracts FK value from relationship', function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
     const schemas = introspectModels();
     const animalSchema = schemas['animal'];
 
@@ -48,9 +46,7 @@ QUnit.module('[Integration] MySQL — FK Resolution', function (hooks) {
   });
 
   QUnit.test('round-trip: insert with FK and read back with FK remapped', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
 
     // Insert owner directly into MySQL
     await pool.execute(
@@ -76,9 +72,7 @@ QUnit.module('[Integration] MySQL — FK Resolution', function (hooks) {
   });
 
   QUnit.test('findAll with FK condition filters correctly', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
 
     // Insert 2 owners
     await pool.execute('INSERT INTO `owners` (`id`, `gender`, `age`) VALUES (?, ?, ?)', ['filter-o1', 'male', 25]);
@@ -95,9 +89,7 @@ QUnit.module('[Integration] MySQL — FK Resolution', function (hooks) {
   });
 
   QUnit.test('trait belongsTo category with string FK', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const db = createDb();
+const db = createDb();
 
     // Insert category with string ID
     await pool.execute('INSERT INTO `categories` (`id`, `name`) VALUES (?, ?)', ['cat-behavior', 'Behavior']);

@@ -1,6 +1,6 @@
 import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { setupMysqlTests, pool, skipIfNoMysql, mysqlSkipped } from '../../helpers/mysql-test-helper.js';
+import { setupMysqlTests, pool } from '../../helpers/mysql-test-helper.js';
 import { introspectModels, introspectViews, buildViewDDL } from '../../../src/mysql/schema-introspector.js';
 
 QUnit.module('[Integration] MySQL — View DDL', function (hooks) {
@@ -8,16 +8,14 @@ QUnit.module('[Integration] MySQL — View DDL', function (hooks) {
   setupMysqlTests(hooks, { tables: ['category', 'owner', 'animal', 'trait', 'phone-number'] });
 
   hooks.afterEach(async function () {
-    if (mysqlSkipped || !pool) return;
+    if (!pool) return;
 
     await pool.execute('DROP VIEW IF EXISTS `animal-count-by-sizes`');
     await pool.execute('DROP VIEW IF EXISTS `owner-animal-counts`');
   });
 
   QUnit.test('animal-count-by-size view DDL executes successfully', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const modelSchemas = introspectModels();
+const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['animal-count-by-size'];
 
@@ -33,9 +31,7 @@ QUnit.module('[Integration] MySQL — View DDL', function (hooks) {
   });
 
   QUnit.test('animal-count-by-size view groups correctly', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const modelSchemas = introspectModels();
+const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['animal-count-by-size'];
 
@@ -73,9 +69,7 @@ QUnit.module('[Integration] MySQL — View DDL', function (hooks) {
   // through the hasMany relationship to the 'animal' model and using the 'animals' table.
   // This produces LEFT JOIN `petss` (or `pets`) instead of LEFT JOIN `animals`.
   QUnit.test('owner-animal-count view DDL executes — known bug with relationship resolution', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const modelSchemas = introspectModels();
+const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['owner-animal-count'];
 
@@ -103,9 +97,7 @@ QUnit.module('[Integration] MySQL — View DDL', function (hooks) {
   });
 
   QUnit.test('INSERT into view fails (read-only)', async function (assert) {
-    if (skipIfNoMysql(assert)) return;
-
-    const modelSchemas = introspectModels();
+const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['animal-count-by-size'];
 
