@@ -9,6 +9,7 @@ QUnit.module('[Integration] MySQL — Migration Generation', function (hooks) {
   setupMysqlTests(hooks, { tables: ['category', 'owner', 'animal', 'trait', 'phone-number'] });
 
   QUnit.test('buildTableDDL produces valid SQL that MySQL accepts', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 // Tables are already created by setupMysqlTests — verify they exist
     const schemas = introspectModels();
     const order = getTopologicalOrder(schemas);
@@ -26,6 +27,7 @@ QUnit.module('[Integration] MySQL — Migration Generation', function (hooks) {
   });
 
   QUnit.test('initial snapshot from models has correct structure', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
     const snapshot = schemasToSnapshot(schemas);
 
@@ -39,6 +41,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('diffSnapshots detects added model', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
     const currentSnapshot = schemasToSnapshot(schemas);
 
@@ -52,6 +55,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('diffSnapshots detects added column', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
     const currentSnapshot = schemasToSnapshot(schemas);
 
@@ -68,6 +72,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('diffSnapshots detects removed column', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
     const currentSnapshot = schemasToSnapshot(schemas);
 
@@ -84,6 +89,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('diffSnapshots detects column type change', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
     const currentSnapshot = schemasToSnapshot(schemas);
 
@@ -101,6 +107,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('ALTER TABLE ADD COLUMN SQL is valid MySQL', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 // Add a test column to owners, verify, then clean up
     await pool.execute('ALTER TABLE `owners` ADD COLUMN `nickname` VARCHAR(255)');
 
@@ -121,6 +128,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('buildViewDDL produces valid SQL for animal-count-by-size view', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['animal-count-by-size'];

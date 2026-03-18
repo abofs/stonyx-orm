@@ -13,17 +13,29 @@ const TEST_MYSQL_CONFIG = {
 };
 
 // Shared pool reference — importable by test files
+// null means MySQL is unavailable — tests should assert.expect(0) and return
 export let pool = null;
 
 /**
  * Setup MySQL integration test lifecycle.
  * Must be called AFTER setupIntegrationTests(hooks) so Orm.instance exists.
+ * If MySQL is unreachable, pool stays null and tests should guard with:
+ *   if (!pool) { assert.expect(0); return; }
  */
 export function setupMysqlTests(hooks, { tables = [] } = {}) {
   let tableOrder = [];
   let tableNames = {};
 
   hooks.before(async function () {
+    // Check if MySQL is reachable before attempting setup
+    try {
+      const conn = await mysql.createConnection(TEST_MYSQL_CONFIG);
+      await conn.end();
+    } catch {
+      // MySQL not available — pool stays null, tests will skip
+      return;
+    }
+
     // Create pool
     pool = mysql.createPool(TEST_MYSQL_CONFIG);
 

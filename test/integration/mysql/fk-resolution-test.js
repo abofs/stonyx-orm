@@ -29,6 +29,7 @@ QUnit.module('[Integration] MySQL — FK Resolution', function (hooks) {
   }
 
   QUnit.test('_recordToRow extracts FK value from relationship', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const db = createDb();
     const schemas = introspectModels();
     const animalSchema = schemas['animal'];
@@ -46,6 +47,7 @@ const db = createDb();
   });
 
   QUnit.test('round-trip: insert with FK and read back with FK remapped', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const db = createDb();
 
     // Insert owner directly into MySQL
@@ -72,6 +74,7 @@ const db = createDb();
   });
 
   QUnit.test('findAll with FK condition filters correctly', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const db = createDb();
 
     // Insert 2 owners
@@ -89,6 +92,7 @@ const db = createDb();
   });
 
   QUnit.test('trait belongsTo category with string FK', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const db = createDb();
 
     // Insert category with string ID
