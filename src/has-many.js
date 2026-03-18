@@ -59,6 +59,6 @@ export default function hasMany(modelName) {
     return output;
   }
 
-  fn.__relatedModelName = modelName;
+  Object.defineProperty(fn, '__relatedModelName', { value: modelName });
   return fn;
 }

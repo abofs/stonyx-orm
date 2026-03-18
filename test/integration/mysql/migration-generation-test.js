@@ -44,11 +44,11 @@ QUnit.module('[Integration] MySQL — Migration Generation', function (hooks) {
     // Verify view exists in information_schema
     const [rows] = await pool.execute(
       `SELECT TABLE_NAME FROM information_schema.VIEWS
-       WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'animal-count-by-sizes'`
+       WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'animal_count_by_sizes'`
     );
     assert.strictEqual(rows.length, 1, 'view exists in information_schema');
 
     // Clean up
-    await pool.execute('DROP VIEW IF EXISTS `animal-count-by-sizes`');
+    await pool.execute('DROP VIEW IF EXISTS `animal_count_by_sizes`');
   });
 });
