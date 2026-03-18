@@ -10,8 +10,8 @@ QUnit.module('[Integration] MySQL — View DDL', function (hooks) {
   hooks.afterEach(async function () {
     if (!pool) return;
 
-    await pool.execute('DROP VIEW IF EXISTS `animal-count-by-sizes`');
-    await pool.execute('DROP VIEW IF EXISTS `owner-animal-counts`');
+    await pool.execute('DROP VIEW IF EXISTS `animal_count_by_sizes`');
+    await pool.execute('DROP VIEW IF EXISTS `owner_animal_counts`');
   });
 
   QUnit.test('animal-count-by-size view DDL executes successfully', async function (assert) {
@@ -26,9 +26,9 @@ const modelSchemas = introspectModels();
     // Verify the view exists in information_schema
     const [rows] = await pool.execute(
       `SELECT TABLE_NAME FROM information_schema.VIEWS
-       WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'animal-count-by-sizes'`
+       WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'animal_count_by_sizes'`
     );
-    assert.strictEqual(rows.length, 1, 'animal-count-by-sizes view exists in MySQL');
+    assert.strictEqual(rows.length, 1, 'animal_count_by_sizes view exists in MySQL');
   });
 
   QUnit.test('animal-count-by-size view groups correctly', async function (assert) {
@@ -49,7 +49,7 @@ const modelSchemas = introspectModels();
     await pool.execute(ddl);
 
     // Query the view
-    const [rows] = await pool.execute('SELECT * FROM `animal-count-by-sizes` ORDER BY `id`');
+    const [rows] = await pool.execute('SELECT * FROM `animal_count_by_sizes` ORDER BY `id`');
 
     assert.strictEqual(rows.length, 2, 'two size groups returned');
 
@@ -86,7 +86,7 @@ const modelSchemas = introspectModels();
       // If it succeeds (unlikely), verify the view exists
       const [rows] = await pool.execute(
         `SELECT TABLE_NAME FROM information_schema.VIEWS
-         WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'owner-animal-counts'`
+         WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'owner_animal_counts'`
       );
       assert.strictEqual(rows.length, 1, 'view created despite bug expectation');
     } catch (error) {
@@ -112,7 +112,7 @@ const modelSchemas = introspectModels();
     // Attempt to INSERT into the view — should fail
     try {
       await pool.execute(
-        'INSERT INTO `animal-count-by-sizes` (`id`, `animalCount`, `averageAge`) VALUES (?, ?, ?)',
+        'INSERT INTO `animal_count_by_sizes` (`id`, `animalCount`, `averageAge`) VALUES (?, ?, ?)',
         ['tiny', 1, 2]
       );
       assert.ok(false, 'INSERT should have failed');
