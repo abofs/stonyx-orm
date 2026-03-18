@@ -1,16 +1,15 @@
 import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
-import { canConnectToMysql, setupMysqlTests, pool } from '../../helpers/mysql-test-helper.js';
+import { setupMysqlTests, pool, skipIfNoMysql } from '../../helpers/mysql-test-helper.js';
 import { introspectModels, introspectViews, getTopologicalOrder } from '../../../src/mysql/schema-introspector.js';
 
-const mysqlAvailable = await canConnectToMysql();
-const moduleFunc = mysqlAvailable || !process.env.CI ? QUnit.module : QUnit.module.skip;
-
-moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
+QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   setupIntegrationTests(hooks);
   setupMysqlTests(hooks, { tables: ['category', 'owner', 'animal', 'trait', 'phone-number'] });
 
   QUnit.test('introspectModels returns schemas for all sample models', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
 
     assert.ok(schemas['owner'], 'owner schema exists');
@@ -21,6 +20,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('owner schema has correct table name, id type, and column types', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
     const owner = schemas['owner'];
 
@@ -31,6 +32,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('animal schema has FK to owner', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
     const animal = schemas['animal'];
 
@@ -40,6 +43,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('all tables created successfully in MySQL', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const expectedTables = ['categories', 'owners', 'animals', 'traits', 'phone-numbers'];
 
     for (const tableName of expectedTables) {
@@ -52,6 +57,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('owner table has correct column types in MySQL', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const [rows] = await pool.execute(
       `SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'owners'
@@ -71,6 +78,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('animal table FK constraint references owners', async function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const [rows] = await pool.execute(
       `SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
        FROM information_schema.KEY_COLUMN_USAGE
@@ -87,6 +96,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('topological order places parents before children', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const schemas = introspectModels();
     const order = getTopologicalOrder(schemas);
 
@@ -100,6 +111,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('introspectViews returns schemas for sample views', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const viewSchemas = introspectViews();
 
     assert.ok(viewSchemas['owner-animal-count'], 'owner-animal-count view schema exists');
@@ -107,6 +120,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('owner-animal-count view schema has correct structure', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const viewSchemas = introspectViews();
     const view = viewSchemas['owner-animal-count'];
 
@@ -117,6 +132,8 @@ moduleFunc('[Integration] MySQL — Schema Introspection', function (hooks) {
   });
 
   QUnit.test('animal-count-by-size view schema has groupBy size', function (assert) {
+    if (skipIfNoMysql(assert)) return;
+
     const viewSchemas = introspectViews();
     const view = viewSchemas['animal-count-by-size'];
 
