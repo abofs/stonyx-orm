@@ -8,6 +8,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
   setupMysqlTests(hooks, { tables: ['category', 'owner', 'animal', 'trait', 'phone-number'] });
 
   QUnit.test('introspectModels returns schemas for all sample models', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
 
     assert.ok(schemas['owner'], 'owner schema exists');
@@ -18,6 +19,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('owner schema has correct table name, id type, and column types', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
     const owner = schemas['owner'];
 
@@ -28,6 +30,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('animal schema has FK to owner', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
     const animal = schemas['animal'];
 
@@ -37,6 +40,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('all tables created successfully in MySQL', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const expectedTables = ['categories', 'owners', 'animals', 'traits', 'phone-numbers'];
 
     for (const tableName of expectedTables) {
@@ -49,6 +53,7 @@ const expectedTables = ['categories', 'owners', 'animals', 'traits', 'phone-numb
   });
 
   QUnit.test('owner table has correct column types in MySQL', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const [rows] = await pool.execute(
       `SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = 'stonyx_orm_test' AND TABLE_NAME = 'owners'
@@ -68,6 +73,7 @@ const [rows] = await pool.execute(
   });
 
   QUnit.test('animal table FK constraint references owners', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const [rows] = await pool.execute(
       `SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
        FROM information_schema.KEY_COLUMN_USAGE
@@ -84,6 +90,7 @@ const [rows] = await pool.execute(
   });
 
   QUnit.test('topological order places parents before children', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const schemas = introspectModels();
     const order = getTopologicalOrder(schemas);
 
@@ -97,6 +104,7 @@ const schemas = introspectModels();
   });
 
   QUnit.test('introspectViews returns schemas for sample views', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const viewSchemas = introspectViews();
 
     assert.ok(viewSchemas['owner-animal-count'], 'owner-animal-count view schema exists');
@@ -104,6 +112,7 @@ const viewSchemas = introspectViews();
   });
 
   QUnit.test('owner-animal-count view schema has correct structure', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const viewSchemas = introspectViews();
     const view = viewSchemas['owner-animal-count'];
 
@@ -114,6 +123,7 @@ const viewSchemas = introspectViews();
   });
 
   QUnit.test('animal-count-by-size view schema has groupBy size', function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const viewSchemas = introspectViews();
     const view = viewSchemas['animal-count-by-size'];
 

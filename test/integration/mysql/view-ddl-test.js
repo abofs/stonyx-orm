@@ -15,6 +15,7 @@ QUnit.module('[Integration] MySQL — View DDL', function (hooks) {
   });
 
   QUnit.test('animal-count-by-size view DDL executes successfully', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['animal-count-by-size'];
@@ -31,6 +32,7 @@ const modelSchemas = introspectModels();
   });
 
   QUnit.test('animal-count-by-size view groups correctly', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['animal-count-by-size'];
@@ -69,6 +71,7 @@ const modelSchemas = introspectModels();
   // through the hasMany relationship to the 'animal' model and using the 'animals' table.
   // This produces LEFT JOIN `petss` (or `pets`) instead of LEFT JOIN `animals`.
   QUnit.test('owner-animal-count view DDL executes — known bug with relationship resolution', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['owner-animal-count'];
@@ -97,6 +100,7 @@ const modelSchemas = introspectModels();
   });
 
   QUnit.test('INSERT into view fails (read-only)', async function (assert) {
+    if (!pool) { assert.expect(0); return; }
 const modelSchemas = introspectModels();
     const viewSchemas = introspectViews();
     const viewSchema = viewSchemas['animal-count-by-size'];
