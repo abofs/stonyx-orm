@@ -93,8 +93,8 @@ const modelSchemas = introspectModels();
       // Expected: the LEFT JOIN references a non-existent table
       assert.ok(error, 'DDL failed as expected due to incorrect table reference from relationship name');
       assert.ok(
-        ddl.includes('`pets`') || ddl.includes('`petss`'),
-        'DDL incorrectly references pets/petss table instead of animals'
+        ddl.includes('`petses`'),
+        'DDL incorrectly references petses table instead of animals (pluralize("pets") = "petses")'
       );
     }
   });

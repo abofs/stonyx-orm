@@ -34,11 +34,11 @@ const db = createDb();
     const schemas = introspectModels();
     const animalSchema = schemas['animal'];
 
-    // Create an owner record in the store
-    const owner = createRecord('owner', { id: 'fk-owner-1', gender: 'male', age: 30 });
+    // Create an owner record in the store (bypass serializer — using column values directly)
+    const owner = createRecord('owner', { id: 'fk-owner-1', gender: 'male', age: 30 }, { serialize: false, transform: false });
 
     // Create an animal record with the owner relationship
-    const animal = createRecord('animal', { id: 1, type: 'dog', age: 3, size: 'large', owner: 'fk-owner-1' });
+    const animal = createRecord('animal', { id: 1, type: 'dog', age: 3, size: 'large', owner: 'fk-owner-1' }, { serialize: false, transform: false });
 
     const row = db._recordToRow(animal, animalSchema);
 
@@ -50,13 +50,14 @@ const db = createDb();
     if (!pool) { assert.expect(0); return; }
 const db = createDb();
 
-    // Insert owner directly into MySQL
+    // Create owner in ORM store so belongsTo can resolve
+    createRecord('owner', { id: 'rt-owner-1', gender: 'female', age: 28 }, { serialize: false, transform: false });
+
+    // Insert owner and animal directly into MySQL
     await pool.execute(
       'INSERT INTO `owners` (`id`, `gender`, `age`) VALUES (?, ?, ?)',
       ['rt-owner-1', 'female', 28]
     );
-
-    // Insert animal with FK to owner
     await pool.execute(
       'INSERT INTO `animals` (`type`, `age`, `size`, `owner_id`) VALUES (?, ?, ?, ?)',
       ['{"name":"dog"}', 5, 'medium', 'rt-owner-1']
@@ -70,7 +71,7 @@ const db = createDb();
     const record = await db.findRecord('animal', animalId);
 
     assert.ok(record, 'animal record found');
-    assert.strictEqual(record.__data.owner, 'rt-owner-1', 'owner FK remapped from owner_id to owner');
+    assert.strictEqual(record.__relationships.owner?.id, 'rt-owner-1', 'owner FK resolved from owner_id');
   });
 
   QUnit.test('findAll with FK condition filters correctly', async function (assert) {
@@ -95,10 +96,11 @@ const db = createDb();
     if (!pool) { assert.expect(0); return; }
 const db = createDb();
 
-    // Insert category with string ID
-    await pool.execute('INSERT INTO `categories` (`id`, `name`) VALUES (?, ?)', ['cat-behavior', 'Behavior']);
+    // Create category in ORM store so belongsTo can resolve
+    createRecord('category', { id: 'cat-behavior', name: 'Behavior' }, { serialize: false, transform: false });
 
-    // Insert trait referencing category
+    // Insert category and trait directly into MySQL
+    await pool.execute('INSERT INTO `categories` (`id`, `name`) VALUES (?, ?)', ['cat-behavior', 'Behavior']);
     await pool.execute(
       'INSERT INTO `traits` (`type`, `value`, `category_id`) VALUES (?, ?, ?)',
       ['personality', 'friendly', 'cat-behavior']
@@ -112,6 +114,6 @@ const db = createDb();
     const record = await db.findRecord('trait', traitId);
 
     assert.ok(record, 'trait record found');
-    assert.strictEqual(record.__data.category, 'cat-behavior', 'category FK remapped with string value');
+    assert.strictEqual(record.__relationships.category?.id, 'cat-behavior', 'category FK resolved with string value');
   });
 });

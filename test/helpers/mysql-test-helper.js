@@ -1,5 +1,6 @@
 // test/helpers/mysql-test-helper.js
 import mysql from 'mysql2/promise';
+import { store } from '@stonyx/orm';
 import { introspectModels, buildTableDDL, getTopologicalOrder } from '../../src/mysql/schema-introspector.js';
 import MysqlDB from '../../src/mysql/mysql-db.js';
 
@@ -67,6 +68,17 @@ export function setupMysqlTests(hooks, { tables = [] } = {}) {
 
   hooks.afterEach(async function () {
     MysqlDB.instance = null;
+
+    // Unload each record individually to prevent leakage into other test modules.
+    // Individual unloads clean up relationship references without wiping registries.
+    for (const name of tableOrder) {
+      const modelStore = store.get(name);
+      if (!modelStore || modelStore.size === 0) continue;
+      for (const id of [...modelStore.keys()]) {
+        store.unloadRecord(name, id);
+      }
+    }
+
     if (!pool) return;
 
     await pool.execute('SET FOREIGN_KEY_CHECKS=0');
@@ -77,6 +89,11 @@ export function setupMysqlTests(hooks, { tables = [] } = {}) {
   });
 
   hooks.after(async function () {
+    for (const name of tableOrder) {
+      if (store.get(name)?.size > 0) store.remove(name);
+      if (!store.get(name)) store.set(name, new Map());
+    }
+
     if (!pool) return;
 
     await pool.execute('SET FOREIGN_KEY_CHECKS=0');

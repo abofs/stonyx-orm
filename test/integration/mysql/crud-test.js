@@ -32,7 +32,7 @@ QUnit.module('[Integration] MySQL — CRUD', function (hooks) {
     if (!pool) { assert.expect(0); return; }
     const db = createDb();
 
-    const record = createRecord('owner', { id: 'owner-1', gender: 'male', age: 30 });
+    const record = createRecord('owner', { id: 'owner-1', gender: 'male', age: 30 }, { serialize: false, transform: false });
     await db._persistCreate('owner', {}, { data: { id: 'owner-1' } });
 
     const [rows] = await pool.execute('SELECT * FROM `owners` WHERE `id` = ?', ['owner-1']);
