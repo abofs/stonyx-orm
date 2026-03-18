@@ -16,7 +16,7 @@ export default function hasMany(modelName) {
   const globalRelationships = relationships.get('global');
   const pendingRelationships = relationships.get('pending');
 
-  return (sourceRecord, rawData, options) => {
+  const fn = (sourceRecord, rawData, options) => {
     const { __name: sourceModelName } = sourceRecord.__model;
     const relationshipId = sourceRecord.id;
     const relationship = getRelationships('hasMany', sourceModelName, modelName, relationshipId);
@@ -58,4 +58,7 @@ export default function hasMany(modelName) {
 
     return output;
   }
+
+  Object.defineProperty(fn, '__relatedModelName', { value: modelName });
+  return fn;
 }
