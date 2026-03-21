@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@stonyx/cron':
-        specifier: 0.2.1-beta.14
-        version: 0.2.1-beta.14
+        specifier: 0.2.1-beta.15
+        version: 0.2.1-beta.15
       '@stonyx/events':
         specifier: 0.1.1-beta.7
         version: 0.1.1-beta.7
@@ -22,8 +22,8 @@ importers:
         version: 0.2.3-beta.6
     devDependencies:
       '@stonyx/rest-server':
-        specifier: 0.2.1-beta.18
-        version: 0.2.1-beta.18
+        specifier: 0.2.1-beta.19
+        version: 0.2.1-beta.19
       '@stonyx/utils':
         specifier: 0.2.3-beta.5
         version: 0.2.3-beta.5
@@ -45,14 +45,14 @@ packages:
   '@sinonjs/samsam@8.0.3':
     resolution: {integrity: sha512-hw6HbX+GyVZzmaYNh82Ecj1vdGZrqVIn/keDTg63IgAwiQPO+xCz99uG6Woqgb4tM0mUiFENKZ4cqd7IX94AXQ==}
 
-  '@stonyx/cron@0.2.1-beta.14':
-    resolution: {integrity: sha512-zvwDc/OHIU6NHtq0Ih9gnY86fHklod1CsSvn029JMBM9h1AvoGFdqDWsgnYkHZ5yKSmzFyQ3vHPn1ZVagRtddA==}
+  '@stonyx/cron@0.2.1-beta.15':
+    resolution: {integrity: sha512-D4FlRh55jTeviPweCNPs/fB8mtbVLTxluORi8qkG/BKbu6xp+wN2/DsMPfruk89unkcvec3K/8hButz3IHEmGQ==}
 
   '@stonyx/events@0.1.1-beta.7':
     resolution: {integrity: sha512-0UyA6A7vT1xBTzOn/SvjZN0s3bhX4Q5pk+61uzwiLRmydKgw7+usChACeXYoL/qfio4xTlckb4QyY+Qnxu/ZKQ==}
 
-  '@stonyx/rest-server@0.2.1-beta.18':
-    resolution: {integrity: sha512-2lPLjkQ0oALDdC0JBfslM/0U043uIOvcjXA8f44N2g3FhGFXOZL2H9YApVN2Wt2ZxY0BDgHLcL2b5Yf9P3mW+Q==}
+  '@stonyx/rest-server@0.2.1-beta.19':
+    resolution: {integrity: sha512-8K8+4yZZhJyEhKPgFtL0tuvdH4JKEAgo2YfbfnG7n4ZHFx4ll16+Jh4dvyz3wUspKE4ntNM2NvyWSf8YLXQ1QQ==}
 
   '@stonyx/utils@0.2.3-beta.5':
     resolution: {integrity: sha512-FRxrTg34yuXvDgxOWruZT2ybuyNIOOlLFI5SjFJeMd9oWvA5EbOKe7bi1yQ8jC/2cyp7tkEQLW6e9yQMjC0JYA==}
@@ -449,13 +449,13 @@ snapshots:
       '@sinonjs/commons': 3.0.1
       type-detect: 4.1.0
 
-  '@stonyx/cron@0.2.1-beta.14':
+  '@stonyx/cron@0.2.1-beta.15':
     dependencies:
       stonyx: 0.2.3-beta.6
 
   '@stonyx/events@0.1.1-beta.7': {}
 
-  '@stonyx/rest-server@0.2.1-beta.18':
+  '@stonyx/rest-server@0.2.1-beta.19':
     dependencies:
       cors: 2.8.6
       express: 5.2.1
