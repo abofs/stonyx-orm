@@ -223,6 +223,27 @@ Set the `MYSQL_HOST` environment variable to enable MySQL persistence. The ORM l
 | `stonyx db:migrate:rollback` | Rollback the most recent migration |
 | `stonyx db:migrate:status` | Show migration status |
 
+### Running MySQL Tests
+
+The ORM includes integration tests that run against a real MySQL database. These are optional — all other tests work without MySQL.
+
+**One-time setup:**
+
+```bash
+# Requires local MySQL 8.0+ running
+./scripts/setup-test-db.sh
+```
+
+This creates a `stonyx_orm_test` database with a `stonyx_test` user. Safe to re-run.
+
+**Running tests:**
+
+```bash
+npm test
+```
+
+MySQL integration tests run automatically when MySQL is available. In CI (where `CI=true`), they skip gracefully.
+
 ## REST Server Integration
 
 The ORM can automatically register REST routes using your access classes.
