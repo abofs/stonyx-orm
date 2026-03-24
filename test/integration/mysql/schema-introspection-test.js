@@ -8,7 +8,7 @@ QUnit.module('[Integration] MySQL — Schema Introspection', function (hooks) {
 
   QUnit.test('all tables created successfully in MySQL', async function (assert) {
     if (!pool) { assert.expect(0); return; }
-    const expectedTables = ['categories', 'owners', 'animals', 'traits', 'phone-numbers'];
+    const expectedTables = ['categories', 'owners', 'animals', 'traits', 'phone_numbers'];
 
     for (const tableName of expectedTables) {
       const [rows] = await pool.execute(
