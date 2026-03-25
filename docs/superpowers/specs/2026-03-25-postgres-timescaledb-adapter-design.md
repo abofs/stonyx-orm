@@ -347,15 +347,20 @@ async shutdown() {
 
 ### `src/store.js` — Property Rename
 
-All references to `_mysqlDb` rename to `_sqlDb`. The interface is unchanged — `find()`, `findAll()`, `query()` call the same methods on whichever adapter is wired in:
+All references to `_mysqlDb` rename to `_sqlDb` across the entire file — the property declaration, all method bodies (`find()`, `findAll()`, `query()`), and view-check guards. Specifically:
+
+- Property declaration: `_mysqlDb = null` → `_sqlDb = null`
+- `find()`: two references (view guard check, memory:false query)
+- `findAll()`: two references (view guard check, memory:false query)
+- `query()`: one reference
+- JSDoc `@type {MysqlDB|null}` → `@type {Object|null}` (adapter-agnostic)
+- Comments updated: "Always queries MySQL" → "Always queries the database", etc.
 
 ```js
 // Before: this._mysqlDb
 // After:  this._sqlDb
 _sqlDb = null;
 ```
-
-JSDoc comments are updated to say "SQL database" instead of "MySQL."
 
 ### `src/manage-record.js` — Pending ID Flag
 
@@ -433,6 +438,14 @@ const isPendingId = record.__data.__pendingSqlId;
 delete record.__data.__pendingSqlId;
 ```
 
+### Dual-Adapter Guard
+
+If both `config.orm.mysql` and `config.orm.postgres` are set, `main.js` throws a clear error: `"Cannot configure both MySQL and Postgres adapters. Choose one."` This prevents silent precedence where MySQL would win by virtue of being checked first.
+
+### `save()` Method
+
+`PostgresDB.save()` is a no-op, identical to `MysqlDB.save()`. `orm-request.js` calls `Orm.db.save()` after write operations — this is harmless for both SQL adapters (they persist immediately via `persist()`).
+
 ### Backward Compatibility
 
 These are all internal/private properties (`_` prefixed or `__` prefixed). No public API changes. Consumer projects are unaffected — they only interact with `config.orm.mysql` or `config.orm.postgres`, `createRecord`, `updateRecord`, and `store`.
@@ -448,7 +461,7 @@ Functionally identical to MySQL. Key differences:
 **`ensureMigrationsTable()`:**
 ```sql
 CREATE TABLE IF NOT EXISTS "__migrations" (
-  id SERIAL PRIMARY KEY,
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   filename VARCHAR(255) NOT NULL UNIQUE,
   applied_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 )
