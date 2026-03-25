@@ -57,12 +57,18 @@ module('[Unit] Store.find', function(hooks) {
     assert.strictEqual(record.name, 'Alice', 'falls back to in-memory store');
   });
 
-  test('find defaults to memory:true when no resolver set', async function(assert) {
+  test('find defaults to memory:false when no resolver set (queries MySQL)', async function(assert) {
     const store = createStore();
     store._memoryResolver = null;
 
+    const mockRecord = { id: 1, name: 'Alice' };
+    store._mysqlDb = {
+      findRecord: sinon.stub().resolves(mockRecord)
+    };
+
     const record = await store.find('user', 1);
-    assert.strictEqual(record.name, 'Alice', 'defaults to memory lookup');
+    assert.ok(store._mysqlDb.findRecord.calledOnce, 'queries MySQL when no resolver');
+    assert.strictEqual(record, mockRecord, 'returns MySQL result');
   });
 });
 
@@ -201,10 +207,10 @@ module('[Unit] Store._isMemoryModel', function(hooks) {
     assert.notOk(store._isMemoryModel('alert'), 'memory:false model recognized');
   });
 
-  test('defaults to true when no resolver set', function(assert) {
+  test('defaults to false when no resolver set', function(assert) {
     const store = createStore();
     store._memoryResolver = null;
 
-    assert.ok(store._isMemoryModel('anything'), 'defaults to memory:true');
+    assert.notOk(store._isMemoryModel('anything'), 'defaults to memory:false');
   });
 });

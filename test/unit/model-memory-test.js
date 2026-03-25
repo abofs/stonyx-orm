@@ -5,32 +5,32 @@ const { module, test } = QUnit;
 
 module('[Unit] Model.memory — Static Flag', function() {
 
-  test('Model base class has memory: true by default', function(assert) {
-    assert.strictEqual(Model.memory, true, 'default is memory: true for backward compat');
+  test('Model base class has memory: false by default', function(assert) {
+    assert.strictEqual(Model.memory, false, 'default is memory: false');
   });
 
-  test('subclass inherits memory: true', function(assert) {
-    class Session extends Model {}
+  test('subclass inherits memory: false', function(assert) {
+    class Alert extends Model {}
 
-    assert.strictEqual(Session.memory, true, 'subclass inherits memory: true');
+    assert.strictEqual(Alert.memory, false, 'subclass inherits memory: false');
   });
 
-  test('subclass can override memory to false', function(assert) {
-    class Alert extends Model {
-      static memory = false;
+  test('subclass can override memory to true', function(assert) {
+    class Session extends Model {
+      static memory = true;
     }
 
-    assert.strictEqual(Alert.memory, false, 'subclass overrides to memory: false');
+    assert.strictEqual(Session.memory, true, 'subclass overrides to memory: true');
   });
 
   test('overriding one subclass does not affect base or other subclasses', function(assert) {
-    class MemoryModel extends Model {}
-    class NoMemoryModel extends Model {
-      static memory = false;
+    class NoMemoryModel extends Model {}
+    class MemoryModel extends Model {
+      static memory = true;
     }
 
-    assert.strictEqual(Model.memory, true, 'base class unchanged');
-    assert.strictEqual(MemoryModel.memory, true, 'other subclass unchanged');
-    assert.strictEqual(NoMemoryModel.memory, false, 'override only affects its own class');
+    assert.strictEqual(Model.memory, false, 'base class unchanged');
+    assert.strictEqual(NoMemoryModel.memory, false, 'other subclass unchanged');
+    assert.strictEqual(MemoryModel.memory, true, 'override only affects its own class');
   });
 });
