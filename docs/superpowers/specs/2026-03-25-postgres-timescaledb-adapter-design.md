@@ -27,6 +27,8 @@ Out of scope: continuous aggregates, retention policies, TimescaleDB-specific qu
 
 ## File Structure
 
+### New Files
+
 ```
 src/postgres/
 ├── postgres-db.js           # Main driver (mirrors mysql-db.js)
@@ -38,27 +40,39 @@ src/postgres/
 └── migration-runner.js      # Apply/rollback migrations with transactions
 ```
 
+### Modified Files (ORM core)
+
+These existing files currently hardcode MySQL-specific property names and imports. They must be updated to support adapter-agnostic dispatch:
+
+- **`src/main.js`** — adapter selection logic, property naming
+- **`src/manage-record.js`** — pending ID flag, adapter detection for auto-increment
+- **`src/orm-request.js`** — persist dispatch to active adapter
+- **`src/commands.js`** — CLI migration commands (currently MySQL-only imports)
+
+See [ORM Core Integration Changes](#orm-core-integration-changes) for details.
+
 ---
 
 ## Connection Management
 
-Uses the `pg` library (node-postgres). Pool API mirrors mysql2:
+Uses the `pg` library (node-postgres), lazy-imported to avoid loading when the adapter isn't active (matching MySQL's `await import('mysql2/promise')` pattern):
 
 ```js
-import pg from 'pg';
-const { Pool } = pg;
-
 let pool = null;
 
 export async function getPool(postgresConfig) {
   if (pool) return pool;
+
+  const pg = await import('pg');
+  const { Pool } = pg.default;
+
   pool = new Pool({
     host: postgresConfig.host,
     port: postgresConfig.port,
     user: postgresConfig.user,
     password: postgresConfig.password,
     database: postgresConfig.database,
-    max: postgresConfig.connectionLimit,
+    max: postgresConfig.connectionLimit,  // pg uses 'max' internally
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000,
   });
@@ -192,16 +206,19 @@ Key differences from MySQL:
 
 **Primary keys:**
 ```sql
--- Numeric: SERIAL PRIMARY KEY (replaces INT AUTO_INCREMENT PRIMARY KEY)
+-- Numeric: INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY (modern Postgres, SQL-standard)
 -- String:  VARCHAR(255) PRIMARY KEY
 ```
+
+`GENERATED ALWAYS AS IDENTITY` is preferred over `SERIAL` — it's SQL-standard (Postgres 10+), avoids implicit sequence ownership issues, and is the recommended approach for new schemas.
 
 **Timestamps:**
 ```sql
 "created_at" TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
 "updated_at" TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
--- No ON UPDATE CURRENT_TIMESTAMP (Postgres doesn't support this syntax)
 ```
+
+Postgres lacks MySQL's `ON UPDATE CURRENT_TIMESTAMP`. The `updated_at` column is set by the ORM layer — `_persistUpdate()` includes `updated_at: new Date()` in the changed columns when writing to Postgres. This keeps the logic in the adapter without requiring database triggers.
 
 **Foreign key constraints** — identical logic, `"` quoting instead of backticks.
 
@@ -214,6 +231,8 @@ SELECT create_hypertable('stat_snapshots', 'timestamp');
 ```
 
 If `timeSeries` names a column that doesn't exist in the schema, introspection throws an error.
+
+**TimescaleDB extension check:** Before emitting `create_hypertable()` DDL, the migration generator queries `SELECT * FROM pg_extension WHERE extname = 'timescaledb'`. If the extension is not installed, it throws a clear error: `"TimescaleDB extension is not installed. Install it with: CREATE EXTENSION IF NOT EXISTS timescaledb;"`. This prevents cryptic `function create_hypertable does not exist` errors at migration time.
 
 **FK constraint handling:** Hypertable target tables omit `FOREIGN KEY ... REFERENCES` constraints (TimescaleDB limitation). The FK column itself (`match_id VARCHAR(255)`) is still created. Relationship enforcement stays at the ORM level.
 
@@ -229,7 +248,7 @@ ALTER TABLE "stat_snapshots" SET (
 SELECT add_compression_policy('stat_snapshots', INTERVAL '7 days');
 ```
 
-`compress_segmentby` is inferred from the model's `belongsTo` FK column — the natural segmentation for time-series data grouped by parent entity.
+`compress_segmentby` is inferred from the model's `belongsTo` FK column — the natural segmentation for time-series data grouped by parent entity. If a model has multiple `belongsTo` relationships, all FK columns are included as a comma-separated list (e.g., `timescaledb.compress_segmentby = 'match_id, player_id'`). This is valid TimescaleDB syntax and ensures queries filtered by any parent remain efficient after compression.
 
 ### Views
 
@@ -260,6 +279,7 @@ findAll(modelName, conditions)
 **`_rowToRawData()`** — simpler:
 - No TINYINT(1) → boolean conversion (`pg` returns native booleans)
 - No manual JSON.parse for JSONB columns (`pg` returns parsed objects)
+- `BIGINT` columns: `pg` returns these as strings (JavaScript can't safely represent all 64-bit integers). `_rowToRawData` converts to `Number` for the `timestamp` ORM type, which is acceptable since ORM timestamps are Unix seconds (well within safe integer range)
 - FK remapping and timestamp stripping remain the same
 
 **`_recordToRow()`** — simpler:
@@ -279,19 +299,29 @@ ID comes back in `rows[0].id` instead of MySQL's `result.insertId`. Re-keying lo
 
 ### Integration with `main.js`
 
-Selection logic expands:
+See [ORM Core Integration Changes](#orm-core-integration-changes) for the full set of changes to `main.js` and other core files.
+
+---
+
+## ORM Core Integration Changes
+
+The existing ORM core hardcodes MySQL-specific property names in several files. Adding a second adapter requires generalizing these references. All changes are minimal — renaming properties and adding adapter-agnostic dispatch.
+
+### `src/main.js` — Adapter Selection
+
+The `mysqlDb` property is renamed to `sqlDb`. Selection logic expands:
 
 ```js
 if (config.orm.mysql) {
   const { default: MysqlDB } = await import('./mysql/mysql-db.js');
-  this.mysqlDb = new MysqlDB();
-  this.db = this.mysqlDb;
-  promises.push(this.mysqlDb.init());
+  this.sqlDb = new MysqlDB();
+  this.db = this.sqlDb;
+  promises.push(this.sqlDb.init());
 } else if (config.orm.postgres) {
   const { default: PostgresDB } = await import('./postgres/postgres-db.js');
-  this.postgresDb = new PostgresDB();
-  this.db = this.postgresDb;
-  promises.push(this.postgresDb.init());
+  this.sqlDb = new PostgresDB();
+  this.db = this.sqlDb;
+  promises.push(this.sqlDb.init());
 } else if (this.options.dbType !== 'none') {
   const db = new DB();
   this.db = db;
@@ -299,17 +329,113 @@ if (config.orm.mysql) {
 }
 ```
 
-Store wiring reuses `_mysqlDb` property name (private, same interface):
+Store wiring, startup, and shutdown use the unified property:
 
 ```js
-if (this.mysqlDb) {
-  Orm.store._mysqlDb = this.mysqlDb;
-} else if (this.postgresDb) {
-  Orm.store._mysqlDb = this.postgresDb;
+if (this.sqlDb) {
+  Orm.store._sqlDb = this.sqlDb;
+}
+
+async startup() {
+  if (this.sqlDb) await this.sqlDb.startup();
+}
+
+async shutdown() {
+  if (this.sqlDb) await this.sqlDb.shutdown();
 }
 ```
 
-`startup()` and `shutdown()` expand to handle both adapters.
+### `src/store.js` — Property Rename
+
+All references to `_mysqlDb` rename to `_sqlDb`. The interface is unchanged — `find()`, `findAll()`, `query()` call the same methods on whichever adapter is wired in:
+
+```js
+// Before: this._mysqlDb
+// After:  this._sqlDb
+_sqlDb = null;
+```
+
+JSDoc comments are updated to say "SQL database" instead of "MySQL."
+
+### `src/manage-record.js` — Pending ID Flag
+
+Two changes:
+
+1. `Orm.instance.mysqlDb` → `Orm.instance.sqlDb`
+2. `__pendingMysqlId` → `__pendingSqlId`
+
+```js
+// Before
+if (Orm.instance?.mysqlDb && !isStringIdModel(modelName)) {
+  rawData.id = `__pending_${Date.now()}_${Math.random()}`;
+  rawData.__pendingMysqlId = true;
+
+// After
+if (Orm.instance?.sqlDb && !isStringIdModel(modelName)) {
+  rawData.id = `__pending_${Date.now()}_${Math.random()}`;
+  rawData.__pendingSqlId = true;
+```
+
+Both `MysqlDB._persistCreate` and `PostgresDB._persistCreate` check `__pendingSqlId`.
+
+### `src/orm-request.js` — Persist Dispatch
+
+```js
+// Before
+if (Orm.instance.mysqlDb && WRITE_OPERATIONS.has(operation)) {
+  await Orm.instance.mysqlDb.persist(operation, this.model, context, response);
+
+// After
+if (Orm.instance.sqlDb && WRITE_OPERATIONS.has(operation)) {
+  await Orm.instance.sqlDb.persist(operation, this.model, context, response);
+```
+
+### `src/commands.js` — Adapter-Aware CLI Commands
+
+The four `db:*` commands (`db:generate-migration`, `db:migrate`, `db:migrate:rollback`, `db:migrate:status`) currently hardcode MySQL imports and config checks. They are updated to detect the active adapter from config:
+
+```js
+function getAdapterConfig(config) {
+  if (config.orm.postgres) return { type: 'postgres', config: config.orm.postgres };
+  if (config.orm.mysql) return { type: 'mysql', config: config.orm.mysql };
+  return null;
+}
+
+function getAdapterImports(type) {
+  if (type === 'postgres') return {
+    connection: () => import('./postgres/connection.js'),
+    runner: () => import('./postgres/migration-runner.js'),
+    generator: () => import('./postgres/migration-generator.js'),
+  };
+  return {
+    connection: () => import('./mysql/connection.js'),
+    runner: () => import('./mysql/migration-runner.js'),
+    generator: () => import('./mysql/migration-generator.js'),
+  };
+}
+```
+
+Each command checks `getAdapterConfig()` first. Error messages become adapter-agnostic (e.g., "No SQL database configured" instead of "MySQL is not configured").
+
+### `src/mysql/mysql-db.js` — Pending ID Flag Update
+
+The MySQL adapter's `_persistCreate` updates to check `__pendingSqlId` instead of `__pendingMysqlId`:
+
+```js
+// Before
+const isPendingId = record.__data.__pendingMysqlId;
+// ...
+delete record.__data.__pendingMysqlId;
+
+// After
+const isPendingId = record.__data.__pendingSqlId;
+// ...
+delete record.__data.__pendingSqlId;
+```
+
+### Backward Compatibility
+
+These are all internal/private properties (`_` prefixed or `__` prefixed). No public API changes. Consumer projects are unaffected — they only interact with `config.orm.mysql` or `config.orm.postgres`, `createRecord`, `updateRecord`, and `store`.
 
 ---
 
@@ -346,7 +472,28 @@ try {
 }
 ```
 
+**`rollbackMigration()`** — same pattern as `applyMigration()`, executes DOWN SQL in a transaction and removes the row from `__migrations`:
+
+```js
+const client = await pool.connect();
+try {
+  await client.query('BEGIN');
+  for (const stmt of statements) {
+    await client.query(stmt);
+  }
+  await client.query('DELETE FROM "__migrations" WHERE filename = $1', [filename]);
+  await client.query('COMMIT');
+} catch (error) {
+  await client.query('ROLLBACK');
+  throw error;
+} finally {
+  client.release();
+}
+```
+
 **`parseMigrationFile()`, `getMigrationFiles()`, `splitStatements()`** — identical to MySQL.
+
+**Note on `splitStatements()`:** The naive semicolon splitter works for all current DDL including `SELECT create_hypertable(...)` and `SELECT add_compression_policy(...)` since these are single-statement calls terminated by `;`. If future migrations require `DO $$ ... END $$;` blocks, the splitter would need updating. This is a known limitation shared with the MySQL adapter.
 
 ### Migration Generator
 
@@ -409,14 +556,18 @@ Uses `PG_TEST_*` environment variables. Integration tests skip if no database is
 | Decision | Rationale |
 |----------|-----------|
 | Mirror MySQL, no shared code extraction | Zero risk to existing MySQL adapter. Refactor when adapter #3 arrives (YAGNI). |
-| `pg` as peer dependency | Standard Node.js Postgres driver. Optional like `mysql2`. |
+| `pg` as peer dependency, lazy-imported | Standard Node.js Postgres driver. Optional like `mysql2`. Dynamic import avoids loading when adapter is inactive. |
 | `static timeSeries` (generic) over `static hypertable` | Keeps models database-agnostic. Future adapters interpret the same flag. |
 | `static compression` (generic) | Same portability principle. TimescaleDB adapter interprets as native compression. |
+| `GENERATED ALWAYS AS IDENTITY` over `SERIAL` | SQL-standard (Postgres 10+), avoids implicit sequence ownership issues. Modern best practice for new schemas. |
 | `TIMESTAMPTZ` for dates | Timezone-aware. Critical for ML pipelines operating across time zones. |
 | `DOUBLE PRECISION` for floats | Better numeric fidelity than MySQL's FLOAT. Important for odds and statistics. |
 | `JSONB` for custom transforms | Binary JSON with indexing. Better query performance for ML feature extraction. |
 | `RETURNING id` for inserts | Cleaner than MySQL's `insertId`. Single round-trip for insert + ID retrieval. |
-| `compress_segmentby` from belongsTo FK | Natural segmentation — queries for a specific parent's time-series data remain efficient after compression. |
+| `compress_segmentby` from all belongsTo FKs | Natural segmentation — all FK columns included as comma-separated list. Queries filtered by any parent remain efficient after compression. |
 | FK constraints omitted on hypertables | TimescaleDB limitation. ORM enforces relationships in memory. |
-| Reuse `_mysqlDb` property name on store | Private property, same interface. Avoids touching store.js and risking regressions. |
+| Rename `mysqlDb` → `sqlDb`, `_mysqlDb` → `_sqlDb`, `__pendingMysqlId` → `__pendingSqlId` | Generalizes internal property names for multi-adapter support. All private — no public API changes. |
+| `updated_at` set by adapter, not trigger | `_persistUpdate()` includes `updated_at: new Date()`. Keeps logic in the adapter without requiring database triggers. |
+| TimescaleDB extension check before hypertable DDL | Prevents cryptic errors. Clear message with install instructions. |
 | `$1` parameterized queries | Standard pg driver convention. Prevents SQL injection same as MySQL's `?`. |
+| `BIGINT` → `Number` conversion in `_rowToRawData` | `pg` returns BIGINT as strings. ORM timestamps are Unix seconds (safe integer range). Explicit conversion needed. |
