@@ -1827,13 +1827,11 @@ git commit -m "Add Postgres CRUD and migration runner integration tests"
 Run: `cd /Users/dandelim/Projects/SynamicD/stonyx/stonyx-orm && npm test`
 Expected: All existing MySQL tests still pass. All new Postgres tests pass. Zero regressions.
 
-- [ ] **Step 2: Verify the `test/unit/orm-core-rename-test.js` from Task 1 passes**
+- [ ] **Step 2: Verify no regressions in existing MySQL tests**
 
-The dual-adapter guard test should now pass since `main.js` has been updated.
+All existing MySQL unit and integration tests should still pass with the core renames from Task 1.
 
-- [ ] **Step 3: Clean up any test files that were created as scaffolding**
-
-Remove the `test/unit/orm-core-rename-test.js` if it's no longer needed (the guard is implicitly tested by the full suite). Keep it if it provides value.
+Note: The spec lists additional test files (`postgres-db-startup-test.js`, `migration-generation-test.js`, `hypertable-test.js`) that are deferred to a follow-up iteration once the core adapter is proven against a real database.
 
 - [ ] **Step 4: Final commit (if any remaining unstaged changes)**
 
