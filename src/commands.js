@@ -1,5 +1,24 @@
 import { fileToDirectory, directoryToFile } from './migrate.js';
 
+function getAdapterConfig(config) {
+  if (config.orm.postgres) return { type: 'postgres', config: config.orm.postgres };
+  if (config.orm.mysql) return { type: 'mysql', config: config.orm.mysql };
+  return null;
+}
+
+function getAdapterImports(type) {
+  if (type === 'postgres') return {
+    connection: () => import('./postgres/connection.js'),
+    runner: () => import('./postgres/migration-runner.js'),
+    generator: () => import('./postgres/migration-generator.js'),
+  };
+  return {
+    connection: () => import('./mysql/connection.js'),
+    runner: () => import('./mysql/migration-runner.js'),
+    generator: () => import('./mysql/migration-generator.js'),
+  };
+}
+
 export default {
   'db:migrate-to-directory': {
     description: 'Migrate DB from single file to directory mode',
@@ -18,11 +37,20 @@ export default {
     }
   },
   'db:generate-migration': {
-    description: 'Generate a MySQL migration from current model schemas',
+    description: 'Generate a database migration from current model schemas',
     bootstrap: true,
     run: async (args) => {
       const description = args.join(' ') || 'migration';
-      const { generateMigration } = await import('./mysql/migration-generator.js');
+      const config = (await import('stonyx/config')).default;
+      const adapter = getAdapterConfig(config);
+
+      if (!adapter) {
+        console.error('No SQL database configured. Set PG_HOST or MYSQL_HOST in your environment.');
+        process.exit(1);
+      }
+
+      const imports = getAdapterImports(adapter.type);
+      const { generateMigration } = await imports.generator();
       const result = await generateMigration(description);
 
       if (result) {
@@ -33,29 +61,32 @@ export default {
     }
   },
   'db:migrate': {
-    description: 'Apply pending MySQL migrations',
+    description: 'Apply pending database migrations',
     bootstrap: true,
     run: async () => {
       const config = (await import('stonyx/config')).default;
-      const mysqlConfig = config.orm.mysql;
+      const adapter = getAdapterConfig(config);
 
-      if (!mysqlConfig) {
-        console.error('MySQL is not configured. Set MYSQL_HOST to enable MySQL mode.');
+      if (!adapter) {
+        console.error('No SQL database configured. Set PG_HOST or MYSQL_HOST in your environment.');
         process.exit(1);
       }
 
-      const { getPool, closePool } = await import('./mysql/connection.js');
-      const { ensureMigrationsTable, getAppliedMigrations, getMigrationFiles, applyMigration, parseMigrationFile } = await import('./mysql/migration-runner.js');
+      const { type, config: adapterConfig } = adapter;
+      const imports = getAdapterImports(type);
+
+      const { getPool, closePool } = await imports.connection();
+      const { ensureMigrationsTable, getAppliedMigrations, getMigrationFiles, applyMigration, parseMigrationFile } = await imports.runner();
       const { readFile } = await import('@stonyx/utils/file');
       const path = await import('path');
 
-      const pool = await getPool(mysqlConfig);
-      const migrationsPath = path.resolve(config.rootPath, mysqlConfig.migrationsDir);
+      const pool = await getPool(adapterConfig);
+      const migrationsPath = path.resolve(config.rootPath, adapterConfig.migrationsDir);
 
       try {
-        await ensureMigrationsTable(pool, mysqlConfig.migrationsTable);
+        await ensureMigrationsTable(pool, adapterConfig.migrationsTable);
 
-        const applied = await getAppliedMigrations(pool, mysqlConfig.migrationsTable);
+        const applied = await getAppliedMigrations(pool, adapterConfig.migrationsTable);
         const files = await getMigrationFiles(migrationsPath);
         const pending = files.filter(f => !applied.includes(f));
 
@@ -70,7 +101,7 @@ export default {
           const content = await readFile(path.join(migrationsPath, filename));
           const { up } = parseMigrationFile(content);
 
-          await applyMigration(pool, filename, up, mysqlConfig.migrationsTable);
+          await applyMigration(pool, filename, up, adapterConfig.migrationsTable);
           console.log(`  Applied: ${filename}`);
         }
 
@@ -81,29 +112,32 @@ export default {
     }
   },
   'db:migrate:rollback': {
-    description: 'Rollback the most recent MySQL migration',
+    description: 'Rollback the most recent database migration',
     bootstrap: true,
     run: async () => {
       const config = (await import('stonyx/config')).default;
-      const mysqlConfig = config.orm.mysql;
+      const adapter = getAdapterConfig(config);
 
-      if (!mysqlConfig) {
-        console.error('MySQL is not configured. Set MYSQL_HOST to enable MySQL mode.');
+      if (!adapter) {
+        console.error('No SQL database configured. Set PG_HOST or MYSQL_HOST in your environment.');
         process.exit(1);
       }
 
-      const { getPool, closePool } = await import('./mysql/connection.js');
-      const { ensureMigrationsTable, getAppliedMigrations, rollbackMigration, parseMigrationFile } = await import('./mysql/migration-runner.js');
+      const { type, config: adapterConfig } = adapter;
+      const imports = getAdapterImports(type);
+
+      const { getPool, closePool } = await imports.connection();
+      const { ensureMigrationsTable, getAppliedMigrations, rollbackMigration, parseMigrationFile } = await imports.runner();
       const { readFile } = await import('@stonyx/utils/file');
       const path = await import('path');
 
-      const pool = await getPool(mysqlConfig);
-      const migrationsPath = path.resolve(config.rootPath, mysqlConfig.migrationsDir);
+      const pool = await getPool(adapterConfig);
+      const migrationsPath = path.resolve(config.rootPath, adapterConfig.migrationsDir);
 
       try {
-        await ensureMigrationsTable(pool, mysqlConfig.migrationsTable);
+        await ensureMigrationsTable(pool, adapterConfig.migrationsTable);
 
-        const applied = await getAppliedMigrations(pool, mysqlConfig.migrationsTable);
+        const applied = await getAppliedMigrations(pool, adapterConfig.migrationsTable);
 
         if (applied.length === 0) {
           console.log('No migrations to rollback.');
@@ -119,7 +153,7 @@ export default {
           process.exit(1);
         }
 
-        await rollbackMigration(pool, lastFilename, down, mysqlConfig.migrationsTable);
+        await rollbackMigration(pool, lastFilename, down, adapterConfig.migrationsTable);
         console.log(`Rolled back: ${lastFilename}`);
       } finally {
         await closePool();
@@ -127,28 +161,31 @@ export default {
     }
   },
   'db:migrate:status': {
-    description: 'Show status of MySQL migrations',
+    description: 'Show status of database migrations',
     bootstrap: true,
     run: async () => {
       const config = (await import('stonyx/config')).default;
-      const mysqlConfig = config.orm.mysql;
+      const adapter = getAdapterConfig(config);
 
-      if (!mysqlConfig) {
-        console.error('MySQL is not configured. Set MYSQL_HOST to enable MySQL mode.');
+      if (!adapter) {
+        console.error('No SQL database configured. Set PG_HOST or MYSQL_HOST in your environment.');
         process.exit(1);
       }
 
-      const { getPool, closePool } = await import('./mysql/connection.js');
-      const { ensureMigrationsTable, getAppliedMigrations, getMigrationFiles } = await import('./mysql/migration-runner.js');
+      const { type, config: adapterConfig } = adapter;
+      const imports = getAdapterImports(type);
+
+      const { getPool, closePool } = await imports.connection();
+      const { ensureMigrationsTable, getAppliedMigrations, getMigrationFiles } = await imports.runner();
       const path = await import('path');
 
-      const pool = await getPool(mysqlConfig);
-      const migrationsPath = path.resolve(config.rootPath, mysqlConfig.migrationsDir);
+      const pool = await getPool(adapterConfig);
+      const migrationsPath = path.resolve(config.rootPath, adapterConfig.migrationsDir);
 
       try {
-        await ensureMigrationsTable(pool, mysqlConfig.migrationsTable);
+        await ensureMigrationsTable(pool, adapterConfig.migrationsTable);
 
-        const applied = new Set(await getAppliedMigrations(pool, mysqlConfig.migrationsTable));
+        const applied = new Set(await getAppliedMigrations(pool, adapterConfig.migrationsTable));
         const files = await getMigrationFiles(migrationsPath);
 
         if (files.length === 0) {
