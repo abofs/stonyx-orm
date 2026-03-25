@@ -365,6 +365,8 @@ export function schemasToSnapshot(schemas) {
       idType: schema.idType,
       columns: { ...schema.columns },
       foreignKeys: { ...schema.foreignKeys },
+      ...(schema.timeSeries ? { timeSeries: schema.timeSeries } : {}),
+      ...(schema.compression ? { compression: schema.compression } : {}),
     };
   }
 

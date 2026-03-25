@@ -1,5 +1,5 @@
 import QUnit from 'qunit';
-import { buildTableDDL, getTopologicalOrder } from '../../../src/postgres/schema-introspector.js';
+import { buildTableDDL, getTopologicalOrder, schemasToSnapshot } from '../../../src/postgres/schema-introspector.js';
 
 const { module, test } = QUnit;
 
@@ -110,5 +110,39 @@ module('[Unit] Postgres Schema Introspector — getTopologicalOrder', function (
     assert.strictEqual(order.length, 2);
     assert.true(order.includes('user'));
     assert.true(order.includes('device'));
+  });
+});
+
+module('[Unit] Postgres Schema Introspector — schemasToSnapshot', function () {
+  test('includes timeSeries and compression fields in snapshot', function (assert) {
+    const schemas = {
+      event: {
+        table: 'events', idType: 'number',
+        columns: { timestamp: 'TIMESTAMPTZ' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+        timeSeries: 'timestamp',
+        compression: { after: '7d' },
+      },
+    };
+    const snapshot = schemasToSnapshot(schemas);
+    assert.strictEqual(snapshot.event.timeSeries, 'timestamp');
+    assert.deepEqual(snapshot.event.compression, { after: '7d' });
+  });
+
+  test('omits timeSeries and compression when not present', function (assert) {
+    const schemas = {
+      user: {
+        table: 'users', idType: 'string',
+        columns: { name: 'VARCHAR(255)' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+        timeSeries: null,
+        compression: null,
+      },
+    };
+    const snapshot = schemasToSnapshot(schemas);
+    assert.strictEqual(snapshot.user.timeSeries, undefined);
+    assert.strictEqual(snapshot.user.compression, undefined);
   });
 });
