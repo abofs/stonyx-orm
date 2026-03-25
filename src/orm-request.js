@@ -385,7 +385,7 @@ export default class OrmRequest extends Request {
       // Execute main handler
       const response = await handler(request, state);
 
-      // Persist to MySQL for write operations
+      // Persist to database for write operations
       if (Orm.instance.sqlDb && WRITE_OPERATIONS.has(operation)) {
         await Orm.instance.sqlDb.persist(operation, this.model, context, response);
       }
