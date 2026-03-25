@@ -14,7 +14,7 @@ module('[Unit] View REST endpoints', function(hooks) {
     Orm.instance = {
       getRecordClasses: sinon.stub().returns({ modelClass: null, serializerClass: null }),
       isView: sinon.stub(),
-      mysqlDb: null,
+      sqlDb: null,
       transforms: {
         number: (v) => parseInt(v),
         passthrough: (v) => v,

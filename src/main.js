@@ -109,11 +109,20 @@ export default class Orm {
 
     setup(eventNames);
 
+    if (config.orm.mysql && config.orm.postgres) {
+      throw new Error('Cannot configure both MySQL and Postgres adapters. Choose one.');
+    }
+
     if (config.orm.mysql) {
       const { default: MysqlDB } = await import('./mysql/mysql-db.js');
-      this.mysqlDb = new MysqlDB();
-      this.db = this.mysqlDb;
-      promises.push(this.mysqlDb.init());
+      this.sqlDb = new MysqlDB();
+      this.db = this.sqlDb;
+      promises.push(this.sqlDb.init());
+    } else if (config.orm.postgres) {
+      const { default: PostgresDB } = await import('./postgres/postgres-db.js');
+      this.sqlDb = new PostgresDB();
+      this.db = this.sqlDb;
+      promises.push(this.sqlDb.init());
     } else if (this.options.dbType !== 'none') {
       const db = new DB();
       this.db = db;
@@ -131,9 +140,9 @@ export default class Orm {
       return modelClass?.memory === true;
     };
 
-    // Wire up MySQL reference for on-demand queries from store.find()/findAll()
-    if (this.mysqlDb) {
-      Orm.store._mysqlDb = this.mysqlDb;
+    // Wire up database reference for on-demand queries from store.find()/findAll()
+    if (this.sqlDb) {
+      Orm.store._sqlDb = this.sqlDb;
     }
 
     Orm.ready = await Promise.all(promises);
@@ -141,11 +150,11 @@ export default class Orm {
   }
 
   async startup() {
-    if (this.mysqlDb) await this.mysqlDb.startup();
+    if (this.sqlDb) await this.sqlDb.startup();
   }
 
   async shutdown() {
-    if (this.mysqlDb) await this.mysqlDb.shutdown();
+    if (this.sqlDb) await this.sqlDb.shutdown();
   }
 
   static get db() {
