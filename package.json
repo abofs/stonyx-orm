@@ -43,10 +43,14 @@
   },
   "peerDependencies": {
     "@stonyx/rest-server": ">=0.2.1-beta.14",
-    "mysql2": "^3.0.0"
+    "mysql2": "^3.0.0",
+    "pg": "^8.0.0"
   },
   "peerDependenciesMeta": {
     "mysql2": {
+      "optional": true
+    },
+    "pg": {
       "optional": true
     },
     "@stonyx/rest-server": {
@@ -57,6 +61,7 @@
     "@stonyx/rest-server": "0.2.1-beta.19",
     "@stonyx/utils": "0.2.3-beta.5",
     "mysql2": "^3.20.0",
+    "pg": "^8.16.0",
     "qunit": "^2.24.1",
     "sinon": "^21.0.0"
   }
