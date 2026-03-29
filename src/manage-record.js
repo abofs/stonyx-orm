@@ -102,16 +102,16 @@ export function updateRecord(record, rawData, userOptions={}) {
 /**
  * gets the next available id based on last record entry.
  *
- * In MySQL mode with numeric IDs, assigns a temporary pending ID.
- * MySQL's AUTO_INCREMENT provides the real ID after INSERT.
+ * In SQL mode with numeric IDs, assigns a temporary pending ID.
+ * The database's auto-increment provides the real ID after INSERT.
  */
 function assignRecordId(modelName, rawData) {
   if (rawData.id) return;
 
-  // In MySQL mode with numeric IDs, defer to MySQL auto-increment
-  if (Orm.instance?.mysqlDb && !isStringIdModel(modelName)) {
+  // In SQL mode with numeric IDs, defer to database auto-increment
+  if (Orm.instance?.sqlDb && !isStringIdModel(modelName)) {
     rawData.id = `__pending_${Date.now()}_${Math.random()}`;
-    rawData.__pendingMysqlId = true;
+    rawData.__pendingSqlId = true;
     return;
   }
 

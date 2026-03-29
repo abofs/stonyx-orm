@@ -17,18 +17,18 @@ module('[Unit] Orm Lifecycle', function(hooks) {
   });
 
   module('startup', function() {
-    test('calls mysqlDb.startup() when mysqlDb exists', async function(assert) {
+    test('calls sqlDb.startup() when sqlDb exists', async function(assert) {
       const orm = Object.create(Orm.prototype);
-      orm.mysqlDb = { startup: sinon.stub().resolves() };
+      orm.sqlDb = { startup: sinon.stub().resolves() };
 
       await orm.startup();
 
-      assert.ok(orm.mysqlDb.startup.calledOnce, 'mysqlDb.startup was called');
+      assert.ok(orm.sqlDb.startup.calledOnce, 'sqlDb.startup was called');
     });
 
-    test('is a no-op when mysqlDb is not set', async function(assert) {
+    test('is a no-op when sqlDb is not set', async function(assert) {
       const orm = Object.create(Orm.prototype);
-      orm.mysqlDb = undefined;
+      orm.sqlDb = undefined;
 
       await orm.startup();
       assert.ok(true, 'did not throw');
@@ -36,18 +36,18 @@ module('[Unit] Orm Lifecycle', function(hooks) {
   });
 
   module('shutdown', function() {
-    test('calls mysqlDb.shutdown() when mysqlDb exists', async function(assert) {
+    test('calls sqlDb.shutdown() when sqlDb exists', async function(assert) {
       const orm = Object.create(Orm.prototype);
-      orm.mysqlDb = { shutdown: sinon.stub().resolves() };
+      orm.sqlDb = { shutdown: sinon.stub().resolves() };
 
       await orm.shutdown();
 
-      assert.ok(orm.mysqlDb.shutdown.calledOnce, 'mysqlDb.shutdown was called');
+      assert.ok(orm.sqlDb.shutdown.calledOnce, 'sqlDb.shutdown was called');
     });
 
-    test('is a no-op when mysqlDb is not set', async function(assert) {
+    test('is a no-op when sqlDb is not set', async function(assert) {
       const orm = Object.create(Orm.prototype);
-      orm.mysqlDb = undefined;
+      orm.sqlDb = undefined;
 
       await orm.shutdown();
       assert.ok(true, 'did not throw');

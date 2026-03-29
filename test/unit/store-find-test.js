@@ -37,21 +37,21 @@ module('[Unit] Store.find', function(hooks) {
     store._memoryResolver = (name) => name !== 'alert';
 
     const mockRecord = { id: 42, message: 'test' };
-    store._mysqlDb = {
+    store._sqlDb = {
       findRecord: sinon.stub().resolves(mockRecord)
     };
 
     const record = await store.find('alert', 42);
 
-    assert.ok(store._mysqlDb.findRecord.calledOnce, 'findRecord called on mysqlDb');
-    assert.deepEqual(store._mysqlDb.findRecord.firstCall.args, ['alert', 42], 'called with correct args');
+    assert.ok(store._sqlDb.findRecord.calledOnce, 'findRecord called on sqlDb');
+    assert.deepEqual(store._sqlDb.findRecord.firstCall.args, ['alert', 42], 'called with correct args');
     assert.strictEqual(record, mockRecord, 'returns MySQL result');
   });
 
   test('find falls back to memory when no MySQL configured', async function(assert) {
     const store = createStore();
     store._memoryResolver = () => false;
-    store._mysqlDb = null;
+    store._sqlDb = null;
 
     const record = await store.find('user', 1);
     assert.strictEqual(record.name, 'Alice', 'falls back to in-memory store');
@@ -62,12 +62,12 @@ module('[Unit] Store.find', function(hooks) {
     store._memoryResolver = null;
 
     const mockRecord = { id: 1, name: 'Alice' };
-    store._mysqlDb = {
+    store._sqlDb = {
       findRecord: sinon.stub().resolves(mockRecord)
     };
 
     const record = await store.find('user', 1);
-    assert.ok(store._mysqlDb.findRecord.calledOnce, 'queries MySQL when no resolver');
+    assert.ok(store._sqlDb.findRecord.calledOnce, 'queries MySQL when no resolver');
     assert.strictEqual(record, mockRecord, 'returns MySQL result');
   });
 });
@@ -93,14 +93,14 @@ module('[Unit] Store.findAll', function(hooks) {
     store._memoryResolver = (name) => name !== 'alert';
 
     const mockRecords = [{ id: 1 }, { id: 2 }];
-    store._mysqlDb = {
+    store._sqlDb = {
       findAll: sinon.stub().resolves(mockRecords)
     };
 
     const records = await store.findAll('alert');
 
-    assert.ok(store._mysqlDb.findAll.calledOnce, 'findAll called on mysqlDb');
-    assert.deepEqual(store._mysqlDb.findAll.firstCall.args, ['alert', undefined], 'called with model name');
+    assert.ok(store._sqlDb.findAll.calledOnce, 'findAll called on sqlDb');
+    assert.deepEqual(store._sqlDb.findAll.firstCall.args, ['alert', undefined], 'called with model name');
     assert.strictEqual(records, mockRecords, 'returns MySQL results');
   });
 
@@ -109,13 +109,13 @@ module('[Unit] Store.findAll', function(hooks) {
     store._memoryResolver = () => true;
 
     const mockRecords = [{ id: 1, status: 'active' }];
-    store._mysqlDb = {
+    store._sqlDb = {
       findAll: sinon.stub().resolves(mockRecords)
     };
 
     const records = await store.findAll('user', { status: 'active' });
 
-    assert.ok(store._mysqlDb.findAll.calledOnce, 'queries MySQL when conditions provided');
+    assert.ok(store._sqlDb.findAll.calledOnce, 'queries MySQL when conditions provided');
     assert.strictEqual(records, mockRecords, 'returns filtered MySQL results');
   });
 
@@ -147,20 +147,20 @@ module('[Unit] Store.query', function(hooks) {
     store._memoryResolver = () => true;
 
     const mockRecords = [{ id: 1 }];
-    store._mysqlDb = {
+    store._sqlDb = {
       findAll: sinon.stub().resolves(mockRecords)
     };
 
     const records = await store.query('user', { name: 'Alice' });
 
-    assert.ok(store._mysqlDb.findAll.calledOnce, 'always hits MySQL');
-    assert.deepEqual(store._mysqlDb.findAll.firstCall.args, ['user', { name: 'Alice' }], 'passes conditions');
+    assert.ok(store._sqlDb.findAll.calledOnce, 'always hits MySQL');
+    assert.deepEqual(store._sqlDb.findAll.firstCall.args, ['user', { name: 'Alice' }], 'passes conditions');
     assert.strictEqual(records, mockRecords, 'returns MySQL results');
   });
 
   test('query falls back to in-memory filtering when no MySQL', async function(assert) {
     const store = createStore();
-    store._mysqlDb = null;
+    store._sqlDb = null;
 
     const records = await store.query('user', { name: 'Alice' });
 
@@ -170,7 +170,7 @@ module('[Unit] Store.query', function(hooks) {
 
   test('query returns all records when no conditions and no MySQL', async function(assert) {
     const store = createStore();
-    store._mysqlDb = null;
+    store._sqlDb = null;
 
     const records = await store.query('user');
 
@@ -179,7 +179,7 @@ module('[Unit] Store.query', function(hooks) {
 
   test('query returns empty array for no matches in memory fallback', async function(assert) {
     const store = createStore();
-    store._mysqlDb = null;
+    store._sqlDb = null;
 
     const records = await store.query('user', { name: 'Charlie' });
 
