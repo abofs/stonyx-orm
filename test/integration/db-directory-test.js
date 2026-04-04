@@ -6,6 +6,7 @@ import { serialized } from '../sample/payload.js';
 import { readFile, deleteFile, deleteDirectory, fileExists, createFile, createDirectory } from '@stonyx/utils/file';
 import { fileToDirectory, directoryToFile } from '../../src/migrate.js';
 import config from 'stonyx/config';
+import log from 'stonyx/log';
 import path from 'path';
 
 const { module, test } = QUnit;
@@ -149,14 +150,16 @@ module('[Integration] DB Directory Mode', function(hooks) {
 
   module('validateMode', function(hooks) {
     const testDbFile = './test/sample/db-validate-test.json';
-    let dirPath;
+    let dirPath, logErrorStub;
 
     hooks.beforeEach(function() {
       config.orm.db.file = testDbFile;
       dirPath = Orm.db.getDirPath();
+      logErrorStub = sinon.stub(log, 'error');
     });
 
     hooks.afterEach(async function() {
+      logErrorStub.restore();
       await deleteFile(path.resolve(`${config.rootPath}/${testDbFile}`), { ignoreAccessFailure: true });
       await deleteDirectory(dirPath);
     });
