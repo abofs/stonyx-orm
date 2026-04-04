@@ -75,7 +75,7 @@ export default class OwnerStatsView extends View {
   static resolve = {
     gender: 'gender',           // String path: maps from source record data
     score: (owner) => {         // Function: custom computation
-      return owner.__data.age * 10;
+      return owner.age * 10;
     },
     nestedVal: 'details.nested', // Nested string paths supported
   };
@@ -138,7 +138,7 @@ export default class LeagueStatsView extends View {
   static resolve = {
     totalGoals: (groupRecords) => {
       return groupRecords.reduce((sum, r) => {
-        const fs = r.__data.finalScore;
+        const fs = r.finalScore;
         return fs ? sum + fs[0] + fs[1] : sum;
       }, 0);
     },
@@ -267,7 +267,7 @@ QUnit.test('view returns computed data', async function(assert) {
   const results = await store.findAll('owner-stats');
   const stat = results.find(r => r.id === 1);
 
-  assert.strictEqual(stat.__data.animalCount, 1);
+  assert.strictEqual(stat.animalCount, 1);
 });
 ```
 

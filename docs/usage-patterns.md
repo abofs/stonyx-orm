@@ -271,7 +271,7 @@ export default class OwnerStatsView extends View {
   static source = 'owner';
   static resolve = {
     gender: 'gender',              // String path from source data
-    score: (owner) => owner.__data.age * 10,  // Function
+    score: (owner) => owner.age * 10,  // Function
   };
 
   gender = attr('string');  // Must also define as attr()

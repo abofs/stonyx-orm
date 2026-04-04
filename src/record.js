@@ -3,12 +3,17 @@ import { getComputedProperties } from "./serializer.js";
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from './plural-registry.js';
 export default class Record {
+  /** @private */
   __data = {};
+  /** @private */
   __relationships = {};
+  /** @private */
   __serialized = false;
 
   constructor(model, serializer) {
+    /** @private */
     this.__model = model;
+    /** @private */
     this.__serializer = serializer;
 
   }
