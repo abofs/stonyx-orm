@@ -85,40 +85,15 @@ The codebase is well-structured with clear separation of concerns and consistent
 
 ## Low Priority
 
-### [L1] Documentation references non-existent files
-- **Category:** Stale Docs
-- **Files:** `.claude/index.md` (L38-39), `.claude/personal/outline.md` (L1107)
-- **Problem:** The `.claude/index.md` references `src/include-parser.js` and `src/include-collector.js` which don't exist — include parsing is inline in `src/orm-request.js`. The outline references `stonyx-bootstrap.cjs` which doesn't exist.
-- **Suggestion:** Remove the `include-parser.js` and `include-collector.js` references from `.claude/index.md` and the `stonyx-bootstrap.cjs` reference from the outline. Update the architecture section to point to `src/orm-request.js` for include logic.
-- **Impact:** Prevents confusion when navigating docs.
+~~### [L1] Documentation references non-existent files~~ **RESOLVED** — `.claude/index.md` and `.claude/personal/outline.md` deleted during docs restructure.
 
-### [L2] Outdated version in outline doc
-- **Category:** Stale Docs
-- **Files:** `.claude/personal/outline.md` (L1076)
-- **Problem:** Lists version as `0.1.0` but `package.json` shows `0.2.1-beta.1`.
-- **Suggestion:** Update or remove the version reference. Since `package.json` is the source of truth, the docs shouldn't duplicate it.
-- **Impact:** Minor — prevents stale version confusion.
+~~### [L2] Outdated version in outline doc~~ **RESOLVED** — `.claude/personal/outline.md` deleted during docs restructure.
 
-### [L3] Outline docs missing `./commands` and `./hooks` package exports
-- **Category:** Stale Docs
-- **Files:** `.claude/personal/outline.md` (L884-889)
-- **Problem:** The package.json `exports` section in the outline doc only shows `"."` and `"./db"`, but the actual `package.json` also exports `"./migrate"`, `"./commands"`, and `"./hooks"`.
-- **Suggestion:** Update the outline's package.json section to match the actual exports.
-- **Impact:** Minor — ensures docs reflect the full public API surface.
+~~### [L3] Outline docs missing `./commands` and `./hooks` package exports~~ **RESOLVED** — `.claude/personal/outline.md` deleted during docs restructure.
 
-### [L4] Outline references old event-based system
-- **Category:** Stale Docs
-- **Files:** `.claude/index.md` (L204)
-- **Problem:** States `@stonyx/events - Pub/sub event system (optional, not used for hooks)`. However, `@stonyx/events` is imported and `setup(eventNames)` is called in `src/main.js` (L91). The events are set up but the hooks system uses its own registry. This is confusing — events are initialized but the hooks use a separate middleware pattern.
-- **Suggestion:** Clarify that `@stonyx/events` is still initialized for event names during ORM setup, but the actual hook dispatch uses the middleware-based system in `src/hooks.js`.
-- **Impact:** Reduces confusion about the relationship between `@stonyx/events` and the hooks system.
+~~### [L4] Outline references old event-based system~~ **RESOLVED** — `.claude/index.md` deleted during docs restructure.
 
-### [L5] Manual test scripts in project root
-- **Category:** Dead Code
-- **Files:** `test-hooks-with-logging.js`, `test-events-setup.js`, `test-hooks-manual.js`
-- **Problem:** Three manual test scripts remain in the project root from the hooks implementation. They were used to verify functionality when the test harness had linking issues, but are not part of the test suite and won't run via `npm test`.
-- **Suggestion:** Either move them to `test/manual/` or remove them if the hooks implementation is considered stable and the test harness issues are resolved.
-- **Impact:** Cleaner project root; reduces confusion about which test files are authoritative.
+~~### [L5] Manual test scripts in project root~~ **RESOLVED** — `test-hooks-with-logging.js`, `test-events-setup.js`, `test-hooks-manual.js` deleted during docs restructure.
 
 ---
 
@@ -136,4 +111,3 @@ The codebase is well-structured with clear separation of concerns and consistent
 **Longer term:**
 6. **M4/M5** — Cache introspected schemas in MysqlDB
 7. **M6** — Add DB unit tests
-8. **L1-L4** — Documentation cleanup pass

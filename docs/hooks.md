@@ -4,9 +4,9 @@ The ORM provides a powerful middleware-based hook system that allows custom logi
 
 ## Architecture
 
-**Hook Registry**: [src/hooks.js](src/hooks.js) - Stores before/after hooks in Maps
-**Integration**: [src/orm-request.js](src/orm-request.js) - `_withHooks()` wrapper executes hooks
-**Exports**: [src/index.js](src/index.js) - Exports `beforeHook`, `afterHook`, `clearHook`, `clearAllHooks`
+**Hook Registry**: [src/hooks.js](../src/hooks.js) - Stores before/after hooks in Maps
+**Integration**: [src/orm-request.js](../src/orm-request.js) - `_withHooks()` wrapper executes hooks
+**Exports**: [src/index.js](../src/index.js) - Exports `beforeHook`, `afterHook`, `clearHook`, `clearAllHooks`
 
 ## API
 
