@@ -124,7 +124,7 @@ _withHooks(operation, handler) {
     if (operation === 'update' || operation === 'delete') {
       const existingRecord = store.get(this.model, getId(request.params));
       if (existingRecord) {
-        context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
+        context.oldState = JSON.parse(JSON.stringify(existingRecord));
       }
     }
 
@@ -198,9 +198,9 @@ afterHook('update', 'animal', (context) => {
 afterHook('update', 'animal', async (context) => {
   const changes = {};
   if (context.oldState) {
-    for (const [key, newValue] of Object.entries(context.record.__data)) {
-      if (context.oldState[key] !== newValue) {
-        changes[key] = { from: context.oldState[key], to: newValue };
+    for (const key of Object.keys(context.oldState)) {
+      if (context.oldState[key] !== context.record[key]) {
+        changes[key] = { from: context.oldState[key], to: context.record[key] };
       }
     }
   }
