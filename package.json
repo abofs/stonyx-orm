@@ -8,9 +8,13 @@
   "description": "",
   "main": "src/main.js",
   "type": "module",
+  "bin": {
+    "stonyx-orm": "./src/cli.js"
+  },
   "exports": {
     ".": "./src/index.js",
     "./db": "./src/exports/db.js",
+    "./standalone-db": "./src/standalone-db.js",
     "./migrate": "./src/migrate.js",
     "./commands": "./src/commands.js",
     "./hooks": "./src/hooks.js"
