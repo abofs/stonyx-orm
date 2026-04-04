@@ -1,3 +1,7 @@
+[![CI](https://github.com/abofs/stonyx-orm/actions/workflows/ci.yml/badge.svg)](https://github.com/abofs/stonyx-orm/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@stonyx/orm.svg)](https://www.npmjs.com/package/@stonyx/orm)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 # @stonyx/orm
 
 A lightweight ORM for Stonyx projects, featuring model definitions, serializers, relationships, transforms, and optional REST server integration.
