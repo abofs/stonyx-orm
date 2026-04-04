@@ -231,7 +231,7 @@ GET /scenes/e001-s001?include=slides.dialogue.character
 - `parseInclude()` - Splits comma-separated includes and parses nested paths
 - `traverseIncludePath()` - Recursively traverses relationship paths
 - `collectIncludedRecords()` - Orchestrates traversal and deduplication
-- All implemented in [src/orm-request.js](src/orm-request.js)
+- All implemented in [src/orm-request.js](../src/orm-request.js)
 
 ## 10. Views (Read-Only Computed Data)
 

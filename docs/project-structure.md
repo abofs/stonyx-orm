@@ -131,7 +131,7 @@ stonyx-orm/
 │       ├── db-schema.js             # Test DB schema
 │       ├── constants.js             # Test constants
 │       └── payload.js               # Sample raw + expected data
-├── .claude/                         # Claude AI assistant context docs
+├── .claude/                         # Agent entry point + code-style-rules
 ├── .github/workflows/
 │   ├── ci.yml                       # PR CI pipeline
 │   └── publish.yml                  # NPM publish workflow
@@ -339,5 +339,3 @@ See [improvements.md](improvements.md) for detailed findings. Key items:
 - `getOrSet` utility is duplicated across `has-many.js` and `belongs-to.js`
 - `getRelationshipInfo()` is duplicated across `orm-request.js`, `schema-introspector.js`, and `meta-request.js`
 - `getCollectionKeys()` and `getDirPath()` are duplicated between `db.js` and `migrate.js`
-- Package exports in `package.json` are missing `./commands` and `./hooks` entries (present in code but not in the outline docs)
-- The outline doc (`/.claude/personal/outline.md`) references files that don't exist (`src/include-parser.js`, `src/include-collector.js`, `stonyx-bootstrap.cjs`) and lists version as `0.1.0` (actual: `0.2.1-beta.1`)
