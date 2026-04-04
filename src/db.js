@@ -147,15 +147,25 @@ export default class DB {
       const collectionKeys = this.getCollectionKeys();
 
       // Write each collection to its own file in parallel
-      await Promise.all(collectionKeys.map(key =>
-        updateFile(path.join(dirPath, `${key}.json`), jsonData[key] || [], { json: true })
-      ));
+      // Use createFile for new files, updateFile for existing ones
+      await Promise.all(collectionKeys.map(async key => {
+        const filePath = path.join(dirPath, `${key}.json`);
+        const exists = await fileExists(filePath);
+        const data = jsonData[key] || [];
+
+        if (exists) await updateFile(filePath, data, { json: true });
+        else await createFile(filePath, data, { json: true });
+      }));
 
       // Write empty-array skeleton to db.json
       const skeleton = {};
       for (const key of collectionKeys) skeleton[key] = [];
 
-      await updateFile(`${config.rootPath}/${file}`, skeleton, { json: true });
+      const dbFilePath = `${config.rootPath}/${file}`;
+      const dbFileExists = await fileExists(dbFilePath);
+
+      if (dbFileExists) await updateFile(dbFilePath, skeleton, { json: true });
+      else await createFile(dbFilePath, skeleton, { json: true });
 
       log.db(`DB has been successfully saved to ${config.orm.db.directory}/ directory`);
       return;
