@@ -23,6 +23,8 @@ export function createRecord(modelName, rawData={}, userOptions={}) {
   const globalRelationships = relationships.get('global');
   const pendingRelationships = relationships.get('pending');
 
+  if (!modelStore) throw new Error(`Model store for '${modelName}' is not registered. Ensure the model is defined before creating records.`);
+
   assignRecordId(modelName, rawData);
   if (modelStore.has(rawData.id)) return modelStore.get(rawData.id);
 
