@@ -27,6 +27,10 @@ export default function hasMany(modelName) {
       let record;
 
       if (typeof elementData !== 'object') {
+        if (!modelStore) {
+          return queuePendingRelationship(pendingRelationshipQueue, pendingRelationships, modelName, elementData);
+        }
+
         record = modelStore.get(elementData);
 
         if (!record) {

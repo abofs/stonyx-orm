@@ -21,9 +21,13 @@ export default function belongsTo(modelName) {
     const modelStore = store.get(modelName);
 
     // Try to get existing record
-    const output = typeof rawData === 'object'
-      ? createRecord(modelName, rawData, options)
-      : modelStore.get(rawData);
+    let output;
+
+    if (typeof rawData === 'object') {
+      output = createRecord(modelName, rawData, options);
+    } else if (modelStore) {
+      output = modelStore.get(rawData);
+    }
 
     // If not found and is a string ID, register as pending
     if (!output && typeof rawData !== 'object') {
