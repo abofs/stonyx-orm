@@ -352,7 +352,7 @@ export default class MysqlDB {
     const insertData = this._recordToRow(record, schema);
 
     // For auto-increment models, remove the pending ID
-    const isPendingId = record.__data.__pendingMysqlId;
+    const isPendingId = record.__data.__pendingSqlId;
 
     if (isPendingId) {
       delete insertData.id;
@@ -380,7 +380,7 @@ export default class MysqlDB {
         response.data.id = realId;
       }
 
-      delete record.__data.__pendingMysqlId;
+      delete record.__data.__pendingSqlId;
     }
   }
 
