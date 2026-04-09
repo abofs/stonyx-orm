@@ -19,6 +19,13 @@ const {
   MYSQL_DATABASE,
   MYSQL_CONNECTION_LIMIT,
   MYSQL_MIGRATIONS_DIR,
+  PG_HOST,
+  PG_PORT,
+  PG_USER,
+  PG_PASSWORD,
+  PG_DATABASE,
+  PG_CONNECTION_LIMIT,
+  PG_MIGRATIONS_DIR,
 } = process.env;
 
 export default {
@@ -48,6 +55,16 @@ export default {
     database: MYSQL_DATABASE ?? 'stonyx',
     connectionLimit: parseInt(MYSQL_CONNECTION_LIMIT ?? '10'),
     migrationsDir: MYSQL_MIGRATIONS_DIR ?? 'migrations',
+    migrationsTable: '__migrations',
+  } : undefined,
+  postgres: PG_HOST ? {
+    host: PG_HOST ?? 'localhost',
+    port: parseInt(PG_PORT ?? '5432'),
+    user: PG_USER ?? 'postgres',
+    password: PG_PASSWORD ?? '',
+    database: PG_DATABASE ?? 'stonyx',
+    connectionLimit: parseInt(PG_CONNECTION_LIMIT ?? '10'),
+    migrationsDir: PG_MIGRATIONS_DIR ?? 'migrations',
     migrationsTable: '__migrations',
   } : undefined,
   restServer: {

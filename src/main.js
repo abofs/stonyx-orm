@@ -109,7 +109,12 @@ export default class Orm {
 
     setup(eventNames);
 
-    if (config.orm.mysql) {
+    if (config.orm.postgres) {
+      const { default: PostgresDB } = await import('./postgres/postgres-db.js');
+      this.sqlDb = new PostgresDB();
+      this.db = this.sqlDb;
+      promises.push(this.sqlDb.init());
+    } else if (config.orm.mysql) {
       const { default: MysqlDB } = await import('./mysql/mysql-db.js');
       this.sqlDb = new MysqlDB();
       this.db = this.sqlDb;

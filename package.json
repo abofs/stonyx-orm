@@ -52,10 +52,14 @@
   },
   "peerDependencies": {
     "@stonyx/rest-server": ">=0.2.1-beta.14",
-    "mysql2": "^3.0.0"
+    "mysql2": "^3.0.0",
+    "pg": "^8.0.0"
   },
   "peerDependenciesMeta": {
     "mysql2": {
+      "optional": true
+    },
+    "pg": {
       "optional": true
     },
     "@stonyx/rest-server": {
