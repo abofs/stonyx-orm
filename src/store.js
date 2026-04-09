@@ -22,15 +22,15 @@ export default class Store {
   }
 
   /**
-   * Async authoritative read. Always queries MySQL for memory: false models.
+   * Async authoritative read. Always queries the SQL database for memory: false models.
    * For memory: true models, returns from store (already loaded on boot).
    * @param {string} modelName - The model name
    * @param {string|number} id - The record ID
    * @returns {Promise<Record|undefined>}
    */
   async find(modelName, id) {
-    // For views in non-MySQL mode, use view resolver
-    if (Orm.instance?.isView?.(modelName) && !this._mysqlDb) {
+    // For views in non-SQL mode, use view resolver
+    if (Orm.instance?.isView?.(modelName) && !this._sqlDb) {
       const resolver = new ViewResolver(modelName);
       return resolver.resolveOne(id);
     }
@@ -40,12 +40,12 @@ export default class Store {
       return this.get(modelName, id);
     }
 
-    // For memory: false models, always query MySQL
-    if (this._mysqlDb) {
-      return this._mysqlDb.findRecord(modelName, id);
+    // For memory: false models, always query the SQL database
+    if (this._sqlDb) {
+      return this._sqlDb.findRecord(modelName, id);
     }
 
-    // Fallback to store (JSON mode or no MySQL)
+    // Fallback to store (JSON mode or no SQL adapter)
     return this.get(modelName, id);
   }
 
@@ -57,8 +57,8 @@ export default class Store {
    * @returns {Promise<Record[]>}
    */
   async findAll(modelName, conditions) {
-    // For views in non-MySQL mode, use view resolver
-    if (Orm.instance?.isView?.(modelName) && !this._mysqlDb) {
+    // For views in non-SQL mode, use view resolver
+    if (Orm.instance?.isView?.(modelName) && !this._sqlDb) {
       const resolver = new ViewResolver(modelName);
       const records = await resolver.resolveAll();
 
@@ -75,9 +75,9 @@ export default class Store {
       return modelStore ? Array.from(modelStore.values()) : [];
     }
 
-    // For memory: false models (or filtered queries), always query MySQL
-    if (this._mysqlDb) {
-      return this._mysqlDb.findAll(modelName, conditions);
+    // For memory: false models (or filtered queries), always query the SQL database
+    if (this._sqlDb) {
+      return this._sqlDb.findAll(modelName, conditions);
     }
 
     // Fallback to store (JSON mode) — apply conditions in-memory if provided
@@ -101,8 +101,8 @@ export default class Store {
    * @returns {Promise<Record[]>}
    */
   async query(modelName, conditions = {}) {
-    if (this._mysqlDb) {
-      return this._mysqlDb.findAll(modelName, conditions);
+    if (this._sqlDb) {
+      return this._sqlDb.findAll(modelName, conditions);
     }
 
     // Fallback: filter in-memory store
@@ -125,10 +125,10 @@ export default class Store {
   _memoryResolver = null;
 
   /**
-   * Set by Orm during init — reference to the MysqlDB instance for on-demand queries.
-   * @type {MysqlDB|null}
+   * Set by Orm during init — reference to the SQL adapter instance for on-demand queries.
+   * @type {object|null}
    */
-  _mysqlDb = null;
+  _sqlDb = null;
 
   /**
    * Check if a model is configured for in-memory storage.

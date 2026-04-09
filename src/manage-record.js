@@ -110,10 +110,10 @@ export function updateRecord(record, rawData, userOptions={}) {
 function assignRecordId(modelName, rawData) {
   if (rawData.id) return;
 
-  // In MySQL mode with numeric IDs, defer to MySQL auto-increment
-  if (Orm.instance?.mysqlDb && !isStringIdModel(modelName)) {
+  // In SQL mode with numeric IDs, defer to database auto-increment
+  if (Orm.instance?.sqlDb && !isStringIdModel(modelName)) {
     rawData.id = `__pending_${Date.now()}_${Math.random()}`;
-    rawData.__pendingMysqlId = true;
+    rawData.__pendingSqlId = true;
     return;
   }
 
