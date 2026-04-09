@@ -26,6 +26,13 @@ const {
   PG_DATABASE,
   PG_CONNECTION_LIMIT,
   PG_MIGRATIONS_DIR,
+  TIMESCALE_HOST,
+  TIMESCALE_PORT,
+  TIMESCALE_USER,
+  TIMESCALE_PASSWORD,
+  TIMESCALE_DATABASE,
+  TIMESCALE_CONNECTION_LIMIT,
+  TIMESCALE_MIGRATIONS_DIR,
 } = process.env;
 
 export default {
@@ -65,6 +72,16 @@ export default {
     database: PG_DATABASE ?? 'stonyx',
     connectionLimit: parseInt(PG_CONNECTION_LIMIT ?? '10'),
     migrationsDir: PG_MIGRATIONS_DIR ?? 'migrations',
+    migrationsTable: '__migrations',
+  } : undefined,
+  timescale: TIMESCALE_HOST ? {
+    host: TIMESCALE_HOST ?? 'localhost',
+    port: parseInt(TIMESCALE_PORT ?? '5432'),
+    user: TIMESCALE_USER ?? 'postgres',
+    password: TIMESCALE_PASSWORD ?? '',
+    database: TIMESCALE_DATABASE ?? 'stonyx',
+    connectionLimit: parseInt(TIMESCALE_CONNECTION_LIMIT ?? '10'),
+    migrationsDir: TIMESCALE_MIGRATIONS_DIR ?? 'migrations',
     migrationsTable: '__migrations',
   } : undefined,
   restServer: {

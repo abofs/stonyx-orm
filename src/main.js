@@ -109,7 +109,12 @@ export default class Orm {
 
     setup(eventNames);
 
-    if (config.orm.postgres) {
+    if (config.orm.timescale) {
+      const { default: TimescaleDB } = await import('./timescale/timescale-db.js');
+      this.sqlDb = new TimescaleDB();
+      this.db = this.sqlDb;
+      promises.push(this.sqlDb.init());
+    } else if (config.orm.postgres) {
       const { default: PostgresDB } = await import('./postgres/postgres-db.js');
       this.sqlDb = new PostgresDB();
       this.db = this.sqlDb;

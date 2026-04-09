@@ -21,17 +21,24 @@ const defaultDeps = {
 };
 
 export default class PostgresDB {
+  /** @type {string[]} PostgreSQL extensions to enable on pool init. Subclasses can override. */
+  static extensions = ['vector'];
+
+  /** @type {string} Config key under config.orm for this adapter. Subclasses can override. */
+  static configKey = 'postgres';
+
   constructor(deps = {}) {
-    if (PostgresDB.instance) return PostgresDB.instance;
-    PostgresDB.instance = this;
+    const Ctor = this.constructor;
+    if (Ctor.instance) return Ctor.instance;
+    Ctor.instance = this;
 
     this.deps = { ...defaultDeps, ...deps };
     this.pool = null;
-    this.pgConfig = this.deps.config.orm.postgres;
+    this.pgConfig = this.deps.config.orm[Ctor.configKey];
   }
 
   async init() {
-    this.pool = await this.deps.getPool(this.pgConfig);
+    this.pool = await this.deps.getPool(this.pgConfig, this.constructor.extensions);
     await this.deps.ensureMigrationsTable(this.pool, this.pgConfig.migrationsTable);
     await this.loadMemoryRecords();
   }
