@@ -1,6 +1,11 @@
 let pool = null;
 
-export async function getPool(pgConfig) {
+/**
+ * Create or return the singleton pg Pool.
+ * @param {Object} pgConfig - Connection config (host, port, user, password, database, connectionLimit)
+ * @param {string[]} [extensions=['vector']] - PostgreSQL extensions to enable on init
+ */
+export async function getPool(pgConfig, extensions = ['vector']) {
   if (pool) return pool;
 
   const { default: pg } = await import('pg');
@@ -16,8 +21,10 @@ export async function getPool(pgConfig) {
     connectionTimeoutMillis: 10000,
   });
 
-  // Enable pgvector extension
-  await pool.query('CREATE EXTENSION IF NOT EXISTS vector');
+  // Enable requested PostgreSQL extensions
+  for (const ext of extensions) {
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS ${ext}`);
+  }
 
   return pool;
 }

@@ -4,8 +4,8 @@ import path from 'path';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
 
-export async function generateMigration(description = 'migration') {
-  const { migrationsDir } = config.orm.postgres;
+export async function generateMigration(description = 'migration', configKey = 'postgres') {
+  const { migrationsDir } = config.orm[configKey];
   const rootPath = config.rootPath;
   const migrationsPath = path.resolve(rootPath, migrationsDir);
 
