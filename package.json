@@ -6,22 +6,42 @@
   ],
   "version": "0.2.1-beta.82",
   "description": "",
-  "main": "src/main.js",
+  "main": "dist/main.js",
   "type": "module",
   "bin": {
-    "stonyx-orm": "./src/cli.js"
+    "stonyx-orm": "./dist/cli.js"
   },
   "exports": {
-    ".": "./src/index.js",
-    "./db": "./src/exports/db.js",
-    "./standalone-db": "./src/standalone-db.js",
-    "./migrate": "./src/migrate.js",
-    "./commands": "./src/commands.js",
-    "./hooks": "./src/hooks.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./db": {
+      "types": "./dist/exports/db.d.ts",
+      "default": "./dist/exports/db.js"
+    },
+    "./standalone-db": {
+      "types": "./dist/standalone-db.d.ts",
+      "default": "./dist/standalone-db.js"
+    },
+    "./migrate": {
+      "types": "./dist/migrate.d.ts",
+      "default": "./dist/migrate.js"
+    },
+    "./commands": {
+      "types": "./dist/commands.d.ts",
+      "default": "./dist/commands.js"
+    },
+    "./hooks": {
+      "types": "./dist/hooks.d.ts",
+      "default": "./dist/hooks.js"
+    }
   },
   "scripts": {
-    "test": "stonyx test",
-    "prepublishOnly": "npm test"
+    "build": "tsc",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build && npm run build:test && stonyx test 'dist-test/test/**/*-test.js'",
+    "prepublishOnly": "npm run build && npm test"
   },
   "repository": {
     "type": "git",
@@ -33,6 +53,7 @@
     "Stone Costa <stone.costa@synamicd.com>"
   ],
   "files": [
+    "dist",
     "src",
     "config",
     "README.md"
@@ -72,6 +93,7 @@
     "mysql2": "^3.20.0",
     "pg": "^8.20.0",
     "qunit": "^2.24.1",
-    "sinon": "^21.0.0"
+    "sinon": "^21.0.0",
+    "typescript": "^5.8.3"
   }
 }
