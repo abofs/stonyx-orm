@@ -4,42 +4,11 @@ import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from '../plural-registry.js';
 import { dbKey } from '../db.js';
 import { AggregateProperty } from '../aggregates.js';
+import type { ForeignKeyDef, ModelSchema, ViewSchema, SnapshotEntry } from '../types/orm-types.js';
 
 interface RelationshipInfo {
   type: 'belongsTo' | 'hasMany';
   modelName: string | null;
-}
-
-interface ForeignKeyDef {
-  references: string;
-  column: string;
-}
-
-interface ModelSchema {
-  table: string;
-  idType: string;
-  columns: Record<string, string>;
-  foreignKeys: Record<string, ForeignKeyDef>;
-  relationships: {
-    belongsTo: Record<string, string | null>;
-    hasMany: Record<string, string | null>;
-  };
-  memory: boolean;
-}
-
-interface ViewSchema {
-  viewName: string;
-  source: string;
-  groupBy?: string;
-  columns: Record<string, string>;
-  foreignKeys: Record<string, ForeignKeyDef>;
-  aggregates: Record<string, AggregateProperty>;
-  relationships: {
-    belongsTo: Record<string, string | null>;
-    hasMany: Record<string, string | null>;
-  };
-  isView: true;
-  memory: boolean;
 }
 
 interface JoinClause {
@@ -361,13 +330,6 @@ export function viewSchemasToSnapshot(viewSchemas: Record<string, ViewSchema>): 
   return snapshot;
 }
 
-interface SnapshotEntry {
-  table: string;
-  idType: string;
-  columns: Record<string, string>;
-  foreignKeys: Record<string, ForeignKeyDef>;
-}
-
 interface ViewSnapshotEntry {
   viewName: string;
   source: string;
@@ -393,4 +355,5 @@ export function schemasToSnapshot(schemas: Record<string, ModelSchema>): Record<
   return snapshot;
 }
 
-export type { ModelSchema, ViewSchema, ForeignKeyDef, SnapshotEntry, ViewSnapshotEntry };
+export type { ModelSchema, ViewSchema, ForeignKeyDef, SnapshotEntry } from '../types/orm-types.js';
+export type { ViewSnapshotEntry };

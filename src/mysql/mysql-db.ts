@@ -14,12 +14,7 @@ import config from 'stonyx/config';
 import log from 'stonyx/log';
 import path from 'path';
 import type { Pool } from 'mysql2/promise';
-
-interface OrmRecord {
-  id: unknown;
-  __data: Record<string, unknown> & { id?: unknown; __pendingSqlId?: boolean };
-  __relationships: Record<string, { id: unknown } | undefined>;
-}
+import type { OrmRecord } from '../types/orm-types.js';
 
 interface PersistContext {
   record?: OrmRecord;
@@ -467,7 +462,7 @@ export default class MysqlDB {
     // Check FK changes too
     for (const fkCol of Object.keys(schema.foreignKeys)) {
       const relName = fkCol.replace(/_id$/, '');
-      const currentFkValue = record.__relationships[relName]?.id ?? null;
+      const currentFkValue = (record.__relationships[relName] as { id: unknown } | undefined)?.id ?? null;
       const oldFkValue = oldState[relName] ?? null;
 
       if (currentFkValue !== oldFkValue) {
@@ -519,7 +514,7 @@ export default class MysqlDB {
       const related = record.__relationships[relName];
 
       if (related) {
-        row[fkCol] = related.id;
+        row[fkCol] = (related as { id: unknown }).id;
       } else if (data[relName] !== undefined) {
         // Raw FK value (e.g., from create payload)
         row[fkCol] = data[relName];

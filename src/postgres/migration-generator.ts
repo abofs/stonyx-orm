@@ -3,23 +3,7 @@ import { readFile, createFile, createDirectory, fileExists } from '@stonyx/utils
 import path from 'path';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
-
-interface ForeignKeyRef {
-  references: string;
-  column: string;
-}
-
-interface SnapshotEntry {
-  table?: string;
-  idType?: string;
-  columns?: Record<string, string>;
-  foreignKeys?: Record<string, ForeignKeyRef>;
-  vectorColumns?: Record<string, number>;
-  isView?: boolean;
-  viewName?: string;
-  source?: string;
-  viewQuery?: string;
-}
+import type { ForeignKeyDef, SnapshotEntry } from '../types/orm-types.js';
 
 interface ColumnChange {
   model: string;
@@ -37,7 +21,7 @@ interface ColumnTypeChange {
 interface ForeignKeyChange {
   model: string;
   column: string;
-  references: ForeignKeyRef;
+  references: ForeignKeyDef;
 }
 
 interface DiffResult {
@@ -289,8 +273,8 @@ export function diffSnapshots(previous: Record<string, SnapshotEntry>, current: 
     }
 
     // Foreign key changes
-    const prevFKs: Record<string, ForeignKeyRef> = previous[name].foreignKeys || {};
-    const currFKs: Record<string, ForeignKeyRef> = current[name].foreignKeys || {};
+    const prevFKs: Record<string, ForeignKeyDef> = previous[name].foreignKeys || {};
+    const currFKs: Record<string, ForeignKeyDef> = current[name].foreignKeys || {};
 
     for (const [col, refs] of Object.entries(currFKs)) {
       if (!prevFKs[col]) {

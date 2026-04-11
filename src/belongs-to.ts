@@ -1,6 +1,7 @@
 import { store, relationships } from './main.js';
 import { createRecord } from './manage-record.js';
 import { getRelationships } from './relationships.js';
+import type { SourceRecord } from './types/orm-types.js';
 
 function getOrSet<K, V>(map: Map<K, V>, key: K, defaultValue: V): V {
   if (!map.has(key)) map.set(key, defaultValue);
@@ -9,13 +10,6 @@ function getOrSet<K, V>(map: Map<K, V>, key: K, defaultValue: V): V {
 
 interface BelongsToOptions {
   _relationshipKey?: string;
-  [key: string]: unknown;
-}
-
-interface SourceRecord {
-  __model: { __name: string; [key: string]: unknown };
-  __relationships: Record<string, unknown>;
-  id: unknown;
   [key: string]: unknown;
 }
 
