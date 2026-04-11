@@ -114,6 +114,25 @@ export interface ViewSchema {
   memory: boolean;
 }
 
+/**
+ * Typed relationship registry maps.
+ * Each key in Orm.relationships stores a different nested Map structure.
+ */
+/** Relationship registry map types — source → target → recordId → value */
+export type HasManyMap = Map<string, Map<string, Map<unknown, unknown[]>>>;
+export type BelongsToMap = Map<string, Map<string, Map<unknown, unknown>>>;
+export type GlobalMap = Map<string, unknown[][]>;
+export type PendingMap = Map<string, Map<unknown, unknown[][]>>;
+export type PendingBelongsToMap = Map<string, Map<unknown, unknown[]>>;
+
+export interface RelationshipMaps {
+  hasMany: HasManyMap;
+  belongsTo: BelongsToMap;
+  global: GlobalMap;
+  pending: PendingMap;
+  pendingBelongsTo: PendingBelongsToMap;
+}
+
 export interface SnapshotEntry {
   table?: string;
   idType?: string;

@@ -32,9 +32,10 @@ interface ExecuteResult {
 }
 
 interface OrmStore {
-  get(modelName: string, id?: unknown): unknown;
+  get(key: string): Map<number | string, unknown> | undefined;
+  get(key: string, id: number | string): unknown;
   _memoryResolver?: (modelName: string) => boolean;
-  data?: Map<string, Map<unknown, unknown>>;
+  data?: Map<string, Map<number | string, unknown>>;
 }
 
 interface MysqlDBDeps {
@@ -404,7 +405,7 @@ export default class MysqlDB {
     if (!schema) return;
 
     const recordId = response?.data?.id;
-    const record = recordId != null ? this.deps.store.get(modelName, isNaN(recordId as number) ? recordId : parseInt(recordId as string)) as OrmRecord | null : null;
+    const record = recordId != null ? this.deps.store.get(modelName, (isNaN(recordId as number) ? recordId : parseInt(recordId as string)) as number | string) as OrmRecord | null : null;
 
     if (!record) return;
 
@@ -427,12 +428,12 @@ export default class MysqlDB {
     if (isPendingId && result.insertId) {
       const pendingId = record.id;
       const realId = result.insertId;
-      const modelStore = this.deps.store.get(modelName) as Map<unknown, OrmRecord>;
+      const modelStore = this.deps.store.get(modelName)!;
 
-      modelStore.delete(pendingId);
+      modelStore.delete(pendingId as number | string);
       record.__data.id = realId;
       record.id = realId;
-      modelStore.set(realId, record);
+      modelStore.set(realId as number | string, record);
 
       // Update the response data with the real ID
       if (response?.data) {

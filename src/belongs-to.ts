@@ -1,6 +1,6 @@
-import { store, relationships } from './main.js';
+import { store } from './main.js';
 import { createRecord } from './manage-record.js';
-import { getRelationships } from './relationships.js';
+import { getRelationships, getHasManyRegistry, getPendingRegistry, getPendingBelongsToRegistry } from './relationships.js';
 import type { SourceRecord } from './types/orm-types.js';
 
 function getOrSet<K, V>(map: Map<K, V>, key: K, defaultValue: V): V {
@@ -26,9 +26,9 @@ type RelationshipHandler = ((sourceRecord: SourceRecord, rawData: unknown, optio
 };
 
 export default function belongsTo(modelName: string): RelationshipHandler {
-  const hasManyRelationships = relationships.get('hasMany') as Map<string, Map<string, Map<unknown, unknown[]>>>;
-  const pendingHasManyQueue = relationships.get('pending') as Map<string, Map<unknown, unknown[]>>;
-  const pendingBelongsToQueue = relationships.get('pendingBelongsTo') as Map<string, Map<unknown, PendingBelongsToEntry[]>>;
+  const hasManyRelationships = getHasManyRegistry();
+  const pendingHasManyQueue = getPendingRegistry();
+  const pendingBelongsToQueue = getPendingBelongsToRegistry();
 
   const fn = (sourceRecord: SourceRecord, rawData: unknown, options: BelongsToOptions): unknown => {
     if (!rawData) return null;
@@ -37,7 +37,7 @@ export default function belongsTo(modelName: string): RelationshipHandler {
     const relationshipId = sourceRecord.id;
     const relationshipKey = options._relationshipKey;
     const relationship = getRelationships('belongsTo', sourceModelName, modelName, relationshipId as string) as Map<unknown, unknown>;
-    const modelStore = store.get(modelName) as Map<unknown, unknown> | undefined;
+    const modelStore = store.get(modelName);
 
     // Try to get existing record
     let output: unknown;
@@ -45,7 +45,7 @@ export default function belongsTo(modelName: string): RelationshipHandler {
     if (typeof rawData === 'object') {
       output = createRecord(modelName, rawData as Record<string, unknown>, options);
     } else if (modelStore) {
-      output = modelStore.get(rawData);
+      output = modelStore.get(rawData as number | string);
     }
 
     // If not found and is a string ID, register as pending

@@ -1,5 +1,6 @@
-import Orm, { store, relationships } from './main.js';
+import Orm, { store } from './main.js';
 import OrmRecord from './record.js';
+import { getGlobalRegistry, getPendingRegistry, getPendingBelongsToRegistry, getBelongsToRegistry, getHasManyRegistry } from './relationships.js';
 import type Serializer from './serializer.js';
 
 interface CreateRecordOptions {
@@ -35,14 +36,14 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
     throw new Error(`Cannot create records for read-only view '${modelName}'`);
   }
 
-  const modelStore = store.get(modelName) as Map<unknown, OrmRecord> | undefined;
-  const globalRelationships = relationships.get('global') as Map<string, unknown[][]>;
-  const pendingRelationships = relationships.get('pending') as Map<string, Map<unknown, unknown[][]>>;
+  const modelStore = store.get(modelName);
+  const globalRelationships = getGlobalRegistry();
+  const pendingRelationships = getPendingRegistry();
 
   if (!modelStore) throw new Error(`Model store for '${modelName}' is not registered. Ensure the model is defined before creating records.`);
 
   assignRecordId(modelName, rawData);
-  if (modelStore.has(rawData.id)) return modelStore.get(rawData.id)!;
+  if (modelStore.has(rawData.id as number | string)) return modelStore.get(rawData.id as number | string)! as OrmRecord;
 
   const recordClasses = orm.getRecordClasses(modelName);
   const modelClass = recordClasses.modelClass as (new (name: string) => { __name: string; [key: string]: unknown }) | undefined;
@@ -55,7 +56,7 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   const record = new OrmRecord(model, serializer);
 
   record.serialize(rawData, options);
-  modelStore.set(record.id, record);
+  modelStore.set(record.id as number | string, record);
 
   // populate global hasMany relationships
   const globalHasMany = globalRelationships.get(modelName);
@@ -69,12 +70,12 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   }
 
   // Fulfill pending belongsTo relationships
-  const pendingBelongsToQueue = relationships.get('pendingBelongsTo') as Map<string, Map<unknown, PendingBelongsToEntry[]>>;
-  const pendingBelongsTo = pendingBelongsToQueue.get(modelName)?.get(record.id);
+  const pendingBelongsToQueue = getPendingBelongsToRegistry();
+  const pendingBelongsTo = pendingBelongsToQueue.get(modelName)?.get(record.id) as PendingBelongsToEntry[] | undefined;
 
   if (pendingBelongsTo) {
-    const belongsToReg = relationships.get('belongsTo') as Map<string, Map<string, Map<unknown, unknown>>>;
-    const hasManyReg = relationships.get('hasMany') as Map<string, Map<string, Map<unknown, unknown[]>>>;
+    const belongsToReg = getBelongsToRegistry();
+    const hasManyReg = getHasManyRegistry();
 
     for (const { sourceRecord, sourceModelName, relationshipKey, relationshipId } of pendingBelongsTo) {
       // Update the belongsTo relationship on the source record
@@ -135,7 +136,7 @@ function assignRecordId(modelName: string, rawData: { [key: string]: unknown }):
     return;
   }
 
-  const modelStore = Array.from((store.get(modelName) as Map<unknown, OrmRecord>).values());
+  const modelStore = Array.from(store.get(modelName)!.values()) as OrmRecord[];
   rawData.id = modelStore.length ? (modelStore.at(-1)!.id as number) + 1 : 1;
 }
 
