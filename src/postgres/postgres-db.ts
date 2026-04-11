@@ -235,9 +235,10 @@ export default class PostgresDB {
         continue;
       }
 
+      const sourceIdType = schemas[viewSchema.source]?.idType || 'number';
       const schema: ModelSchema = {
         table: viewSchema.viewName,
-        idType: 'number',
+        idType: sourceIdType,
         columns: viewSchema.columns || {},
         foreignKeys: (viewSchema.foreignKeys || {}) as Record<string, ForeignKeyDef>,
         relationships: { belongsTo: {}, hasMany: {} },
@@ -283,9 +284,10 @@ export default class PostgresDB {
       const viewSchemas = this.deps.introspectViews();
       const viewSchema = viewSchemas[modelName];
       if (viewSchema) {
+        const sourceIdType = schemas[viewSchema.source]?.idType || 'number';
         schema = {
           table: viewSchema.viewName,
-          idType: 'number',
+          idType: sourceIdType,
           columns: viewSchema.columns || {},
           foreignKeys: (viewSchema.foreignKeys || {}) as Record<string, ForeignKeyDef>,
           relationships: { belongsTo: {}, hasMany: {} },
@@ -328,9 +330,10 @@ export default class PostgresDB {
       const viewSchemas = this.deps.introspectViews();
       const viewSchema = viewSchemas[modelName];
       if (viewSchema) {
+        const sourceIdType = schemas[viewSchema.source]?.idType || 'number';
         schema = {
           table: viewSchema.viewName,
-          idType: 'number',
+          idType: sourceIdType,
           columns: viewSchema.columns || {},
           foreignKeys: (viewSchema.foreignKeys || {}) as Record<string, ForeignKeyDef>,
           relationships: { belongsTo: {}, hasMany: {} },
@@ -423,7 +426,7 @@ export default class PostgresDB {
    * @private
    */
   private _evictIfNotMemory(modelName: string, record: OrmRecord): void {
-    const storeRef = this.deps.store as unknown as {
+    const storeRef = this.deps.store as {
       _memoryResolver?: (name: string) => boolean;
       get?: (name: string) => Map<unknown, unknown> | undefined;
       data?: { get(name: string): Map<unknown, unknown> | undefined };

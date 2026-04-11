@@ -98,7 +98,8 @@ export default class Orm {
           registerPluralName(name, exported as { pluralName?: string });
         }
 
-        return (this as unknown as Record<string, Record<string, unknown>>)[pluralize(lowerCaseType)][alias] = exported;
+        const collection = this[pluralize(lowerCaseType) as keyof this] as Record<string, unknown>;
+        return collection[alias] = exported;
       }, { ignoreAccessFailure: true, rawName: true, recursive: true, recursiveNaming: true });
     });
 

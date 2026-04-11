@@ -204,7 +204,7 @@ export default class Store {
       this._cleanupRelationshipRegistries(modelName, recordId);
       recordToUnload.clean();
 
-      this.data.get(modelName)!.delete(recordId as string | number);
+      this.data.get(modelName)?.delete(recordId as string | number);
     }
   }
 

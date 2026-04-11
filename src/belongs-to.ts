@@ -69,7 +69,8 @@ export default function belongsTo(modelName: string): RelationshipHandler {
     relationship.set(relationshipId, output || {});
 
     // Populate hasMany side if the relationship is defined
-    const otherSide = hasManyRelationships.get(modelName)?.get(sourceModelName)?.get((output as SourceRecord)?.id) as unknown[] | undefined;
+    const outputRecord = typeof output === 'object' && output !== null && 'id' in output ? output as SourceRecord : undefined;
+    const otherSide = outputRecord ? hasManyRelationships.get(modelName)?.get(sourceModelName)?.get(outputRecord.id) as unknown[] | undefined : undefined;
 
     if (otherSide) {
       otherSide.push(sourceRecord);
