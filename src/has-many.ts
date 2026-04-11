@@ -17,6 +17,7 @@ interface PendingItem {
 
 type RelationshipHandler = ((sourceRecord: SourceRecord, rawData: unknown, options: HasManyOptions) => unknown[]) & {
   __relatedModelName: string;
+  __relationshipType: 'hasMany';
 };
 
 function queuePendingRelationship(
@@ -86,5 +87,6 @@ export default function hasMany(modelName: string): RelationshipHandler {
   };
 
   Object.defineProperty(fn, '__relatedModelName', { value: modelName });
+  Object.defineProperty(fn, '__relationshipType', { value: 'hasMany' as const });
   return fn as RelationshipHandler;
 }

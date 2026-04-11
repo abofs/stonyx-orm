@@ -22,6 +22,7 @@ interface PendingBelongsToEntry {
 
 type RelationshipHandler = ((sourceRecord: SourceRecord, rawData: unknown, options: BelongsToOptions) => unknown) & {
   __relatedModelName: string;
+  __relationshipType: 'belongsTo';
 };
 
 export default function belongsTo(modelName: string): RelationshipHandler {
@@ -84,5 +85,6 @@ export default function belongsTo(modelName: string): RelationshipHandler {
   };
 
   Object.defineProperty(fn, '__relatedModelName', { value: modelName });
+  Object.defineProperty(fn, '__relationshipType', { value: 'belongsTo' as const });
   return fn as RelationshipHandler;
 }

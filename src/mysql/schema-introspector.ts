@@ -5,6 +5,7 @@ import { getPluralName } from '../plural-registry.js';
 import { dbKey } from '../db.js';
 import { AggregateProperty } from '../aggregates.js';
 import type { ForeignKeyDef, ModelSchema, ViewSchema, SnapshotEntry } from '../types/orm-types.js';
+import ModelProperty from '../model-property.js';
 
 interface RelationshipInfo {
   type: 'belongsTo' | 'hasMany';
@@ -16,23 +17,18 @@ interface JoinClause {
   condition: string;
 }
 
-interface ModelProperty {
-  type: string;
-  constructor: { name: string };
-}
-
 interface RelationshipProperty {
   __relatedModelName?: string | null;
-  toString(): string;
+  __relationshipType?: string;
 }
 
 function getRelationshipInfo(property: unknown): RelationshipInfo | null {
   if (typeof property !== 'function') return null;
-  const fnStr = (property as RelationshipProperty).toString();
+  const relType = (property as RelationshipProperty).__relationshipType;
   const modelName = (property as RelationshipProperty).__relatedModelName || null;
 
-  if (fnStr.includes(`getRelationships('belongsTo',`)) return { type: 'belongsTo', modelName };
-  if (fnStr.includes(`getRelationships('hasMany',`)) return { type: 'hasMany', modelName };
+  if (relType === 'belongsTo') return { type: 'belongsTo', modelName };
+  if (relType === 'hasMany') return { type: 'hasMany', modelName };
 
   return null;
 }
@@ -67,7 +63,7 @@ export function introspectModels(): Record<string, ModelSchema> {
         relationships.belongsTo[key] = relInfo.modelName;
       } else if (relInfo?.type === 'hasMany') {
         relationships.hasMany[key] = relInfo.modelName;
-      } else if ((property as ModelProperty)?.constructor?.name === 'ModelProperty') {
+      } else if (property instanceof ModelProperty) {
         if (key === 'id') {
           idType = (property as ModelProperty).type;
         } else {
@@ -210,7 +206,7 @@ export function introspectViews(): Record<string, ViewSchema> {
         };
       } else if (relInfo?.type === 'hasMany') {
         relationships.hasMany[key] = relInfo.modelName;
-      } else if ((property as ModelProperty)?.constructor?.name === 'ModelProperty') {
+      } else if (property instanceof ModelProperty) {
         const transforms = orm.transforms;
         columns[key] = getMysqlType((property as ModelProperty).type, transforms[(property as ModelProperty).type] as ((...args: unknown[]) => unknown) & { mysqlType?: string });
       }
