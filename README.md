@@ -17,6 +17,23 @@ A lightweight ORM for Stonyx projects, featuring model definitions, serializers,
 - **REST Server Integration**: Automatic route setup with customizable access control.
 - **Lifecycle Hooks**: Middleware-based before/after hooks for validation, authorization, side effects, and auditing.
 
+## Public API vs Internals
+
+Records use a proxy that exposes model attributes as direct properties. Always use direct property access for reading and writing field values:
+
+```js
+// Correct: read/write via the proxy
+const age = record.age;
+record.age = 5;
+
+// Correct: iterate fields using the record directly
+for (const key of Object.keys(record.serialize())) {
+  console.log(key, record[key]);
+}
+```
+
+All properties prefixed with `__` (`__data`, `__relationships`, `__model`, `__serializer`, `__serialized`) are **internal implementation details** and must not be accessed by consumer code. Bypassing the proxy by reading or writing `__data` directly skips type transforms and change tracking, which can lead to silent data corruption.
+
 ## Installation
 
 ```bash
@@ -417,7 +434,7 @@ Each hook receives a context object with comprehensive information:
 - It contains a deep copy of the record's state **before** the operation executes (captured before the `before` hook fires)
 - The deep copy is created via JSON serialization (`JSON.parse(JSON.stringify())`) to ensure complete isolation
 - For `delete` operations, `recordId` is provided in after hooks since the record may no longer exist in the store
-- `oldState` is captured from `record.__data` or the record itself, providing access to the raw data structure
+- `oldState` is captured as a deep copy of the record's data before the operation, providing access to the previous field values
 
 ### Usage Examples
 
@@ -520,8 +537,8 @@ afterHook('update', 'animal', async (context) => {
 
   // Track multiple field changes
   const changedFields = [];
-  for (const key in context.record.__data) {
-    if (context.oldState[key] !== context.record.__data[key]) {
+  for (const key of Object.keys(context.oldState)) {
+    if (context.oldState[key] !== context.record[key]) {
       changedFields.push(key);
     }
   }
@@ -560,9 +577,9 @@ afterHook('update', 'animal', async (context) => {
   // Compare oldState with current record to capture exact changes
   const changes = {};
   if (context.oldState) {
-    for (const [key, newValue] of Object.entries(context.record.__data || context.record)) {
-      if (context.oldState[key] !== newValue) {
-        changes[key] = { from: context.oldState[key], to: newValue };
+    for (const key of Object.keys(context.oldState)) {
+      if (context.oldState[key] !== context.record[key]) {
+        changes[key] = { from: context.oldState[key], to: context.record[key] };
       }
     }
   }

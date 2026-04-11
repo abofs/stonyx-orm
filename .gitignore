@@ -1,3 +1,7 @@
+# build output
+/dist/
+/dist-test/
+
 # dependencies
 /node_modules/
 
@@ -8,6 +12,10 @@
 
 # db/log files
 *.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.test.json
 *.log
 
 # npm auth (never commit tokens)
