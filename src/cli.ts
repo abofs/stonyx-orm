@@ -60,7 +60,7 @@ async function loadConfig(args: string[]): Promise<CLIConfig> {
       const content = await fs.readFile(configPath, 'utf-8');
       Object.assign(config, JSON.parse(content));
     } catch (err) {
-      console.error(`Error reading config file '${configPath}': ${(err as Error).message}`);
+      console.error(`Error reading config file '${configPath}': ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
 
@@ -175,7 +175,7 @@ async function run(): Promise<void> {
         process.exit(1);
     }
   } catch (err) {
-    console.error(`Error: ${(err as Error).message}`);
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }

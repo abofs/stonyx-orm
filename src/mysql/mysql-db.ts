@@ -10,6 +10,7 @@ import { createRecord } from '../manage-record.js';
 import { confirm } from '@stonyx/utils/prompt';
 import { readFile } from '@stonyx/utils/file';
 import { getPluralName } from '../plural-registry.js';
+import { isDbError } from '../utils.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
 import path from 'path';
@@ -205,7 +206,7 @@ export default class MysqlDB {
         }
       } catch (error) {
         // Table may not exist yet (pre-migration) — skip gracefully
-        if ((error as { code?: string }).code === 'ER_NO_SUCH_TABLE') {
+        if (isDbError(error) && error.code === 'ER_NO_SUCH_TABLE') {
           this.deps.log.db!(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
           continue;
         }
@@ -235,7 +236,7 @@ export default class MysqlDB {
           this.deps.createRecord(viewName, rawData, { isDbRecord: true, serialize: false, transform: false });
         }
       } catch (error) {
-        if ((error as { code?: string }).code === 'ER_NO_SUCH_TABLE') {
+        if (isDbError(error) && error.code === 'ER_NO_SUCH_TABLE') {
           this.deps.log.db!(`View '${viewSchema.viewName}' does not exist yet. Skipping load for '${viewName}'.`);
           continue;
         }
@@ -286,7 +287,7 @@ export default class MysqlDB {
 
       return record;
     } catch (error) {
-      if ((error as { code?: string }).code === 'ER_NO_SUCH_TABLE') return undefined;
+      if (isDbError(error) && error.code === 'ER_NO_SUCH_TABLE') return undefined;
       throw error;
     }
   }
@@ -326,7 +327,7 @@ export default class MysqlDB {
 
       return records;
     } catch (error) {
-      if ((error as { code?: string }).code === 'ER_NO_SUCH_TABLE') return [];
+      if (isDbError(error) && error.code === 'ER_NO_SUCH_TABLE') return [];
       throw error;
     }
   }

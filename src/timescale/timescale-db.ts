@@ -1,4 +1,5 @@
 import PostgresDB from '../postgres/postgres-db.js';
+import { isDbError } from '../utils.js';
 import { buildCreateHypertable, buildTimeBucket, buildContinuousAggregate, buildCompressionPolicy, buildEnableCompression } from './query-builder.js';
 
 interface HypertableOptions {
@@ -63,7 +64,7 @@ export default class TimescaleDB extends PostgresDB {
       const result = await this.requirePool().query(sql, values);
       return result.rows;
     } catch (error) {
-      if ((error as { code?: string }).code === '42P01') return [];
+      if (isDbError(error) && error.code === '42P01') return [];
       throw error;
     }
   }

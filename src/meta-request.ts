@@ -44,7 +44,7 @@ export default class MetaRequest extends Request {
 
             return metadata;
           } catch (error) {
-            return { error: (error as Error).message };
+            return { error: error instanceof Error ? error.message : String(error) };
           }
         },
       },
