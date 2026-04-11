@@ -1,4 +1,4 @@
-import Orm from '../main.js';
+import Orm from '@stonyx/orm';
 import { getPgType, getVectorType } from './type-map.js';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from '../plural-registry.js';

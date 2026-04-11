@@ -6,6 +6,7 @@ interface AggregateRecord {
 }
 
 export class AggregateProperty {
+  readonly __kind = 'AggregateProperty' as const;
   readonly aggregateType: AggregateType;
   readonly relationship: string | undefined;
   readonly field: string | undefined;

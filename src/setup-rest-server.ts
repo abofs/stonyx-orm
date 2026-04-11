@@ -1,5 +1,5 @@
 import { waitForModule } from 'stonyx';
-import { store } from './main.js';
+import { store } from '@stonyx/orm';
 import OrmRequest from './orm-request.js';
 import MetaRequest from './meta-request.js';
 import RestServer from '@stonyx/rest-server';

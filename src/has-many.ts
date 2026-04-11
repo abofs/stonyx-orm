@@ -1,5 +1,4 @@
-import { store } from './main.js';
-import { createRecord } from './manage-record.js';
+import { createRecord, store } from '@stonyx/orm';
 import { getRelationships, getGlobalRegistry, getPendingRegistry, getBelongsToRegistry } from './relationships.js';
 import { getOrSet, makeArray } from '@stonyx/utils/object';
 import { dbKey } from './db.js';

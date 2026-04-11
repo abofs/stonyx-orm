@@ -1,10 +1,11 @@
-import Orm from './main.js';
+import Orm from '@stonyx/orm';
 
 function validType(type: string): boolean {
   return Object.keys(Orm.instance.transforms).includes(type);
 }
 
 export default class ModelProperty {
+  readonly __kind = 'ModelProperty' as const;
   type: string;
   private _value: unknown;
   ignoreFirstTransform?: boolean;

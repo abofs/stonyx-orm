@@ -5,7 +5,7 @@ import { introspectModels, introspectViews, getTopologicalOrder, schemasToSnapsh
 import type { ModelSchema, ViewSchema, SnapshotEntry } from './schema-introspector.js';
 import { loadLatestSnapshot, detectSchemaDrift } from './migration-generator.js';
 import { buildInsert, buildUpdate, buildDelete, buildSelect } from './query-builder.js';
-import { store } from '../main.js';
+import { store } from '@stonyx/orm';
 import { createRecord } from '../manage-record.js';
 import { confirm } from '@stonyx/utils/prompt';
 import { readFile } from '@stonyx/utils/file';

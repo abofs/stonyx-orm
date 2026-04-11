@@ -1,6 +1,5 @@
 import { Request } from '@stonyx/rest-server';
-import Orm, { store } from './main.js';
-import { createRecord, updateRecord } from './manage-record.js';
+import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from './plural-registry.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
