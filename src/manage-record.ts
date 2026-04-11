@@ -43,7 +43,8 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   if (!modelStore) throw new Error(`Model store for '${modelName}' is not registered. Ensure the model is defined before creating records.`);
 
   assignRecordId(modelName, rawData);
-  if (modelStore.has(rawData.id as number | string)) return modelStore.get(rawData.id as number | string)! as OrmRecord;
+  const existingRecord = modelStore.get(rawData.id as number | string);
+  if (existingRecord) return existingRecord as OrmRecord;
 
   const recordClasses = orm.getRecordClasses(modelName);
   const modelClass = recordClasses.modelClass as (new (name: string) => { __name: string; [key: string]: unknown }) | undefined;

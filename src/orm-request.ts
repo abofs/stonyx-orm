@@ -167,13 +167,15 @@ function traverseIncludePath(
       const id = relatedRecord.id as string | number;
 
       // Initialize Set for this type if needed
-      if (!seen.has(type)) {
-        seen.set(type, new Set());
+      let seenIds = seen.get(type);
+      if (!seenIds) {
+        seenIds = new Set();
+        seen.set(type, seenIds);
       }
 
       // Check if we've already seen this type+id combination
-      if (!seen.get(type)!.has(id)) {
-        seen.get(type)!.add(id);
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
         included.push(relatedRecord);
         nextRecords.push(relatedRecord); // Prepare for next depth level
       } else if (depth < includePath.length - 1) {

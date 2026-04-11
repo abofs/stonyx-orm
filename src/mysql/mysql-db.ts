@@ -72,7 +72,7 @@ const defaultDeps: MysqlDBDeps = {
   introspectModels, introspectViews, getTopologicalOrder, schemasToSnapshot,
   loadLatestSnapshot, detectSchemaDrift,
   buildInsert, buildUpdate, buildDelete, buildSelect,
-  createRecord, store: store as unknown as OrmStore, confirm, readFile, getPluralName,
+  createRecord, store: store as OrmStore, confirm, readFile, getPluralName,
   config, log, path
 };
 
@@ -199,7 +199,8 @@ export default class MysqlDB {
       const { sql, values } = this.deps.buildSelect(schema.table);
 
       try {
-        const [rows] = await this.requirePool().execute(sql, values) as [Record<string, unknown>[], unknown];
+        const result = await this.requirePool().execute(sql, values);
+        const rows = result[0] as Record<string, unknown>[];
 
         for (const row of rows) {
           const rawData = this._rowToRawData(row, schema);
@@ -230,7 +231,8 @@ export default class MysqlDB {
       const { sql, values } = this.deps.buildSelect(schema.table);
 
       try {
-        const [rows] = await this.requirePool().execute(sql, values) as [Record<string, unknown>[], unknown];
+        const result = await this.requirePool().execute(sql, values);
+        const rows = result[0] as Record<string, unknown>[];
 
         for (const row of rows) {
           const rawData = this._rowToRawData(row, schema);
@@ -275,7 +277,8 @@ export default class MysqlDB {
     const { sql, values } = this.deps.buildSelect(schema.table, { id });
 
     try {
-      const [rows] = await this.requirePool().execute(sql, values) as [Record<string, unknown>[], unknown];
+      const result = await this.requirePool().execute(sql, values);
+      const rows = result[0] as Record<string, unknown>[];
 
       if (rows.length === 0) return undefined;
 
@@ -314,7 +317,8 @@ export default class MysqlDB {
     const { sql, values } = this.deps.buildSelect(schema.table, conditions);
 
     try {
-      const [rows] = await this.requirePool().execute(sql, values) as [Record<string, unknown>[], unknown];
+      const result = await this.requirePool().execute(sql, values);
+      const rows = result[0] as Record<string, unknown>[];
 
       const records = rows.map(row => {
         const rawData = this._rowToRawData(row, schema!);
