@@ -8,6 +8,7 @@ import { createRecord } from '../manage-record.js';
 import { confirm } from '@stonyx/utils/prompt';
 import { readFile } from '@stonyx/utils/file';
 import { getPluralName } from '../plural-registry.js';
+import { isDbError } from '../utils.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
 import path from 'path';
@@ -240,7 +241,7 @@ export default class PostgresDB {
         }
       } catch (error) {
         // 42P01 = undefined_table (PG equivalent of ER_NO_SUCH_TABLE)
-        if ((error as { code?: string }).code === '42P01') {
+        if (isDbError(error) && error.code === '42P01') {
           this.deps.log.db!(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
           continue;
         }
@@ -278,7 +279,7 @@ export default class PostgresDB {
           this.deps.createRecord(viewName, rawData, { isDbRecord: true, serialize: false, transform: false });
         }
       } catch (error) {
-        if ((error as { code?: string }).code === '42P01') {
+        if (isDbError(error) && error.code === '42P01') {
           this.deps.log.db!(`View '${viewSchema.viewName}' does not exist yet. Skipping load for '${viewName}'.`);
           continue;
         }
@@ -335,7 +336,7 @@ export default class PostgresDB {
 
       return record;
     } catch (error) {
-      if ((error as { code?: string }).code === '42P01') return undefined;
+      if (isDbError(error) && error.code === '42P01') return undefined;
       throw error;
     }
   }
@@ -382,7 +383,7 @@ export default class PostgresDB {
 
       return records;
     } catch (error) {
-      if ((error as { code?: string }).code === '42P01') return [];
+      if (isDbError(error) && error.code === '42P01') return [];
       throw error;
     }
   }
@@ -409,7 +410,7 @@ export default class PostgresDB {
         return { record, distance };
       });
     } catch (error) {
-      if ((error as { code?: string }).code === '42P01') return [];
+      if (isDbError(error) && error.code === '42P01') return [];
       throw error;
     }
   }
@@ -436,7 +437,7 @@ export default class PostgresDB {
         return { record, distance };
       });
     } catch (error) {
-      if ((error as { code?: string }).code === '42P01') return [];
+      if (isDbError(error) && error.code === '42P01') return [];
       throw error;
     }
   }

@@ -37,7 +37,7 @@ export default async function(route: string, accessPath: string, metaRoute: bool
       }
     });
   } catch (error) {
-    log.error!((error as Error).message);
+    log.error!(error instanceof Error ? error.message : String(error));
     log.warn!('You must define a valid access configuration file in order to access ORM generated REST endpoints.');
   }
 

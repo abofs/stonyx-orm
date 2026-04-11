@@ -189,7 +189,7 @@ export async function generateMigration(description: string = 'migration', confi
         upStatements.push(ddl + ';');
         downStatements.unshift(`DROP VIEW IF EXISTS "${viewSchemas[name].viewName}";`);
       } catch (error) {
-        upStatements.push(`-- WARNING: Could not generate DDL for view '${name}': ${(error as Error).message}`);
+        upStatements.push(`-- WARNING: Could not generate DDL for view '${name}': ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -206,7 +206,7 @@ export async function generateMigration(description: string = 'migration', confi
         const ddl = buildViewDDL(name, viewSchemas[name], schemas);
         upStatements.push(ddl + ';');
       } catch (error) {
-        upStatements.push(`-- WARNING: Could not generate DDL for changed view '${name}': ${(error as Error).message}`);
+        upStatements.push(`-- WARNING: Could not generate DDL for changed view '${name}': ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
