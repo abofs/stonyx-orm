@@ -109,9 +109,9 @@ export default class ViewResolver {
       }
 
       // Clear existing record from store to allow re-resolution
-      const viewStore = store.get(this.viewName) as Map<unknown, unknown> | undefined;
-      if (viewStore?.has(rawData.id)) {
-        viewStore.delete(rawData.id);
+      const viewStore = store.get(this.viewName);
+      if (viewStore?.has(rawData.id as number | string)) {
+        viewStore.delete(rawData.id as number | string);
       }
 
       const record = createRecord(this.viewName, rawData, { isDbRecord: true });
@@ -186,9 +186,9 @@ export default class ViewResolver {
       }
 
       // Clear existing record from store to allow re-resolution
-      const viewStore = store.get(this.viewName) as Map<unknown, unknown> | undefined;
-      if (viewStore?.has(rawData.id)) {
-        viewStore.delete(rawData.id);
+      const viewStore = store.get(this.viewName);
+      if (viewStore?.has(rawData.id as number | string)) {
+        viewStore.delete(rawData.id as number | string);
       }
 
       const record = createRecord(this.viewName, rawData, { isDbRecord: true });

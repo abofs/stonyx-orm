@@ -1,6 +1,6 @@
-import { store, relationships } from './main.js';
+import { store } from './main.js';
 import { createRecord } from './manage-record.js';
-import { getRelationships } from './relationships.js';
+import { getRelationships, getGlobalRegistry, getPendingRegistry, getBelongsToRegistry } from './relationships.js';
 import { getOrSet, makeArray } from '@stonyx/utils/object';
 import { dbKey } from './db.js';
 import type { SourceRecord } from './types/orm-types.js';
@@ -35,14 +35,14 @@ function queuePendingRelationship(
 }
 
 export default function hasMany(modelName: string): RelationshipHandler {
-  const globalRelationships = relationships.get('global') as Map<string, unknown[][]>;
-  const pendingRelationships = relationships.get('pending') as Map<string, Map<unknown, unknown[][]>>;
+  const globalRelationships = getGlobalRegistry();
+  const pendingRelationships = getPendingRegistry();
 
   const fn = (sourceRecord: SourceRecord, rawData: unknown, options: HasManyOptions): unknown[] => {
     const { __name: sourceModelName } = sourceRecord.__model;
     const relationshipId = sourceRecord.id;
     const relationship = getRelationships('hasMany', sourceModelName, modelName, relationshipId as string) as Map<unknown, unknown[]>;
-    const modelStore = store.get(modelName) as Map<unknown, unknown> | undefined;
+    const modelStore = store.get(modelName);
     const pendingRelationshipQueue: PendingItem[] = [];
 
     const output: unknown[] = !rawData ? [] : (makeArray(rawData) as unknown[]).map((elementData: unknown) => {
@@ -53,7 +53,7 @@ export default function hasMany(modelName: string): RelationshipHandler {
           return queuePendingRelationship(pendingRelationshipQueue, pendingRelationships, modelName, elementData);
         }
 
-        record = modelStore.get(elementData);
+        record = modelStore.get(elementData as number | string);
 
         if (!record) {
           return queuePendingRelationship(pendingRelationshipQueue, pendingRelationships, modelName, elementData);
@@ -67,7 +67,7 @@ export default function hasMany(modelName: string): RelationshipHandler {
       }
 
       // Populate belongTo side if the relationship is defined
-      const otherSide = (relationships.get('belongsTo') as Map<string, Map<string, Map<unknown, unknown>>>)
+      const otherSide = getBelongsToRegistry()
         .get(modelName)?.get(sourceModelName)?.get((record as SourceRecord).id);
 
       if (otherSide) Object.assign(otherSide, sourceRecord);

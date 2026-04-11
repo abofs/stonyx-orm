@@ -1,5 +1,5 @@
 import Orm, { relationships } from './main.js';
-import { TYPES } from './relationships.js';
+import { TYPES, getHasManyRegistry, getBelongsToRegistry, getPendingRegistry } from './relationships.js';
 import ViewResolver from './view-resolver.js';
 
 interface UnloadOptions {
@@ -57,7 +57,9 @@ export default class Store {
    * Returns the record if it exists in the in-memory store, undefined otherwise.
    * Does NOT query the database. For memory:false models, use find() instead.
    */
-  get(key: string, id?: number | string): unknown {
+  get(key: string): Map<number | string, unknown> | undefined;
+  get(key: string, id: number | string): unknown;
+  get(key: string, id?: number | string): Map<number | string, unknown> | unknown | undefined {
     if (!id) return this.data.get(key);
 
     return this.data.get(key)?.get(id);
@@ -107,7 +109,7 @@ export default class Store {
 
     // For memory: true models without conditions, return from store
     if (this._isMemoryModel(modelName) && !conditions) {
-      const modelStore = this.get(modelName) as Map<unknown, unknown> | undefined;
+      const modelStore = this.get(modelName);
       return modelStore ? Array.from(modelStore.values()) : [];
     }
 
@@ -117,7 +119,7 @@ export default class Store {
     }
 
     // Fallback to store (JSON mode) — apply conditions in-memory if provided
-    const modelStore = this.get(modelName) as Map<unknown, unknown> | undefined;
+    const modelStore = this.get(modelName);
     if (!modelStore) return [];
 
     const records = Array.from(modelStore.values());
@@ -139,7 +141,7 @@ export default class Store {
     }
 
     // Fallback: filter in-memory store
-    const modelStore = this.get(modelName) as Map<unknown, unknown> | undefined;
+    const modelStore = this.get(modelName);
     if (!modelStore) return [];
 
     const records = Array.from(modelStore.values());
@@ -226,7 +228,7 @@ export default class Store {
   }
 
   private _removeFromHasManyArrays(modelName: string, recordId: unknown, visited: Set<string>): void {
-    const hasManyRegistry = relationships.get('hasMany') as Map<string, Map<string, Map<unknown, StoreRecord[]>>>;
+    const hasManyRegistry = getHasManyRegistry();
 
     for (const [sourceModel, targetModels] of hasManyRegistry) {
       const targetModelMap = targetModels.get(modelName);
@@ -238,21 +240,21 @@ export default class Store {
         // Don't modify arrays of records being deleted
         if (visited.has(sourceKey)) continue;
 
-        const index = hasManyArray.findIndex(r => r && r.id === recordId);
+        const index = hasManyArray.findIndex(r => r && (r as StoreRecord).id === recordId);
         if (index !== -1) hasManyArray.splice(index, 1);
       }
     }
   }
 
   private _nullifyBelongsToReferences(modelName: string, recordId: unknown, visited: Set<string>): void {
-    const belongsToRegistry = relationships.get('belongsTo') as Map<string, Map<string, Map<unknown, StoreRecord | null>>>;
+    const belongsToRegistry = getBelongsToRegistry();
 
     for (const [sourceModel, targetModels] of belongsToRegistry) {
       const targetModelMap = targetModels.get(modelName);
       if (!targetModelMap) continue;
 
       for (const [sourceRecordId, belongsToRecord] of targetModelMap) {
-        if (belongsToRecord && belongsToRecord.id === recordId) {
+        if (belongsToRecord && (belongsToRecord as StoreRecord).id === recordId) {
           const sourceKey = `${sourceModel}:${sourceRecordId}`;
 
           if (visited.has(sourceKey)) continue;
@@ -272,17 +274,17 @@ export default class Store {
   }
 
   private _cleanupRelationshipRegistries(modelName: string, recordId: unknown): void {
-    const hasManyMap = (relationships.get('hasMany') as Map<string, Map<string, Map<unknown, unknown>>>).get(modelName);
+    const hasManyMap = getHasManyRegistry().get(modelName);
     if (hasManyMap) {
       for (const [, recordMap] of hasManyMap) recordMap.delete(recordId);
     }
 
-    const belongsToMap = (relationships.get('belongsTo') as Map<string, Map<string, Map<unknown, unknown>>>).get(modelName);
+    const belongsToMap = getBelongsToRegistry().get(modelName);
     if (belongsToMap) {
       for (const [, recordMap] of belongsToMap) recordMap.delete(recordId);
     }
 
-    const pendingMap = (relationships.get('pending') as Map<string, Map<unknown, unknown>>).get(modelName);
+    const pendingMap = getPendingRegistry().get(modelName);
     if (pendingMap) pendingMap.delete(recordId);
   }
 
@@ -313,8 +315,7 @@ export default class Store {
   }
 
   private _isBidirectionalRelationship(sourceModel: string, targetModel: string): boolean {
-    const hasManyRegistry = relationships.get('hasMany') as Map<string, Map<string, Map<unknown, unknown>>>;
-    const inverseMap = hasManyRegistry.get(targetModel)?.get(sourceModel);
+    const inverseMap = getHasManyRegistry().get(targetModel)?.get(sourceModel);
 
     return !!inverseMap && inverseMap.size > 0;
   }
