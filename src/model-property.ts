@@ -1,4 +1,4 @@
-import Orm from '@stonyx/orm';
+import Orm from './main.js';
 
 function validType(type: string): boolean {
   return Object.keys(Orm.instance.transforms).includes(type);

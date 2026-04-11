@@ -1,5 +1,6 @@
 import { Request } from '@stonyx/rest-server';
-import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
+import Orm, { store } from './main.js';
+import { createRecord, updateRecord } from './manage-record.js';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from './plural-registry.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
@@ -366,7 +367,7 @@ export default class OrmRequest extends Request {
       // Apply attribute updates 1 by 1 to utilize built-in transform logic, ignore id key
       if (attributes) {
         for (const [key, value] of Object.entries(attributes)) {
-          if (!record.hasOwnProperty(key)) continue;
+          if (!Object.hasOwn(record, key)) continue;
           if (key === 'id') continue;
 
           record[key] = value

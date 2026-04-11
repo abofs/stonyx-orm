@@ -1,4 +1,4 @@
-import { store } from './index.js';
+import { store } from './main.js';
 import { getComputedProperties } from "./serializer.js";
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from './plural-registry.js';

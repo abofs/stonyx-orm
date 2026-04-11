@@ -1,4 +1,4 @@
-import Orm from '@stonyx/orm';
+import Orm from '../main.js';
 import { getMysqlType } from './type-map.js';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from '../plural-registry.js';
@@ -256,7 +256,7 @@ export function introspectViews(): Record<string, ViewSchema> {
       aggregates,
       relationships,
       isView: true,
-      memory: (viewClass as { memory?: boolean }).memory !== false ? false : false, // Views default to memory:false
+      memory: false,
     };
   }
 

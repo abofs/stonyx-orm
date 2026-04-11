@@ -6,7 +6,7 @@
   ],
   "version": "0.2.1-beta.83",
   "description": "",
-  "main": "dist/main.js",
+  "main": "dist/index.js",
   "type": "module",
   "bin": {
     "stonyx-orm": "./dist/cli.js"

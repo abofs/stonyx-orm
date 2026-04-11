@@ -1,5 +1,5 @@
 import config from 'stonyx/config';
-import Orm from '@stonyx/orm';
+import Orm from './main.js';
 import { createFile, createDirectory, readFile, updateFile, deleteDirectory } from '@stonyx/utils/file';
 import { dbKey } from './db.js';
 import path from 'path';

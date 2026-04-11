@@ -1,6 +1,6 @@
 import { getTimestamp } from "@stonyx/utils/date";
 
-const transforms: Record<string, (value: any) => unknown> = {
+const transforms: Record<string, (value: unknown) => unknown> = {
   boolean: (value: unknown) => typeof value === 'string' ? (value as string).trim().toLowerCase() === 'true' : !!value,
   date: (value: unknown) => value ? new Date(value as string | number) : null,
   float: (value: unknown) => parseFloat(value as string),

@@ -1,27 +1,6 @@
-import { relationships } from '@stonyx/orm';
+import { relationships } from './main.js';
 
 type RelationshipMap = Map<string, Map<string, Map<string, unknown>>>;
-
-export default class Relationships {
-  static instance: Relationships;
-
-  data!: Map<string, RelationshipMap>;
-
-  constructor() {
-    if (Relationships.instance) return Relationships.instance;
-    Relationships.instance = this;
-
-    this.data = new Map();
-  }
-
-  get(key: string): RelationshipMap | undefined {
-    return this.data.get(key);
-  }
-
-  set(key: string, value: RelationshipMap): void {
-    this.data.set(key, value);
-  }
-}
 
 // TODO: Refactor mapping to remove a level of iteration
 export function getRelationships(type: string, sourceModel: string, targetModel: string, relationshipId?: string): Map<string, unknown> | undefined {

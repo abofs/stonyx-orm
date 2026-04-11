@@ -1,4 +1,4 @@
-import Orm from '@stonyx/orm';
+import Orm from '../main.js';
 
 const db = Orm.db as { record: unknown; save(): Promise<void> };
 

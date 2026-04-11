@@ -1,4 +1,5 @@
-import { createRecord, store, relationships } from '@stonyx/orm';
+import { store, relationships } from './main.js';
+import { createRecord } from './manage-record.js';
 import { getRelationships } from './relationships.js';
 
 function getOrSet<K, V>(map: Map<K, V>, key: K, defaultValue: V): V {

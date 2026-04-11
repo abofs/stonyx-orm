@@ -1,5 +1,5 @@
 import { Request } from '@stonyx/rest-server';
-import Orm from '@stonyx/orm';
+import Orm from './main.js';
 import config from 'stonyx/config';
 import { dbKey } from './db.js';
 
