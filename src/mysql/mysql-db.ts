@@ -90,6 +90,11 @@ export default class MysqlDB {
     this.mysqlConfig = this.deps.config.orm.mysql;
   }
 
+  private requirePool(): Pool {
+    if (!this.pool) throw new Error('MysqlDB pool not initialized — call init() first');
+    return this.pool;
+  }
+
   async init(): Promise<void> {
     this.pool = await this.deps.getPool(this.mysqlConfig);
     await this.deps.ensureMigrationsTable(this.pool, this.mysqlConfig.migrationsTable);
@@ -100,7 +105,7 @@ export default class MysqlDB {
     const migrationsPath = this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir!);
 
     // Check for pending migrations
-    const applied = await this.deps.getAppliedMigrations(this.pool!, this.mysqlConfig.migrationsTable);
+    const applied = await this.deps.getAppliedMigrations(this.requirePool(), this.mysqlConfig.migrationsTable);
     const files = await this.deps.getMigrationFiles(migrationsPath);
     const pending = files.filter(f => !applied.includes(f));
 
@@ -114,7 +119,7 @@ export default class MysqlDB {
           const content = await this.deps.readFile(this.deps.path.join(migrationsPath, filename)) as string;
           const { up } = this.deps.parseMigrationFile(content);
 
-          await this.deps.applyMigration(this.pool!, filename, up, this.mysqlConfig.migrationsTable);
+          await this.deps.applyMigration(this.requirePool(), filename, up, this.mysqlConfig.migrationsTable);
           this.deps.log.db!(`Applied migration: ${filename}`);
         }
 
@@ -138,7 +143,7 @@ export default class MysqlDB {
 
           if (result) {
             const { up } = this.deps.parseMigrationFile(result.content);
-            await this.deps.applyMigration(this.pool!, result.filename, up, this.mysqlConfig.migrationsTable);
+            await this.deps.applyMigration(this.requirePool(), result.filename, up, this.mysqlConfig.migrationsTable);
             this.deps.log.db!(`Applied migration: ${result.filename}`);
             await this.loadMemoryRecords();
           }
@@ -192,7 +197,7 @@ export default class MysqlDB {
       const { sql, values } = this.deps.buildSelect(schema.table);
 
       try {
-        const [rows] = await this.pool!.execute(sql, values) as [Record<string, unknown>[], unknown];
+        const [rows] = await this.requirePool().execute(sql, values) as [Record<string, unknown>[], unknown];
 
         for (const row of rows) {
           const rawData = this._rowToRawData(row, schema);
@@ -223,7 +228,7 @@ export default class MysqlDB {
       const { sql, values } = this.deps.buildSelect(schema.table);
 
       try {
-        const [rows] = await this.pool!.execute(sql, values) as [Record<string, unknown>[], unknown];
+        const [rows] = await this.requirePool().execute(sql, values) as [Record<string, unknown>[], unknown];
 
         for (const row of rows) {
           const rawData = this._rowToRawData(row, schema);
@@ -268,7 +273,7 @@ export default class MysqlDB {
     const { sql, values } = this.deps.buildSelect(schema.table, { id });
 
     try {
-      const [rows] = await this.pool!.execute(sql, values) as [Record<string, unknown>[], unknown];
+      const [rows] = await this.requirePool().execute(sql, values) as [Record<string, unknown>[], unknown];
 
       if (rows.length === 0) return undefined;
 
@@ -307,7 +312,7 @@ export default class MysqlDB {
     const { sql, values } = this.deps.buildSelect(schema.table, conditions);
 
     try {
-      const [rows] = await this.pool!.execute(sql, values) as [Record<string, unknown>[], unknown];
+      const [rows] = await this.requirePool().execute(sql, values) as [Record<string, unknown>[], unknown];
 
       const records = rows.map(row => {
         const rawData = this._rowToRawData(row, schema!);
@@ -415,7 +420,7 @@ export default class MysqlDB {
 
     const { sql, values } = this.deps.buildInsert(schema.table, insertData);
 
-    const [result] = await this.pool!.execute(sql, values) as [ExecuteResult, unknown];
+    const [result] = await this.requirePool().execute(sql, values) as [ExecuteResult, unknown];
 
     // Re-key the record in the store if MySQL generated the ID
     if (isPendingId && result.insertId) {
@@ -473,7 +478,7 @@ export default class MysqlDB {
     if (Object.keys(changedData).length === 0) return;
 
     const { sql, values } = this.deps.buildUpdate(schema.table, id, changedData);
-    await this.pool!.execute(sql, values);
+    await this.requirePool().execute(sql, values);
   }
 
   private async _persistDelete(modelName: string, context: PersistContext): Promise<void> {
@@ -486,7 +491,7 @@ export default class MysqlDB {
     if (id == null) return;
 
     const { sql, values } = this.deps.buildDelete(schema.table, id);
-    await this.pool!.execute(sql, values);
+    await this.requirePool().execute(sql, values);
   }
 
   _recordToRow(record: OrmRecord, schema: ModelSchema): Record<string, unknown> {
