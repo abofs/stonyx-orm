@@ -1,4 +1,5 @@
 import { Request } from '@stonyx/rest-server';
+import ModelProperty from './model-property.js';
 import Orm from './main.js';
 import config from 'stonyx/config';
 import { dbKey } from './db.js';
@@ -29,11 +30,11 @@ export default class MetaRequest extends Request {
                 // Skip internal properties
                 if (key.startsWith('__')) continue;
 
-                if ((property as { constructor?: { name?: string } })?.constructor?.name === 'ModelProperty') {
+                if (property instanceof ModelProperty) {
                   properties[key] = { type: (property as { type: string }).type };
                 } else if (typeof property === 'function') {
-                  const isBelongsTo = property.toString().includes(`getRelationships('belongsTo',`);
-                  const isHasMany = property.toString().includes(`getRelationships('hasMany',`);
+                  const isBelongsTo = (property as { __relationshipType?: string }).__relationshipType === 'belongsTo';
+                  const isHasMany = (property as { __relationshipType?: string }).__relationshipType === 'hasMany';
 
                   if (isBelongsTo || isHasMany) properties[key] = { [isBelongsTo ? 'belongsTo' : 'hasMany']: name };
                 }

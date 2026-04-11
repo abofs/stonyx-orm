@@ -63,11 +63,11 @@ const WRITE_OPERATIONS = new Set(['create', 'update', 'delete']);
 // Helper to detect relationship type from function
 function getRelationshipInfo(property: unknown): RelationshipInfo | null {
   if (typeof property !== 'function') return null;
-  const fnStr = property.toString();
-  if (fnStr.includes(`getRelationships('belongsTo',`)) {
+  const relType = (property as { __relationshipType?: string }).__relationshipType;
+  if (relType === 'belongsTo') {
     return { type: 'belongsTo', isArray: false };
   }
-  if (fnStr.includes(`getRelationships('hasMany',`)) {
+  if (relType === 'hasMany') {
     return { type: 'hasMany', isArray: true };
   }
   return null;

@@ -5,6 +5,7 @@ import { getPluralName } from '../plural-registry.js';
 import { dbKey } from '../db.js';
 import { AggregateProperty } from '../aggregates.js';
 import type { ForeignKeyDef, ModelSchema, ViewSchema } from '../types/orm-types.js';
+import ModelProperty from '../model-property.js';
 
 interface RelationshipInfo {
   type: 'belongsTo' | 'hasMany';
@@ -36,11 +37,11 @@ interface JoinDef {
 
 function getRelationshipInfo(property: unknown): RelationshipInfo | null {
   if (typeof property !== 'function') return null;
-  const fnStr = property.toString();
+  const relType = (property as { __relationshipType?: string }).__relationshipType;
   const modelName = (property as { __relatedModelName?: string }).__relatedModelName || null;
 
-  if (fnStr.includes(`getRelationships('belongsTo',`)) return { type: 'belongsTo', modelName };
-  if (fnStr.includes(`getRelationships('hasMany',`)) return { type: 'hasMany', modelName };
+  if (relType === 'belongsTo') return { type: 'belongsTo', modelName };
+  if (relType === 'hasMany') return { type: 'hasMany', modelName };
 
   return null;
 }
@@ -76,7 +77,7 @@ export function introspectModels(): Record<string, ModelSchema> {
         relationships.belongsTo[key] = relInfo.modelName;
       } else if (relInfo?.type === 'hasMany') {
         relationships.hasMany[key] = relInfo.modelName;
-      } else if ((property as { constructor?: { name?: string } })?.constructor?.name === 'ModelProperty') {
+      } else if (property instanceof ModelProperty) {
         const prop = property as { type: string; dimensions?: number };
         if (key === 'id') {
           idType = prop.type;
@@ -239,7 +240,7 @@ export function introspectViews(): Record<string, ViewSchema> {
         };
       } else if (relInfo?.type === 'hasMany') {
         relationships.hasMany[key] = relInfo.modelName;
-      } else if ((property as { constructor?: { name?: string } })?.constructor?.name === 'ModelProperty') {
+      } else if (property instanceof ModelProperty) {
         const transforms = (Orm.instance as { transforms: Record<string, unknown> }).transforms;
         const prop = property as { type: string };
         columns[key] = getPgType(prop.type, transforms[prop.type] as undefined);
