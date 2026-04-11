@@ -1,4 +1,4 @@
-import Orm, { store, relationships } from '@stonyx/orm';
+import Orm, { store, relationships } from './main.js';
 import OrmRecord from './record.js';
 import type Serializer from './serializer.js';
 

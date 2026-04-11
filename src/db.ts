@@ -17,7 +17,8 @@
 import Cron from '@stonyx/cron';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
-import Orm, { store, createRecord } from '@stonyx/orm';
+import Orm, { store } from './main.js';
+import { createRecord } from './manage-record.js';
 import { createFile, createDirectory, updateFile, readFile, fileExists } from '@stonyx/utils/file';
 import path from 'path';
 

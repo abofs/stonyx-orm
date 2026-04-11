@@ -1,4 +1,4 @@
-import Orm, { relationships } from '@stonyx/orm';
+import Orm, { relationships } from './main.js';
 import { TYPES } from './relationships.js';
 import ViewResolver from './view-resolver.js';
 

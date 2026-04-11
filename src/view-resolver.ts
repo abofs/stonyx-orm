@@ -1,4 +1,5 @@
-import Orm, { store, createRecord } from '@stonyx/orm';
+import Orm, { store } from './main.js';
+import { createRecord } from './manage-record.js';
 import { AggregateProperty } from './aggregates.js';
 import { get } from '@stonyx/utils/object';
 
