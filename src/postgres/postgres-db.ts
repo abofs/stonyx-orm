@@ -96,7 +96,7 @@ export default class PostgresDB {
 
     this.deps = { ...defaultDeps, ...deps } as PostgresDeps;
     this.pool = null;
-    this.pgConfig = (this.deps.config as Record<string, Record<string, unknown>>).orm[Ctor.configKey] as Record<string, unknown>;
+    this.pgConfig = this.deps.config.orm[Ctor.configKey] as Record<string, unknown>;
   }
 
   protected requirePool(): Pool {
@@ -114,7 +114,7 @@ export default class PostgresDB {
   }
 
   async startup(): Promise<void> {
-    const migrationsPath = this.deps.path.resolve(this.deps.config.rootPath as string, this.pgConfig.migrationsDir as string);
+    const migrationsPath = this.deps.path.resolve(this.deps.config.rootPath, this.pgConfig.migrationsDir as string);
 
     // Check for pending migrations
     const applied = await this.deps.getAppliedMigrations(this.requirePool(), this.pgConfig.migrationsTable as string | undefined);
@@ -167,7 +167,7 @@ export default class PostgresDB {
 
     // Check for schema drift
     const schemas = this.deps.introspectModels();
-    const snapshot = await this.deps.loadLatestSnapshot(this.deps.path.resolve(this.deps.config.rootPath as string, this.pgConfig.migrationsDir as string));
+    const snapshot = await this.deps.loadLatestSnapshot(this.deps.path.resolve(this.deps.config.rootPath, this.pgConfig.migrationsDir as string));
 
     if (Object.keys(snapshot).length > 0) {
       const drift = this.deps.detectSchemaDrift(schemas, snapshot as Parameters<typeof detectSchemaDrift>[1]);

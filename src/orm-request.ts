@@ -481,7 +481,7 @@ export default class OrmRequest extends Request {
       }
 
       // Auto-save DB after write operations when configured
-      if ((config as { orm: { db: { autosave: string } } }).orm.db.autosave === 'onUpdate' && WRITE_OPERATIONS.has(operation)) {
+      if (config.orm.db.autosave === 'onUpdate' && WRITE_OPERATIONS.has(operation)) {
         await (Orm.db as { save(): Promise<void> }).save();
       }
 

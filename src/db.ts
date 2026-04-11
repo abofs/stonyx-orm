@@ -24,20 +24,6 @@ import path from 'path';
 
 export const dbKey = '__db';
 
-interface DBConfig {
-  rootPath: string;
-  orm: {
-    db: {
-      file: string;
-      schema: string;
-      mode: string;
-      directory: string;
-      autosave: string;
-      saveInterval: unknown;
-    };
-  };
-}
-
 interface DBRecord {
   format(): Record<string, unknown>;
   [key: string]: unknown;
@@ -54,8 +40,8 @@ export default class DB {
   }
 
   async getSchema(): Promise<unknown> {
-    const { rootPath } = config as unknown as DBConfig;
-    const { file, schema } = (config as unknown as DBConfig).orm.db;
+    const { rootPath } = config;
+    const { file, schema } = config.orm.db;
 
     if (!file) throw new Error('Configuration Error: ORM DB file path must be defined.');
 
@@ -76,16 +62,16 @@ export default class DB {
   }
 
   getDirPath(): string {
-    const { rootPath } = config as unknown as DBConfig;
-    const { file, directory } = (config as unknown as DBConfig).orm.db;
+    const { rootPath } = config;
+    const { file, directory } = config.orm.db;
     const dbDir = path.dirname(path.resolve(`${rootPath}/${file}`));
 
     return path.join(dbDir, directory);
   }
 
   async validateMode(): Promise<void> {
-    const { rootPath } = config as unknown as DBConfig;
-    const { file, mode } = (config as unknown as DBConfig).orm.db;
+    const { rootPath } = config;
+    const { file, mode } = config.orm.db;
     const collectionKeys = this.getCollectionKeys();
     const dirPath = this.getDirPath();
 
@@ -111,7 +97,7 @@ export default class DB {
         )).some(Boolean);
 
         if (hasCollectionFiles) {
-          log.error!(`DB mode mismatch: directory '${(config as unknown as DBConfig).orm.db.directory}/' contains collection files but mode is set to 'file'. Run migration first:\n\n  stonyx db:migrate-to-file\n`);
+          log.error!(`DB mode mismatch: directory '${config.orm.db.directory}/' contains collection files but mode is set to 'file'. Run migration first:\n\n  stonyx db:migrate-to-file\n`);
           process.exit(1);
         }
       }
@@ -119,7 +105,7 @@ export default class DB {
   }
 
   async init(): Promise<void> {
-    const { autosave, saveInterval } = (config as unknown as DBConfig).orm.db;
+    const { autosave, saveInterval } = config.orm.db;
 
     store.set(dbKey, new Map());
     (Orm.instance as Orm).models[`${dbKey}Model`] = await this.getSchema();
@@ -133,8 +119,8 @@ export default class DB {
   }
 
   async create(): Promise<Record<string, unknown>> {
-    const { rootPath } = config as unknown as DBConfig;
-    const { file, mode } = (config as unknown as DBConfig).orm.db;
+    const { rootPath } = config;
+    const { file, mode } = config.orm.db;
 
     if (mode === 'directory') {
       const dirPath = this.getDirPath();
@@ -161,7 +147,7 @@ export default class DB {
   }
 
   async save(): Promise<void> {
-    const { file, mode } = (config as unknown as DBConfig).orm.db;
+    const { file, mode } = config.orm.db;
     const jsonData = this.record.format() as Record<string, unknown>;
     delete jsonData.id; // Don't save id
 
@@ -184,23 +170,23 @@ export default class DB {
       const skeleton: Record<string, unknown[]> = {};
       for (const key of collectionKeys) skeleton[key] = [];
 
-      const dbFilePath = `${(config as unknown as DBConfig).rootPath}/${file}`;
+      const dbFilePath = `${config.rootPath}/${file}`;
       const dbFileExists = await fileExists(dbFilePath);
 
       if (dbFileExists) await updateFile(dbFilePath, skeleton, { json: true });
       else await createFile(dbFilePath, skeleton, { json: true });
 
-      log.db!(`DB has been successfully saved to ${(config as unknown as DBConfig).orm.db.directory}/ directory`);
+      log.db!(`DB has been successfully saved to ${config.orm.db.directory}/ directory`);
       return;
     }
 
-    await updateFile(`${(config as unknown as DBConfig).rootPath}/${file}`, jsonData, { json: true });
+    await updateFile(`${config.rootPath}/${file}`, jsonData, { json: true });
 
     log.db!(`DB has been successfully saved to ${file}`);
   }
 
   async getRecord(): Promise<DBRecord> {
-    const { mode } = (config as unknown as DBConfig).orm.db;
+    const { mode } = config.orm.db;
 
     if (mode === 'directory') return this.getRecordFromDirectory();
 
@@ -208,7 +194,7 @@ export default class DB {
   }
 
   async getRecordFromFile(): Promise<DBRecord> {
-    const { file } = (config as unknown as DBConfig).orm.db;
+    const { file } = config.orm.db;
 
     const data = await readFile(file, { json: true, missingFileCallback: this.create.bind(this) });
 
