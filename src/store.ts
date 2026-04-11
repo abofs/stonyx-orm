@@ -155,7 +155,7 @@ export default class Store {
    * Check if a model is configured for in-memory storage.
    * @private
    */
-  _isMemoryModel(modelName: string): boolean {
+  private _isMemoryModel(modelName: string): boolean {
     if (this._memoryResolver) return this._memoryResolver(modelName);
     return false; // default to non-memory if resolver not set yet
   }
@@ -225,7 +225,7 @@ export default class Store {
     for (const relationshipType of TYPES) (relationships.get(relationshipType) as Map<string, unknown>).delete(model);
   }
 
-  _removeFromHasManyArrays(modelName: string, recordId: unknown, visited: Set<string>): void {
+  private _removeFromHasManyArrays(modelName: string, recordId: unknown, visited: Set<string>): void {
     const hasManyRegistry = relationships.get('hasMany') as Map<string, Map<string, Map<unknown, StoreRecord[]>>>;
 
     for (const [sourceModel, targetModels] of hasManyRegistry) {
@@ -244,7 +244,7 @@ export default class Store {
     }
   }
 
-  _nullifyBelongsToReferences(modelName: string, recordId: unknown, visited: Set<string>): void {
+  private _nullifyBelongsToReferences(modelName: string, recordId: unknown, visited: Set<string>): void {
     const belongsToRegistry = relationships.get('belongsTo') as Map<string, Map<string, Map<unknown, StoreRecord | null>>>;
 
     for (const [sourceModel, targetModels] of belongsToRegistry) {
@@ -271,7 +271,7 @@ export default class Store {
     }
   }
 
-  _cleanupRelationshipRegistries(modelName: string, recordId: unknown): void {
+  private _cleanupRelationshipRegistries(modelName: string, recordId: unknown): void {
     const hasManyMap = (relationships.get('hasMany') as Map<string, Map<string, Map<unknown, unknown>>>).get(modelName);
     if (hasManyMap) {
       for (const [, recordMap] of hasManyMap) recordMap.delete(recordId);
@@ -290,7 +290,7 @@ export default class Store {
    * Extracts hasMany and non-bidirectional belongsTo children from a record
    * @private
    */
-  _getChildren(record: StoreRecord): ChildInfo[] {
+  private _getChildren(record: StoreRecord): ChildInfo[] {
     const children: ChildInfo[] = [];
 
     if (!record.__relationships) return children;
@@ -312,14 +312,14 @@ export default class Store {
     return children;
   }
 
-  _isBidirectionalRelationship(sourceModel: string, targetModel: string): boolean {
+  private _isBidirectionalRelationship(sourceModel: string, targetModel: string): boolean {
     const hasManyRegistry = relationships.get('hasMany') as Map<string, Map<string, Map<unknown, unknown>>>;
     const inverseMap = hasManyRegistry.get(targetModel)?.get(sourceModel);
 
     return !!inverseMap && inverseMap.size > 0;
   }
 
-  _buildUnloadQueue(record: StoreRecord, options: UnloadOptions): { toUnload: UnloadQueueItem[]; visited: Set<string> } {
+  private _buildUnloadQueue(record: StoreRecord, options: UnloadOptions): { toUnload: UnloadQueueItem[]; visited: Set<string> } {
     const visited = new Set<string>();
     const toUnload: UnloadQueueItem[] = [];
     const queue: UnloadQueueItem[] = [{

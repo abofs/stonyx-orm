@@ -346,7 +346,7 @@ export default class MysqlDB {
     }
   }
 
-  _rowToRawData(row: Record<string, unknown>, schema: { columns: Record<string, string>; foreignKeys: Record<string, unknown> }): Record<string, unknown> {
+  private _rowToRawData(row: Record<string, unknown>, schema: { columns: Record<string, string>; foreignKeys: Record<string, unknown> }): Record<string, unknown> {
     const rawData: Record<string, unknown> = { ...row };
 
     for (const [col, mysqlType] of Object.entries(schema.columns)) {
@@ -494,7 +494,7 @@ export default class MysqlDB {
     await this.pool!.execute(sql, values);
   }
 
-  _recordToRow(record: OrmRecord, schema: ModelSchema): Record<string, unknown> {
+  private _recordToRow(record: OrmRecord, schema: ModelSchema): Record<string, unknown> {
     const row: Record<string, unknown> = {};
     const data = record.__data;
 

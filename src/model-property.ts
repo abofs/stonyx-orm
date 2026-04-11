@@ -6,7 +6,7 @@ function validType(type: string): boolean {
 
 export default class ModelProperty {
   type: string;
-  _value: unknown;
+  private _value: unknown;
   ignoreFirstTransform?: boolean;
 
   constructor(type: string = 'passthrough', defaultValue?: unknown) {

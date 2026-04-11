@@ -446,7 +446,7 @@ export default class PostgresDB {
    * The record object itself survives -- the caller retains the reference.
    * @private
    */
-  _evictIfNotMemory(modelName: string, record: OrmRecord): void {
+  private _evictIfNotMemory(modelName: string, record: OrmRecord): void {
     const storeRef = this.deps.store as unknown as {
       _memoryResolver?: (name: string) => boolean;
       get?: (name: string) => Map<unknown, unknown> | undefined;
@@ -459,7 +459,7 @@ export default class PostgresDB {
     }
   }
 
-  _rowToRawData(row: Record<string, unknown>, schema: ModelSchema): Record<string, unknown> {
+  private _rowToRawData(row: Record<string, unknown>, schema: ModelSchema): Record<string, unknown> {
     const rawData: Record<string, unknown> = { ...row };
 
     // PostgreSQL returns native booleans and parsed JSONB -- no manual conversion needed.
@@ -497,7 +497,7 @@ export default class PostgresDB {
     }
   }
 
-  async _persistCreate(modelName: string, _context: PersistContext, response: PersistResponse): Promise<void> {
+  private async _persistCreate(modelName: string, _context: PersistContext, response: PersistResponse): Promise<void> {
     const schemas = this.deps.introspectModels();
     const schema = schemas[modelName];
 
@@ -544,7 +544,7 @@ export default class PostgresDB {
     }
   }
 
-  async _persistUpdate(modelName: string, context: PersistContext, _response: PersistResponse): Promise<void> {
+  private async _persistUpdate(modelName: string, context: PersistContext, _response: PersistResponse): Promise<void> {
     const schemas = this.deps.introspectModels();
     const schema = schemas[modelName];
 
@@ -586,7 +586,7 @@ export default class PostgresDB {
     await this.pool!.query(sql, values);
   }
 
-  async _persistDelete(modelName: string, context: PersistContext): Promise<void> {
+  private async _persistDelete(modelName: string, context: PersistContext): Promise<void> {
     const schemas = this.deps.introspectModels();
     const schema = schemas[modelName];
 
@@ -599,7 +599,7 @@ export default class PostgresDB {
     await this.pool!.query(sql, values);
   }
 
-  _recordToRow(record: OrmRecord, schema: ModelSchema): Record<string, unknown> {
+  private _recordToRow(record: OrmRecord, schema: ModelSchema): Record<string, unknown> {
     const row: Record<string, unknown> = {};
     const data = record.__data;
 

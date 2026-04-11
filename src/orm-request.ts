@@ -422,7 +422,7 @@ export default class OrmRequest extends Request {
   }
 
   // Wraps a handler with before/after hook execution
-  _withHooks(operation: string, handler: HandlerFn): HandlerFn {
+  private _withHooks(operation: string, handler: HandlerFn): HandlerFn {
     return async (request: OrmRequest$, state: { [key: string]: unknown }) => {
       // Build context object for hooks
       const context: HookContext = {
@@ -497,7 +497,7 @@ export default class OrmRequest extends Request {
     };
   }
 
-  _generateRelationshipRoutes(
+  private _generateRelationshipRoutes(
     model: string,
     pluralizedModel: string,
     modelRelationships: { [key: string]: RelationshipInfo }
