@@ -59,7 +59,7 @@ export default class ViewResolver {
     return this._resolvePerRecord(sourceRecords, aggregateFields, regularFields, resolveMap, viewClass);
   }
 
-  _resolvePerRecord(
+  private _resolvePerRecord(
     sourceRecords: SourceRecord[],
     aggregateFields: Record<string, AggregateProperty>,
     regularFields: Record<string, unknown>,
@@ -121,7 +121,7 @@ export default class ViewResolver {
     return results;
   }
 
-  _resolveGroupBy(
+  private _resolveGroupBy(
     sourceRecords: SourceRecord[],
     groupByField: string,
     aggregateFields: Record<string, AggregateProperty>,

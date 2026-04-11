@@ -6,11 +6,11 @@ interface AggregateRecord {
 }
 
 export class AggregateProperty {
-  aggregateType: AggregateType;
-  relationship: string | undefined;
-  field: string | undefined;
-  mysqlFunction: string;
-  resultType: 'float' | 'number';
+  readonly aggregateType: AggregateType;
+  readonly relationship: string | undefined;
+  readonly field: string | undefined;
+  readonly mysqlFunction: string;
+  readonly resultType: 'float' | 'number';
 
   constructor(aggregateType: AggregateType, relationship?: string, field?: string) {
     this.aggregateType = aggregateType;

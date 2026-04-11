@@ -21,9 +21,9 @@ interface DBRecord {
 }
 
 export default class StandaloneDB {
-  mode: 'file' | 'directory';
-  dbPath: string;
-  directory: string;
+  readonly mode: 'file' | 'directory';
+  readonly dbPath: string;
+  readonly directory: string;
 
   constructor(options: StandaloneDBOptions = {}) {
     this.mode = options.mode || 'directory';
@@ -174,12 +174,12 @@ export default class StandaloneDB {
 
   // -- Private helpers --
 
-  async _readJSON(filePath: string): Promise<unknown> {
+  private async _readJSON(filePath: string): Promise<unknown> {
     const content = await fs.readFile(filePath, 'utf-8');
     return JSON.parse(content);
   }
 
-  async _writeJSON(filePath: string, data: unknown): Promise<void> {
+  private async _writeJSON(filePath: string, data: unknown): Promise<void> {
     await fs.writeFile(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
   }
 }
