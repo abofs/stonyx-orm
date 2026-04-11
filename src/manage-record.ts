@@ -1,4 +1,4 @@
-import Orm, { store } from './main.js';
+import Orm, { store } from '@stonyx/orm';
 import OrmRecord from './record.js';
 import { getGlobalRegistry, getPendingRegistry, getPendingBelongsToRegistry, getBelongsToRegistry, getHasManyRegistry } from './relationships.js';
 import type Serializer from './serializer.js';

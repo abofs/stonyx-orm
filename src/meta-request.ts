@@ -1,6 +1,6 @@
 import { Request } from '@stonyx/rest-server';
 import ModelProperty from './model-property.js';
-import Orm from './main.js';
+import Orm from '@stonyx/orm';
 import config from 'stonyx/config';
 import { dbKey } from './db.js';
 

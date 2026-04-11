@@ -1,7 +1,7 @@
 import config from 'stonyx/config';
 import { get, makeArray } from '@stonyx/utils/object';
-import { AggregateProperty } from './aggregates.js';
-import ModelProperty from './model-property.js';
+import type { AggregateProperty } from './aggregates.js';
+import type ModelProperty from './model-property.js';
 
 const RESERVED_KEYS = ['__name'];
 
@@ -93,14 +93,14 @@ export default class Serializer {
       }
 
       // Aggregate property handling — use the rawData value, not the aggregate descriptor
-      if (handler instanceof AggregateProperty) {
+      if ((handler as AggregateProperty)?.__kind === 'AggregateProperty') {
         parsedData[key] = data;
         rec[key] = data;
         continue;
       }
 
       // Direct assignment handling
-      if (!(handler instanceof ModelProperty)) {
+      if ((handler as ModelProperty)?.__kind !== 'ModelProperty') {
         parsedData[key] = handler;
         rec[key] = handler;
         continue;

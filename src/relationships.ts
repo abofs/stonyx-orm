@@ -1,4 +1,4 @@
-import { relationships } from './main.js';
+import { relationships } from '@stonyx/orm';
 import type { HasManyMap, BelongsToMap, GlobalMap, PendingMap, PendingBelongsToMap } from './types/orm-types.js';
 
 // TODO: Refactor mapping to remove a level of iteration
