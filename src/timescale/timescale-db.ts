@@ -46,7 +46,7 @@ export default class TimescaleDB extends PostgresDB {
     if (!schema) throw new Error(`Model '${modelName}' not found`);
 
     const { sql } = (this.deps as unknown as { buildCreateHypertable: typeof buildCreateHypertable }).buildCreateHypertable(schema.table, timeColumn, options);
-    await this.pool!.query(sql);
+    await this.requirePool().query(sql);
   }
 
   /**
@@ -60,7 +60,7 @@ export default class TimescaleDB extends PostgresDB {
     const { sql, values } = (this.deps as unknown as { buildTimeBucket: typeof buildTimeBucket }).buildTimeBucket(schema.table, timeColumn, bucketSize, options);
 
     try {
-      const result = await this.pool!.query(sql, values);
+      const result = await this.requirePool().query(sql, values);
       return result.rows;
     } catch (error) {
       if ((error as { code?: string }).code === '42P01') return [];
@@ -77,7 +77,7 @@ export default class TimescaleDB extends PostgresDB {
     if (!schema) throw new Error(`Model '${modelName}' not found`);
 
     const { sql } = (this.deps as unknown as { buildContinuousAggregate: typeof buildContinuousAggregate }).buildContinuousAggregate(viewName, schema.table, timeColumn, bucketSize, aggregates, options);
-    await this.pool!.query(sql);
+    await this.requirePool().query(sql);
   }
 
   /**
@@ -89,7 +89,7 @@ export default class TimescaleDB extends PostgresDB {
     if (!schema) throw new Error(`Model '${modelName}' not found`);
 
     const { sql } = (this.deps as unknown as { buildEnableCompression: typeof buildEnableCompression }).buildEnableCompression(schema.table, options.segmentBy, options.orderBy);
-    await this.pool!.query(sql);
+    await this.requirePool().query(sql);
   }
 
   /**
@@ -101,6 +101,6 @@ export default class TimescaleDB extends PostgresDB {
     if (!schema) throw new Error(`Model '${modelName}' not found`);
 
     const { sql } = (this.deps as unknown as { buildCompressionPolicy: typeof buildCompressionPolicy }).buildCompressionPolicy(schema.table, compressAfter);
-    await this.pool!.query(sql);
+    await this.requirePool().query(sql);
   }
 }
