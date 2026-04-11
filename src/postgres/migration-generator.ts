@@ -49,8 +49,8 @@ interface MigrationResult {
 }
 
 export async function generateMigration(description: string = 'migration', configKey: string = 'postgres'): Promise<MigrationResult | null> {
-  const { migrationsDir } = (config as Record<string, unknown> & { orm: Record<string, unknown> }).orm[configKey] as { migrationsDir: string };
-  const rootPath = config.rootPath as string;
+  const { migrationsDir } = config.orm[configKey] as { migrationsDir: string };
+  const rootPath = config.rootPath;
   const migrationsPath = path.resolve(rootPath, migrationsDir);
 
   await createDirectory(migrationsPath);

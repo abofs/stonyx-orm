@@ -1,5 +1,6 @@
 declare module 'stonyx/config' {
-  const config: Record<string, unknown>;
+  import type { OrmConfig } from './orm-types.js';
+  const config: OrmConfig;
   export default config;
 }
 

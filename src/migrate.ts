@@ -18,16 +18,16 @@ function getCollectionKeys(): string[] {
 }
 
 function getDirPath(): string {
-  const { rootPath } = config as { rootPath: string; orm: { db: { file: string; directory: string } } };
-  const { file, directory } = (config as { orm: { db: { file: string; directory: string } } }).orm.db;
+  const { rootPath } = config;
+  const { file, directory } = config.orm.db;
   const dbDir = path.dirname(path.resolve(`${rootPath}/${file}`));
 
   return path.join(dbDir, directory);
 }
 
 export async function fileToDirectory(): Promise<void> {
-  const { rootPath } = config as { rootPath: string };
-  const { file } = (config as { orm: { db: { file: string } } }).orm.db;
+  const { rootPath } = config;
+  const { file } = config.orm.db;
   const dbFilePath = path.resolve(`${rootPath}/${file}`);
   const collectionKeys = getCollectionKeys();
   const dirPath = getDirPath();
@@ -50,8 +50,8 @@ export async function fileToDirectory(): Promise<void> {
 }
 
 export async function directoryToFile(): Promise<void> {
-  const { rootPath } = config as { rootPath: string };
-  const { file } = (config as { orm: { db: { file: string } } }).orm.db;
+  const { rootPath } = config;
+  const { file } = config.orm.db;
   const dbFilePath = path.resolve(`${rootPath}/${file}`);
   const collectionKeys = getCollectionKeys();
   const dirPath = getDirPath();

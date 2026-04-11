@@ -43,8 +43,8 @@ const commands: Record<string, Command> = {
     description: 'Apply pending MySQL migrations',
     bootstrap: true,
     run: async () => {
-      const config = (await import('stonyx/config')).default as Record<string, unknown>;
-      const mysqlConfig = (config.orm as Record<string, unknown>)?.mysql as Record<string, unknown> | undefined;
+      const config = (await import('stonyx/config')).default;
+      const mysqlConfig = config.orm.mysql;
 
       if (!mysqlConfig) {
         console.error('MySQL is not configured. Set MYSQL_HOST to enable MySQL mode.');
@@ -56,8 +56,8 @@ const commands: Record<string, Command> = {
       const { readFile } = await import('@stonyx/utils/file');
       const path = await import('path');
 
-      const pool = await getPool(mysqlConfig as unknown as MysqlConfig);
-      const migrationsPath = path.resolve(config.rootPath as string, mysqlConfig.migrationsDir as string);
+      const pool = await getPool(mysqlConfig as MysqlConfig);
+      const migrationsPath = path.resolve(config.rootPath, mysqlConfig.migrationsDir as string);
 
       try {
         await ensureMigrationsTable(pool, mysqlConfig.migrationsTable as string);
@@ -91,8 +91,8 @@ const commands: Record<string, Command> = {
     description: 'Rollback the most recent MySQL migration',
     bootstrap: true,
     run: async () => {
-      const config = (await import('stonyx/config')).default as Record<string, unknown>;
-      const mysqlConfig = (config.orm as Record<string, unknown>)?.mysql as Record<string, unknown> | undefined;
+      const config = (await import('stonyx/config')).default;
+      const mysqlConfig = config.orm.mysql;
 
       if (!mysqlConfig) {
         console.error('MySQL is not configured. Set MYSQL_HOST to enable MySQL mode.');
@@ -104,8 +104,8 @@ const commands: Record<string, Command> = {
       const { readFile } = await import('@stonyx/utils/file');
       const path = await import('path');
 
-      const pool = await getPool(mysqlConfig as unknown as MysqlConfig);
-      const migrationsPath = path.resolve(config.rootPath as string, mysqlConfig.migrationsDir as string);
+      const pool = await getPool(mysqlConfig as MysqlConfig);
+      const migrationsPath = path.resolve(config.rootPath, mysqlConfig.migrationsDir as string);
 
       try {
         await ensureMigrationsTable(pool, mysqlConfig.migrationsTable as string);
@@ -137,8 +137,8 @@ const commands: Record<string, Command> = {
     description: 'Show status of MySQL migrations',
     bootstrap: true,
     run: async () => {
-      const config = (await import('stonyx/config')).default as Record<string, unknown>;
-      const mysqlConfig = (config.orm as Record<string, unknown>)?.mysql as Record<string, unknown> | undefined;
+      const config = (await import('stonyx/config')).default;
+      const mysqlConfig = config.orm.mysql;
 
       if (!mysqlConfig) {
         console.error('MySQL is not configured. Set MYSQL_HOST to enable MySQL mode.');
@@ -149,8 +149,8 @@ const commands: Record<string, Command> = {
       const { ensureMigrationsTable, getAppliedMigrations, getMigrationFiles } = await import('./mysql/migration-runner.js');
       const path = await import('path');
 
-      const pool = await getPool(mysqlConfig as unknown as MysqlConfig);
-      const migrationsPath = path.resolve(config.rootPath as string, mysqlConfig.migrationsDir as string);
+      const pool = await getPool(mysqlConfig as MysqlConfig);
+      const migrationsPath = path.resolve(config.rootPath, mysqlConfig.migrationsDir as string);
 
       try {
         await ensureMigrationsTable(pool, mysqlConfig.migrationsTable as string);

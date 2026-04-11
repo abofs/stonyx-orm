@@ -60,7 +60,7 @@ interface MysqlDBDeps {
   confirm: typeof confirm;
   readFile: typeof readFile;
   getPluralName: typeof getPluralName;
-  config: Record<string, unknown> & { orm: { mysql: MysqlConfig }; rootPath: string };
+  config: typeof config;
   log: Record<string, ((...args: unknown[]) => void) | undefined>;
   path: typeof path;
 }
@@ -72,7 +72,7 @@ const defaultDeps: MysqlDBDeps = {
   loadLatestSnapshot, detectSchemaDrift,
   buildInsert, buildUpdate, buildDelete, buildSelect,
   createRecord, store: store as unknown as OrmStore, confirm, readFile, getPluralName,
-  config: config as unknown as MysqlDBDeps['config'], log, path
+  config, log, path
 };
 
 export default class MysqlDB {
@@ -88,7 +88,7 @@ export default class MysqlDB {
 
     this.deps = { ...defaultDeps, ...deps } as MysqlDBDeps;
     this.pool = null;
-    this.mysqlConfig = this.deps.config.orm.mysql;
+    this.mysqlConfig = this.deps.config.orm.mysql!;
   }
 
   private requirePool(): Pool {

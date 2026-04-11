@@ -53,6 +53,6 @@ export default class MetaRequest extends Request {
   }
 
   auth(): number | undefined {
-    if (!(config as Record<string, unknown> & { orm: { restServer: { metaRoute: unknown } } }).orm.restServer.metaRoute) return 403;
+    if (!config.orm.restServer.metaRoute) return 403;
   }
 }

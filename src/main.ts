@@ -81,10 +81,7 @@ export default class Orm {
   }
 
   async init(): Promise<void> {
-    const { paths, restServer } = config.orm as {
-      paths: Record<string, string>;
-      restServer: { enabled: string; route: string; metaRoute: boolean };
-    };
+    const { paths, restServer } = config.orm;
 
     const promises: Promise<unknown>[] = ['Model', 'Serializer', 'Transform'].map(type => {
       const lowerCaseType = type.toLowerCase();
@@ -137,17 +134,17 @@ export default class Orm {
 
     setup(eventNames);
 
-    if ((config.orm as Record<string, unknown>).timescale) {
+    if (config.orm.timescale) {
       const { default: TimescaleDB } = await import('./timescale/timescale-db.js');
       this.sqlDb = new TimescaleDB() as SqlDb;
       this.db = this.sqlDb;
       promises.push(this.sqlDb.init());
-    } else if ((config.orm as Record<string, unknown>).postgres) {
+    } else if (config.orm.postgres) {
       const { default: PostgresDB } = await import('./postgres/postgres-db.js');
       this.sqlDb = new PostgresDB() as SqlDb;
       this.db = this.sqlDb;
       promises.push(this.sqlDb.init());
-    } else if ((config.orm as Record<string, unknown>).mysql) {
+    } else if (config.orm.mysql) {
       const { default: MysqlDB } = await import('./mysql/mysql-db.js');
       this.sqlDb = new MysqlDB() as SqlDb;
       this.db = this.sqlDb;

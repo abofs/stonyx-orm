@@ -51,9 +51,9 @@ interface GeneratedMigration {
 type Snapshot = Record<string, SnapshotEntry & { isView?: boolean; viewName?: string; viewQuery?: string; source?: string }>;
 
 export async function generateMigration(description: string = 'migration'): Promise<GeneratedMigration | null> {
-  const { migrationsDir } = (config as Record<string, unknown> & { orm: { mysql: { migrationsDir: string } } }).orm.mysql;
-  const rootPath = (config as Record<string, unknown> & { rootPath: string }).rootPath;
-  const migrationsPath = path.resolve(rootPath, migrationsDir);
+  const { migrationsDir } = config.orm.mysql!;
+  const rootPath = config.rootPath;
+  const migrationsPath = path.resolve(rootPath, migrationsDir!);
 
   await createDirectory(migrationsPath);
 

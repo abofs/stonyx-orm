@@ -1,5 +1,69 @@
 import type { AggregateProperty } from '../aggregates.js';
 
+export interface OrmDbConfig {
+  file: string;
+  schema: string;
+  mode: string;
+  directory: string;
+  autosave: string;
+  saveInterval: unknown;
+}
+
+export interface OrmMysqlConfig {
+  host: string;
+  port?: number;
+  user: string;
+  password: string;
+  database: string;
+  connectionLimit?: number;
+  migrationsDir?: string;
+  migrationsTable?: string;
+  [key: string]: unknown;
+}
+
+export interface OrmPostgresConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  connectionLimit?: number;
+  migrationsDir?: string;
+  migrationsTable?: string;
+  [key: string]: unknown;
+}
+
+export interface OrmPaths {
+  model: string;
+  serializer: string;
+  transform: string;
+  view?: string;
+  access?: string;
+  [key: string]: string | undefined;
+}
+
+export interface OrmRestServerConfig {
+  enabled: string;
+  route: string;
+  metaRoute: boolean;
+}
+
+export interface OrmSection {
+  db: OrmDbConfig;
+  paths: OrmPaths;
+  restServer: OrmRestServerConfig;
+  mysql?: OrmMysqlConfig;
+  postgres?: OrmPostgresConfig;
+  timescale?: OrmPostgresConfig;
+  [key: string]: unknown;
+}
+
+export interface OrmConfig {
+  rootPath: string;
+  orm: OrmSection;
+  [key: string]: unknown;
+}
+
 export interface SourceRecord {
   __model: { __name: string; [key: string]: unknown };
   __data?: Record<string, unknown>;
