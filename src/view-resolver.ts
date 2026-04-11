@@ -2,20 +2,13 @@ import Orm, { store } from './main.js';
 import { createRecord } from './manage-record.js';
 import { AggregateProperty } from './aggregates.js';
 import { get } from '@stonyx/utils/object';
+import type { SourceRecord } from './types/orm-types.js';
 
 interface ViewClass {
   source?: string;
   resolve?: Record<string, unknown>;
   groupBy?: string;
   new (viewName: string): Record<string, unknown>;
-}
-
-interface SourceRecord {
-  __model: { __name: string; [key: string]: unknown };
-  __data: Record<string, unknown>;
-  __relationships: Record<string, unknown>;
-  id: unknown;
-  [key: string]: unknown;
 }
 
 export default class ViewResolver {

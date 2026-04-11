@@ -12,37 +12,7 @@ import config from 'stonyx/config';
 import log from 'stonyx/log';
 import path from 'path';
 import type { Pool } from 'pg';
-
-interface ForeignKeyDef {
-  references: string;
-  column: string;
-}
-
-interface ModelSchema {
-  table: string;
-  idType: string;
-  columns: Record<string, string>;
-  foreignKeys: Record<string, ForeignKeyDef>;
-  relationships: {
-    belongsTo: Record<string, string | null>;
-    hasMany: Record<string, string | null>;
-  };
-  vectorColumns: Record<string, number>;
-  memory: boolean;
-}
-
-interface ViewSchema {
-  viewName: string;
-  columns?: Record<string, string>;
-  foreignKeys?: Record<string, ForeignKeyDef>;
-}
-
-interface OrmRecord {
-  id: unknown;
-  __data: Record<string, unknown> & { __pendingSqlId?: boolean; id?: unknown };
-  __relationships: Record<string, { id: unknown } | undefined>;
-  [key: string]: unknown;
-}
+import type { ForeignKeyDef, ModelSchema, OrmRecord } from '../types/orm-types.js';
 
 interface PersistContext {
   record?: OrmRecord;
@@ -569,7 +539,7 @@ export default class PostgresDB {
     // Check FK changes too
     for (const fkCol of Object.keys(schema.foreignKeys)) {
       const relName = fkCol.replace(/_id$/, '');
-      const currentFkValue = record.__relationships[relName]?.id ?? null;
+      const currentFkValue = (record.__relationships[relName] as { id: unknown } | undefined)?.id ?? null;
       const oldFkValue = oldState[relName] ?? null;
 
       if (currentFkValue !== oldFkValue) {
@@ -624,7 +594,7 @@ export default class PostgresDB {
       const related = record.__relationships[relName];
 
       if (related) {
-        row[fkCol] = related.id;
+        row[fkCol] = (related as { id: unknown }).id;
       } else if (data[relName] !== undefined) {
         // Raw FK value (e.g., from create payload)
         row[fkCol] = data[relName];

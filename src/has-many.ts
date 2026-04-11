@@ -3,15 +3,10 @@ import { createRecord } from './manage-record.js';
 import { getRelationships } from './relationships.js';
 import { getOrSet, makeArray } from '@stonyx/utils/object';
 import { dbKey } from './db.js';
+import type { SourceRecord } from './types/orm-types.js';
 
 interface HasManyOptions {
   global?: boolean;
-  [key: string]: unknown;
-}
-
-interface SourceRecord {
-  __model: { __name: string; [key: string]: unknown };
-  id: unknown;
   [key: string]: unknown;
 }
 
