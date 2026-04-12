@@ -42,6 +42,10 @@ export function getPgType(attrType: string, transformFn?: TransformFn): string {
  * Returns a vector column type for the given dimensions.
  */
 export function getVectorType(dimensions: number): string {
+  if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > 16000) {
+    throw new Error(`Invalid vector dimensions: ${dimensions}. Must be an integer between 1 and 16000.`);
+  }
+
   return `vector(${dimensions})`;
 }
 

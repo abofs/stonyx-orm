@@ -1,4 +1,5 @@
 import type { Pool as PgPool } from 'pg';
+import { validateIdentifier } from './query-builder.js';
 
 interface PgConfig {
   host: string;
@@ -32,7 +33,8 @@ export async function getPool(pgConfig: PgConfig, extensions: string[] = ['vecto
 
   // Enable requested PostgreSQL extensions
   for (const ext of extensions) {
-    await pool.query(`CREATE EXTENSION IF NOT EXISTS ${ext}`);
+    validateIdentifier(ext, 'extension name');
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS "${ext}"`);
   }
 
   return pool;

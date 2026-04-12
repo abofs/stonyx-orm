@@ -2,8 +2,10 @@ import { readFile, fileExists } from '@stonyx/utils/file';
 import path from 'path';
 import fs from 'fs/promises';
 import type { Pool, PoolClient } from 'pg';
+import { validateIdentifier } from './query-builder.js';
 
 export async function ensureMigrationsTable(pool: Pool, tableName: string = '__migrations'): Promise<void> {
+  validateIdentifier(tableName, 'migration table name');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS "${tableName}" (
       id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -14,6 +16,7 @@ export async function ensureMigrationsTable(pool: Pool, tableName: string = '__m
 }
 
 export async function getAppliedMigrations(pool: Pool, tableName: string = '__migrations'): Promise<string[]> {
+  validateIdentifier(tableName, 'migration table name');
   const result = await pool.query(
     `SELECT filename FROM "${tableName}" ORDER BY id ASC`
   );
@@ -51,6 +54,7 @@ export function parseMigrationFile(content: string): { up: string; down: string 
 }
 
 export async function applyMigration(pool: Pool, filename: string, upSql: string, tableName: string = '__migrations'): Promise<void> {
+  validateIdentifier(tableName, 'migration table name');
   const client: PoolClient = await pool.connect();
 
   try {
@@ -77,6 +81,7 @@ export async function applyMigration(pool: Pool, filename: string, upSql: string
 }
 
 export async function rollbackMigration(pool: Pool, filename: string, downSql: string, tableName: string = '__migrations'): Promise<void> {
+  validateIdentifier(tableName, 'migration table name');
   const client: PoolClient = await pool.connect();
 
   try {
