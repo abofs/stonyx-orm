@@ -283,6 +283,59 @@ module('[Integration] ORM', function(hooks) {
       assert.deepEqual(dbRecordData, serialized);
     });
 
+    test('format() deduplicates records by ID in hasMany arrays', function(assert) {
+      // Simulate the corruption scenario: duplicate entries in JSON for the same owner
+      const duplicateData = {
+        owners: [
+          { id: 'gina', name: 'gina', gender: 'female', age: 30, children: 0 },
+          { id: 'gina', name: 'gina', gender: 'female', age: 34, children: 0 }
+        ],
+        animals: [],
+        traits: [],
+        categories: [],
+        phoneNumbers: []
+      };
+
+      // Unload all records and re-create from duplicate data
+      store.unloadAllRecords(dbKey, { includeChildren: true });
+      const dbRecord = createRecord(dbKey, duplicateData, { serialize: false, transform: false });
+      const formatted = dbRecord.format();
+      delete formatted.id;
+
+      assert.strictEqual(formatted.owners.length, 1, 'format() deduplicates — one entry per ID');
+      assert.strictEqual(formatted.owners[0].id, 'gina', 'deduped entry has correct ID');
+      assert.strictEqual(formatted.owners[0].age, 34, 'last entry wins — age is 34 not 30');
+
+      // Restore original data for subsequent tests
+      store.unloadAllRecords(dbKey, { includeChildren: true });
+      createRecord(dbKey, parsedFileData, { serialize: false, transform: false });
+    });
+
+    test('format() round-trip with duplicates preserves record count', function(assert) {
+      // Snapshot the current serialized data
+      const ownerCount = serialized.owners.length;
+
+      // Unload and reload from serialized data
+      store.unloadAllRecords(dbKey, { includeChildren: true });
+      const dbRecord = createRecord(dbKey, serialized, { serialize: false, transform: false });
+      const formatted = dbRecord.format();
+      delete formatted.id;
+
+      assert.strictEqual(formatted.owners.length, ownerCount, 'round-trip preserves exact owner count');
+
+      // Second round-trip should be stable
+      store.unloadAllRecords(dbKey, { includeChildren: true });
+      const dbRecord2 = createRecord(dbKey, formatted, { serialize: false, transform: false });
+      const formatted2 = dbRecord2.format();
+      delete formatted2.id;
+
+      assert.strictEqual(formatted2.owners.length, ownerCount, 'second round-trip is stable — no growth');
+
+      // Restore for subsequent tests
+      store.unloadAllRecords(dbKey, { includeChildren: true });
+      createRecord(dbKey, parsedFileData, { serialize: false, transform: false });
+    });
+
     test('creating a record with a pending relationship works as expected', function(assert) {
       // Note: pets reference animals that do not yet exist
       const record = createRecord('owner', { name: 'testOwner', pets: [ 5000, 5001 ] });
