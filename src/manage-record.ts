@@ -2,6 +2,7 @@ import Orm, { store } from '@stonyx/orm';
 import OrmRecord from './record.js';
 import { getGlobalRegistry, getPendingRegistry, getPendingBelongsToRegistry, getBelongsToRegistry, getHasManyRegistry } from './relationships.js';
 import type Serializer from './serializer.js';
+import { isOrmRecord } from './utils.js';
 
 interface CreateRecordOptions {
   isDbRecord?: boolean;
@@ -45,10 +46,10 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   assignRecordId(modelName, rawData);
   const existingRecord = modelStore.get(rawData.id as number | string);
 
-  if (existingRecord) {
+  if (existingRecord instanceof OrmRecord) {
     // Update the existing record with new data so the last entry wins
-    updateRecord(existingRecord as OrmRecord, rawData, { ...options, update: true });
-    return existingRecord as OrmRecord;
+    updateRecord(existingRecord, rawData, { ...options, update: true });
+    return existingRecord;
   }
 
   const recordClasses = orm.getRecordClasses(modelName);
@@ -77,7 +78,8 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
 
   // Fulfill pending belongsTo relationships
   const pendingBelongsToQueue = getPendingBelongsToRegistry();
-  const pendingBelongsTo = pendingBelongsToQueue.get(modelName)?.get(record.id) as PendingBelongsToEntry[] | undefined;
+  const pendingBelongsToRaw = pendingBelongsToQueue.get(modelName)?.get(record.id);
+  const pendingBelongsTo = Array.isArray(pendingBelongsToRaw) ? pendingBelongsToRaw as PendingBelongsToEntry[] : undefined;
 
   if (pendingBelongsTo) {
     const belongsToReg = getBelongsToRegistry();
@@ -144,7 +146,7 @@ function assignRecordId(modelName: string, rawData: { [key: string]: unknown }):
 
   const storeMap = store.get(modelName);
   if (!storeMap) throw new Error(`Cannot assign record ID: model "${modelName}" not found in store`);
-  const modelStore = Array.from(storeMap.values()) as OrmRecord[];
+  const modelStore = Array.from(storeMap.values()).filter(isOrmRecord);
   const lastRecord = modelStore.at(-1);
   rawData.id = lastRecord ? (lastRecord.id as number) + 1 : 1;
 }
