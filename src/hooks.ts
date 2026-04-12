@@ -19,18 +19,31 @@
  * Unlike event-based hooks, middleware hooks run sequentially and can halt operations.
  */
 
+/** Context object passed to before/after hook handlers. */
 export interface HookContext {
+  /** Model name (e.g. 'user', 'animal'). */
   model: string;
+  /** Operation name: 'create', 'update', 'delete', 'get', or 'list'. */
   operation: string;
+  /** The incoming HTTP request object. */
   request?: unknown;
+  /** URL route parameters (e.g. { id: '42' }). */
   params?: Record<string, string>;
+  /** Parsed request body for create/update operations. */
   body?: Record<string, unknown>;
+  /** URL query string parameters. */
   query?: Record<string, string>;
+  /** Mutable state bag shared across hooks within a single request. */
   state?: Record<string, unknown>;
+  /** Previous record state (available in update hooks). */
   oldState?: unknown;
+  /** Target record ID for single-record operations. */
   recordId?: string | number;
+  /** Response data (available in after hooks). */
   response?: unknown;
+  /** The affected record (available in after hooks for create/update/delete). */
   record?: unknown;
+  /** The affected records (available in after hooks for list operations). */
   records?: unknown[];
   [key: string]: unknown;
 }

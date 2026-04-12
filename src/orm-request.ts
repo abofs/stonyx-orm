@@ -577,5 +577,6 @@ export default class OrmRequest extends Request {
     if (!access) return 403;
     if (Array.isArray(access) && !access.includes(methodAccessMap[request.method])) return 403;
     if (typeof access === 'function') state.filter = access;
+    return undefined;
   }
 }

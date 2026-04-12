@@ -4,13 +4,9 @@ import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from '../plural-registry.js';
 import { dbKey } from '../db.js';
 import { AggregateProperty } from '../aggregates.js';
+import { getRelationshipInfo, sanitizeTableName } from '../schema-helpers.js';
 import type { ForeignKeyDef, ModelSchema, ViewSchema } from '../types/orm-types.js';
 import ModelProperty from '../model-property.js';
-
-interface RelationshipInfo {
-  type: 'belongsTo' | 'hasMany';
-  modelName: string | null;
-}
 
 interface ViewSnapshotEntry {
   viewName: string;
@@ -33,21 +29,6 @@ interface ModelSnapshotEntry {
 interface JoinDef {
   table: string;
   condition: string;
-}
-
-function getRelationshipInfo(property: unknown): RelationshipInfo | null {
-  if (typeof property !== 'function') return null;
-  const relType = (property as { __relationshipType?: string }).__relationshipType;
-  const modelName = (property as { __relatedModelName?: string }).__relatedModelName || null;
-
-  if (relType === 'belongsTo') return { type: 'belongsTo', modelName };
-  if (relType === 'hasMany') return { type: 'hasMany', modelName };
-
-  return null;
-}
-
-function sanitizeTableName(name: string): string {
-  return name.replace(/[-/]/g, '_');
 }
 
 export function introspectModels(): Record<string, ModelSchema> {
@@ -177,31 +158,7 @@ function getReferencedIdType(tableName: string, allSchemas: Record<string, Model
   return 'INTEGER';
 }
 
-export function getTopologicalOrder(schemas: Record<string, ModelSchema>): string[] {
-  const visited = new Set<string>();
-  const order: string[] = [];
-
-  function visit(name: string): void {
-    if (visited.has(name)) return;
-    visited.add(name);
-
-    const schema = schemas[name];
-    if (!schema) return;
-
-    // Visit dependencies (belongsTo targets) first
-    for (const targetModelName of Object.values(schema.relationships.belongsTo)) {
-      if (targetModelName) visit(targetModelName);
-    }
-
-    order.push(name);
-  }
-
-  for (const name of Object.keys(schemas)) {
-    visit(name);
-  }
-
-  return order;
-}
+export { getTopologicalOrder } from '../schema-helpers.js';
 
 export function introspectViews(): Record<string, ViewSchema> {
   const orm = Orm.instance as { views?: Record<string, unknown> };
