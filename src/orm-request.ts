@@ -3,6 +3,7 @@ import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from './plural-registry.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
+import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
 import type { OrmRecord } from './types/orm-types.js';
 import { isOrmRecord } from './utils.js';
@@ -24,22 +25,6 @@ interface RelationshipInfo {
 interface Filter {
   path: string[];
   value: string;
-}
-
-interface HookContext {
-  model: string;
-  operation: string;
-  request: OrmRequest$;
-  params: { [key: string]: string };
-  body?: { [key: string]: unknown };
-  query?: { [key: string]: string };
-  state: { [key: string]: unknown };
-  oldState?: unknown;
-  recordId?: string | number;
-  response?: unknown;
-  record?: unknown;
-  records?: unknown;
-  [key: string]: unknown;
 }
 
 interface JsonApiResponse {

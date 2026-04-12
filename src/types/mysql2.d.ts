@@ -5,16 +5,35 @@ declare module 'mysql2/promise' {
     password: string;
     database: string;
     port?: number;
-    [key: string]: unknown;
+    waitForConnections?: boolean;
+    connectionLimit?: number;
+    queueLimit?: number;
+    enableKeepAlive?: boolean;
+    keepAliveInitialDelay?: number;
+    [key: string]: string | number | boolean | undefined;
   }
 
-  interface QueryResult {
-    [index: number]: unknown;
+  interface ExecuteResult {
+    insertId: number;
+    affectedRows: number;
+    changedRows: number;
+    fieldCount: number;
+    info: string;
+    serverStatus: number;
+    warningStatus: number;
   }
+
+  interface FieldPacket {
+    name: string;
+    type: number;
+    length: number;
+  }
+
+  type RowDataPacket = Record<string, string | number | boolean | null>;
 
   interface Pool {
-    execute(sql: string, params?: unknown[]): Promise<[unknown[], unknown]>;
-    query(sql: string, params?: unknown[]): Promise<[unknown[], unknown]>;
+    execute(sql: string, params?: unknown[]): Promise<[RowDataPacket[] | ExecuteResult, FieldPacket[]]>;
+    query(sql: string, params?: unknown[]): Promise<[RowDataPacket[] | ExecuteResult, FieldPacket[]]>;
     end(): Promise<void>;
     getConnection(): Promise<PoolConnection>;
   }

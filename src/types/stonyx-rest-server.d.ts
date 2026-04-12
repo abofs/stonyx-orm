@@ -3,9 +3,14 @@ declare module '@stonyx/rest-server' {
     constructor(...args: unknown[]);
   }
 
+  interface RouteOptions {
+    name: string;
+    options?: { model: string; access: (request: unknown) => unknown } | Record<string, unknown>;
+  }
+
   export default class RestServer {
     static instance: RestServer;
     static close(): void;
-    mountRoute(RequestClass: unknown, options: { name: string; options?: unknown }): void;
+    mountRoute(RequestClass: typeof Request, options: RouteOptions): void;
   }
 }

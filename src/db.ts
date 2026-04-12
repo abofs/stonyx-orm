@@ -167,7 +167,7 @@ export default class DB {
       await Promise.all(collectionKeys.map(async key => {
         const filePath = path.join(dirPath, `${key}.json`);
         const exists = await fileExists(filePath);
-        const data = jsonData[key] || [];
+        const data = (jsonData[key] || []) as Record<string, unknown> | unknown[];
 
         if (exists) await updateFile(filePath, data, { json: true });
         else await createFile(filePath, data, { json: true });
