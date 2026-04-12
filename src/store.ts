@@ -30,6 +30,10 @@ interface StoreRecord {
   [key: string]: unknown;
 }
 
+function isStoreRecord(value: unknown): value is StoreRecord {
+  return typeof value === 'object' && value !== null && '__data' in value;
+}
+
 export default class Store {
   static instance: Store | undefined;
 
@@ -103,7 +107,7 @@ export default class Store {
       if (!conditions || Object.keys(conditions).length === 0) return records;
 
       return records.filter((record: unknown) =>
-        Object.entries(conditions).every(([key, value]) => (record as StoreRecord).__data[key] === value)
+        Object.entries(conditions).every(([key, value]) => isStoreRecord(record) && record.__data[key] === value)
       );
     }
 
@@ -127,7 +131,7 @@ export default class Store {
     if (!conditions || Object.keys(conditions).length === 0) return records;
 
     return records.filter((record: unknown) =>
-      Object.entries(conditions).every(([key, value]) => (record as StoreRecord).__data[key] === value)
+      Object.entries(conditions).every(([key, value]) => isStoreRecord(record) && record.__data[key] === value)
     );
   }
 
@@ -149,7 +153,7 @@ export default class Store {
     if (Object.keys(conditions).length === 0) return records;
 
     return records.filter((record: unknown) =>
-      Object.entries(conditions).every(([key, value]) => (record as StoreRecord).__data[key] === value)
+      Object.entries(conditions).every(([key, value]) => isStoreRecord(record) && record.__data[key] === value)
     );
   }
 
@@ -185,12 +189,13 @@ export default class Store {
       return;
     }
 
-    const record = modelStore.get(id as string | number) as StoreRecord | undefined;
-
-    if (!record) {
+    if (typeof id !== 'string' && typeof id !== 'number') return;
+    const raw = modelStore.get(id);
+    if (!raw || !isStoreRecord(raw)) {
       console.warn(`[Store] Cannot unload record: ${model}:${id} not found in store`);
       return;
     }
+    const record = raw;
 
     const { toUnload, visited } = options.includeChildren
       ? this._buildUnloadQueue(record, options)
@@ -224,7 +229,10 @@ export default class Store {
       }
     }
 
-    for (const relationshipType of TYPES) (relationships.get(relationshipType) as Map<string, unknown>).delete(model);
+    for (const relationshipType of TYPES) {
+      const reg = relationships.get(relationshipType);
+      if (reg instanceof Map) reg.delete(model);
+    }
   }
 
   private _removeFromHasManyArrays(modelName: string, recordId: unknown, visited: Set<string>): void {
@@ -240,7 +248,7 @@ export default class Store {
         // Don't modify arrays of records being deleted
         if (visited.has(sourceKey)) continue;
 
-        const index = hasManyArray.findIndex(r => r && (r as StoreRecord).id === recordId);
+        const index = hasManyArray.findIndex(r => r && isStoreRecord(r) && r.id === recordId);
         if (index !== -1) hasManyArray.splice(index, 1);
       }
     }
@@ -254,17 +262,19 @@ export default class Store {
       if (!targetModelMap) continue;
 
       for (const [sourceRecordId, belongsToRecord] of targetModelMap) {
-        if (belongsToRecord && (belongsToRecord as StoreRecord).id === recordId) {
+        if (belongsToRecord && isStoreRecord(belongsToRecord) && belongsToRecord.id === recordId) {
           const sourceKey = `${sourceModel}:${sourceRecordId}`;
 
           if (visited.has(sourceKey)) continue;
           targetModelMap.set(sourceRecordId, null);
 
-          const sourceRecord = this.get(sourceModel, sourceRecordId as string | number) as StoreRecord | undefined;
-          if (sourceRecord && sourceRecord.__relationships) {
-            for (const [key, value] of Object.entries(sourceRecord.__relationships)) {
-              if (value && (value as StoreRecord).id === recordId) {
-                sourceRecord.__relationships[key] = null;
+          if (typeof sourceRecordId !== 'string' && typeof sourceRecordId !== 'number') continue;
+          const sourceRaw = this.get(sourceModel, sourceRecordId);
+          if (!sourceRaw || !isStoreRecord(sourceRaw)) continue;
+          if (sourceRaw.__relationships) {
+            for (const [key, value] of Object.entries(sourceRaw.__relationships)) {
+              if (value && isStoreRecord(value) && value.id === recordId) {
+                sourceRaw.__relationships[key] = null;
               }
             }
           }
@@ -301,13 +311,13 @@ export default class Store {
       // hasMany children - always include
       if (Array.isArray(value)) {
         for (const childRecord of value) {
-          if (childRecord) children.push({ childRecord: childRecord as StoreRecord, relationshipKey: key, type: 'hasMany' });
+          if (childRecord && isStoreRecord(childRecord)) children.push({ childRecord, relationshipKey: key, type: 'hasMany' });
         }
-      } else if (value && !this._isBidirectionalRelationship(
+      } else if (value && isStoreRecord(value) && value.__model && !this._isBidirectionalRelationship(
         record.__model.__name,
-        (value as StoreRecord).__model.__name
+        value.__model.__name
       )) {
-        children.push({ childRecord: value as StoreRecord, relationshipKey: key, type: 'belongsTo' });
+        children.push({ childRecord: value, relationshipKey: key, type: 'belongsTo' });
       }
     }
 

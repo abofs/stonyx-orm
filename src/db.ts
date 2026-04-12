@@ -29,6 +29,13 @@ interface DBRecord {
   [key: string]: unknown;
 }
 
+function asDBRecord(value: unknown): DBRecord {
+  if (typeof value !== 'object' || value === null || typeof (value as DBRecord).format !== 'function') {
+    throw new Error('createRecord did not return a valid DBRecord');
+  }
+  return value as DBRecord;
+}
+
 export default class DB {
   static instance: DB;
   record!: DBRecord;
@@ -49,7 +56,7 @@ export default class DB {
   }
 
   getCollectionKeys(): string[] {
-    const SchemaClass = (Orm.instance as Orm).models[`${dbKey}Model`] as new () => Record<string, unknown>;
+    const SchemaClass = Orm.instance.models[`${dbKey}Model`] as new () => Record<string, unknown>;
     const instance = new SchemaClass();
     const keys: string[] = [];
 
@@ -108,7 +115,7 @@ export default class DB {
     const { autosave, saveInterval } = config.orm.db;
 
     store.set(dbKey, new Map());
-    (Orm.instance as Orm).models[`${dbKey}Model`] = await this.getSchema();
+    Orm.instance.models[`${dbKey}Model`] = await this.getSchema();
 
     await this.validateMode();
     this.record = await this.getRecord();
@@ -198,7 +205,7 @@ export default class DB {
 
     const data = await readFile(file, { json: true, missingFileCallback: this.create.bind(this) });
 
-    return createRecord(dbKey, data as Record<string, unknown>, { isDbRecord: true, serialize: false, transform: false }) as unknown as DBRecord;
+    return asDBRecord(createRecord(dbKey, data as Record<string, unknown>, { isDbRecord: true, serialize: false, transform: false }));
   }
 
   async getRecordFromDirectory(): Promise<DBRecord> {
@@ -208,7 +215,7 @@ export default class DB {
 
     if (!dirExists) {
       const data = await this.create();
-      return createRecord(dbKey, data, { isDbRecord: true, serialize: false, transform: false }) as unknown as DBRecord;
+      return asDBRecord(createRecord(dbKey, data, { isDbRecord: true, serialize: false, transform: false }));
     }
 
     const assembled: Record<string, unknown> = {};
@@ -220,6 +227,6 @@ export default class DB {
       assembled[key] = exists ? await readFile(filePath, { json: true }) : [];
     }));
 
-    return createRecord(dbKey, assembled, { isDbRecord: true, serialize: false, transform: false }) as unknown as DBRecord;
+    return asDBRecord(createRecord(dbKey, assembled, { isDbRecord: true, serialize: false, transform: false }));
   }
 }

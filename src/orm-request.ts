@@ -5,6 +5,7 @@ import { getPluralName } from './plural-registry.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
 import config from 'stonyx/config';
 import type { OrmRecord } from './types/orm-types.js';
+import { isOrmRecord } from './utils.js';
 
 interface OrmRequest$ extends Request {
   protocol?: string;
@@ -74,7 +75,7 @@ function getRelationshipInfo(property: unknown): RelationshipInfo | null {
 
 // Helper to introspect model relationships
 function getModelRelationships(modelName: string): { [key: string]: RelationshipInfo } {
-  const { modelClass } = (Orm.instance as Orm).getRecordClasses(modelName);
+  const { modelClass } = Orm.instance.getRecordClasses(modelName);
   if (!modelClass) return {};
 
   const model = new (modelClass as new (name: string) => { [key: string]: unknown })(modelName);
@@ -157,8 +158,8 @@ function traverseIncludePath(
 
     // Handle both belongsTo (single) and hasMany (array)
     const recordsToProcess: OrmRecord[] = Array.isArray(relatedRecords)
-      ? relatedRecords as OrmRecord[]
-      : [relatedRecords as OrmRecord];
+      ? relatedRecords.filter(isOrmRecord)
+      : isOrmRecord(relatedRecords) ? [relatedRecords] : [];
 
     for (const relatedRecord of recordsToProcess) {
       if (!relatedRecord) continue;
@@ -281,7 +282,7 @@ export default class OrmRequest extends Request {
 
     // Define raw handlers first
     const getCollectionHandler: HandlerFn = async (request, { filter: accessFilter }) => {
-      const allRecords = await store.findAll(model) as OrmRecord[];
+      const allRecords = (await store.findAll(model)).filter(isOrmRecord);
 
       const queryFilters = parseFilters(request.query);
       const queryFilterPredicate = createFilterPredicate(queryFilters);
@@ -344,13 +345,17 @@ export default class OrmRequest extends Request {
       }
 
       const recordAttributes = id !== undefined ? { id, ...sanitizedAttributes } : sanitizedAttributes;
-      const record = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false }) as unknown as OrmRecord;
+      const created = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false });
+      const record = isOrmRecord(created) ? created : null;
+      if (!record) return 500;
 
       return { data: record.toJSON?.({ fields: modelFields }) };
     };
 
     const updateHandler: HandlerFn = async ({ body, params }) => {
-      const record = await store.find(model, getId(params)) as OrmRecord;
+      const found = await store.find(model, getId(params));
+      if (!found || !isOrmRecord(found)) return 404;
+      const record = found;
       const { attributes, relationships: rels } = (body?.data || {}) as {
         attributes?: { [key: string]: unknown };
         relationships?: { [key: string]: { data?: { id?: string | number } } };
@@ -454,7 +459,7 @@ export default class OrmRequest extends Request {
       const response = await handler(request, state);
 
       // Persist to SQL database for write operations
-      const sqlDb = (Orm.instance as Orm).sqlDb;
+      const sqlDb = Orm.instance.sqlDb;
       if (sqlDb && WRITE_OPERATIONS.has(operation)) {
         await sqlDb.persist(operation, this.model, context, response);
       }
@@ -514,10 +519,11 @@ export default class OrmRequest extends Request {
         let data: unknown;
         if (info.isArray) {
           // hasMany - return array
-          data = ((relatedData || []) as OrmRecord[]).map(r => r.toJSON?.({ baseUrl }));
+          const related = Array.isArray(relatedData) ? relatedData.filter(isOrmRecord) : [];
+          data = related.map(r => r.toJSON?.({ baseUrl }));
         } else {
           // belongsTo - return single or null
-          data = relatedData ? (relatedData as OrmRecord).toJSON?.({ baseUrl }) : null;
+          data = isOrmRecord(relatedData) ? relatedData.toJSON?.({ baseUrl }) : null;
         }
 
         return {
@@ -537,15 +543,17 @@ export default class OrmRequest extends Request {
         let data: unknown;
         if (info.isArray) {
           // hasMany - return array of linkage objects
-          data = ((relatedData || []) as OrmRecord[])
+          const related = Array.isArray(relatedData) ? relatedData.filter(isOrmRecord) : [];
+          data = related
             .filter((r): r is OrmRecord & { __model: { __name: string } } => Boolean(r.__model))
             .map(r => ({ type: r.__model.__name, id: r.id }));
         } else {
           // belongsTo - return single linkage or null
-          const model = relatedData ? (relatedData as OrmRecord).__model : undefined;
-          data = model
-            ? { type: model.__name, id: (relatedData as OrmRecord).id }
-            : null;
+          if (isOrmRecord(relatedData) && relatedData.__model) {
+            data = { type: relatedData.__model.__name, id: relatedData.id };
+          } else {
+            data = null;
+          }
         }
 
         return {
