@@ -185,14 +185,14 @@ export default class Store {
     const modelStore = this.data.get(model);
 
     if (!modelStore) {
-      console.warn(`[Store] Cannot unload record: model "${model}" not found in store`);
+      console.warn(`[Store] Cannot unload record: model "${model}" not found in store — ensure the model is registered before unloading`);
       return;
     }
 
     if (typeof id !== 'string' && typeof id !== 'number') return;
     const raw = modelStore.get(id);
     if (!raw || !isStoreRecord(raw)) {
-      console.warn(`[Store] Cannot unload record: ${model}:${id} not found in store`);
+      console.warn(`[Store] Cannot unload record: ${model}:${id} not found in store — it may have already been unloaded`);
       return;
     }
     const record = raw;
@@ -217,7 +217,7 @@ export default class Store {
     const modelStore = this.data.get(model);
 
     if (!modelStore) {
-      console.warn(`[Store] Cannot unload all records: model "${model}" not found in store`);
+      console.warn(`[Store] Cannot unload all records: model "${model}" not found in store — ensure the model is registered before unloading`);
       return;
     }
 
