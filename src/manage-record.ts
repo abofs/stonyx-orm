@@ -142,8 +142,11 @@ function assignRecordId(modelName: string, rawData: { [key: string]: unknown }):
     return;
   }
 
-  const modelStore = Array.from(store.get(modelName)!.values()) as OrmRecord[];
-  rawData.id = modelStore.length ? (modelStore.at(-1)!.id as number) + 1 : 1;
+  const storeMap = store.get(modelName);
+  if (!storeMap) throw new Error(`Cannot assign record ID: model "${modelName}" not found in store`);
+  const modelStore = Array.from(storeMap.values()) as OrmRecord[];
+  const lastRecord = modelStore.at(-1);
+  rawData.id = lastRecord ? (lastRecord.id as number) + 1 : 1;
 }
 
 function isStringIdModel(modelName: string): boolean {

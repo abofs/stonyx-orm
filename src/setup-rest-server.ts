@@ -14,7 +14,7 @@ interface AccessInstance {
 }
 
 export default async function(route: string, accessPath: string, metaRoute: boolean): Promise<void> {
-  let accessFiles: Record<string, (request: unknown) => unknown> | null = {};
+  const accessFiles: Record<string, (request: unknown) => unknown> = {};
 
   try {
     await forEachFileImport(accessPath, (accessClass: unknown) => {
@@ -31,14 +31,14 @@ export default async function(route: string, accessPath: string, metaRoute: bool
       for (const model of models === '*' ? availableModels : models) {
         if (model === dbKey) continue;
         if (!store.data.has(model)) throw new Error(`Unable to define access for Invalid Model "${model}". Model does not exist`);
-        if (accessFiles![model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
+        if (accessFiles[model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
 
-        accessFiles![model] = accessInstance.access;
+        accessFiles[model] = accessInstance.access;
       }
     });
   } catch (error) {
-    log.error!(error instanceof Error ? error.message : String(error));
-    log.warn!('You must define a valid access configuration file in order to access ORM generated REST endpoints.');
+    log.error?.(error instanceof Error ? error.message : String(error));
+    log.warn?.('You must define a valid access configuration file in order to access ORM generated REST endpoints.');
   }
 
   await waitForModule('rest-server');
@@ -47,7 +47,7 @@ export default async function(route: string, accessPath: string, metaRoute: bool
   const name = route === '/' ? 'index' : (route[0] === '/' ? route.slice(1) : route);
 
   // Configure endpoints for models and views with access configuration
-  for (const [model, access] of Object.entries(accessFiles!)) {
+  for (const [model, access] of Object.entries(accessFiles)) {
     const pluralizedModel = getPluralName(model);
     const modelName = name === 'index' ? pluralizedModel : `${name}/${pluralizedModel}`;
     RestServer.instance.mountRoute(OrmRequest, { name: modelName, options: { model, access } });
@@ -55,11 +55,8 @@ export default async function(route: string, accessPath: string, metaRoute: bool
 
   // Mount the meta route when metaRoute config is enabled
   if (metaRoute) {
-    log.warn!('SECURITY RISK! - Meta route is enabled via metaRoute config. This feature is intended for development purposes only!');
+    log.warn?.('SECURITY RISK! - Meta route is enabled via metaRoute config. This feature is intended for development purposes only!');
 
     RestServer.instance.mountRoute(MetaRequest, { name });
   }
-
-  // Cleanup references
-  accessFiles = null;
 }

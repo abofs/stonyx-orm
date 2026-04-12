@@ -4,7 +4,7 @@ import type { SourceRecord } from './types/orm-types.js';
 
 function getOrSet<K, V>(map: Map<K, V>, key: K, defaultValue: V): V {
   if (!map.has(key)) map.set(key, defaultValue);
-  return map.get(key)!;
+  return map.get(key) as V;
 }
 
 interface BelongsToOptions {
