@@ -13,7 +13,7 @@ export function validateInterval(interval: string, context: string = 'interval')
   return interval.trim();
 }
 
-const SAFE_AGGREGATE = /^(COUNT|SUM|AVG|MIN|MAX|FIRST|LAST)\s*\(\s*"?[a-zA-Z_][a-zA-Z0-9_]*"?\s*\)\s*(AS\s+"?[a-zA-Z_][a-zA-Z0-9_]*"?)?$/i;
+const SAFE_AGGREGATE = /^(COUNT|SUM|AVG|MIN|MAX|FIRST|LAST)\s*\(\s*("?[a-zA-Z_][a-zA-Z0-9_]*"?|\*)\s*\)\s*(AS\s+"?[a-zA-Z_][a-zA-Z0-9_]*"?)?$/i;
 
 export function validateAggregate(expr: string, context: string = 'aggregate'): string {
   if (!expr || typeof expr !== 'string' || !SAFE_AGGREGATE.test(expr.trim())) {
@@ -91,8 +91,20 @@ export function buildTimeBucket(table: string, timeColumn: string, bucketSize: s
   }
 
   const whereStr = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : '';
-  if (orderBy) validateIdentifier(orderBy, 'ORDER BY column');
-  const orderStr = orderBy ? ` ORDER BY "${orderBy}"` : '';
+  let orderStr = '';
+  if (orderBy) {
+    const parts = orderBy.trim().split(/\s+/);
+    const col = parts[0];
+    const dir = parts[1]?.toUpperCase();
+
+    validateIdentifier(col, 'ORDER BY column');
+
+    if (dir && dir !== 'ASC' && dir !== 'DESC') {
+      throw new Error(`Invalid ORDER BY direction: "${dir}". Must be ASC or DESC.`);
+    }
+
+    orderStr = ` ORDER BY "${col}"${dir ? ` ${dir}` : ''}`;
+  }
   let limitStr = '';
   if (limit != null) {
     limitStr = ` LIMIT $${paramIndex++}`;

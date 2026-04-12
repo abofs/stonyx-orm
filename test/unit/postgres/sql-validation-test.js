@@ -1,5 +1,5 @@
 import QUnit from 'qunit';
-import { validateInterval, validateAggregate } from '../../../src/timescale/query-builder.js';
+import { validateInterval, validateAggregate, buildTimeBucket } from '../../../src/timescale/query-builder.js';
 import { getVectorType } from '../../../src/postgres/type-map.js';
 
 const { module, test } = QUnit;
@@ -55,6 +55,8 @@ module('[Unit] SQL Validation — validateAggregate', function () {
     assert.strictEqual(validateAggregate('SUM(amount)'), 'SUM(amount)');
     assert.strictEqual(validateAggregate('MIN(price)'), 'MIN(price)');
     assert.strictEqual(validateAggregate('MAX(score)'), 'MAX(score)');
+    assert.strictEqual(validateAggregate('COUNT(*)'), 'COUNT(*)');
+    assert.strictEqual(validateAggregate('COUNT(*) AS reading_count'), 'COUNT(*) AS reading_count');
   });
 
   test('rejects SQL injection in aggregates', function (assert) {
@@ -76,6 +78,34 @@ module('[Unit] SQL Validation — validateAggregate', function () {
   test('rejects empty or non-string aggregates', function (assert) {
     assert.throws(() => validateAggregate(''), /Invalid SQL aggregate/);
     assert.throws(() => validateAggregate(null), /Invalid SQL aggregate/);
+  });
+});
+
+module('[Unit] SQL Validation — buildTimeBucket orderBy', function () {
+  test('accepts simple column name for orderBy', function (assert) {
+    const result = buildTimeBucket('test_table', 'created_at', '1 hour', { orderBy: 'bucket' });
+    assert.ok(result.sql.includes('ORDER BY "bucket"'), 'orderBy column is quoted');
+  });
+
+  test('accepts column name with ASC/DESC direction', function (assert) {
+    const result = buildTimeBucket('test_table', 'created_at', '1 hour', { orderBy: 'bucket DESC' });
+    assert.ok(result.sql.includes('ORDER BY "bucket" DESC'), 'orderBy with direction is parsed correctly');
+  });
+
+  test('rejects invalid orderBy direction', function (assert) {
+    assert.throws(
+      () => buildTimeBucket('test_table', 'created_at', '1 hour', { orderBy: 'bucket SIDEWAYS' }),
+      /Invalid ORDER BY direction/,
+      'invalid direction rejected'
+    );
+  });
+
+  test('rejects SQL injection in orderBy', function (assert) {
+    assert.throws(
+      () => buildTimeBucket('test_table', 'created_at', '1 hour', { orderBy: 'bucket; DROP TABLE' }),
+      /Invalid/,
+      'SQL injection in orderBy rejected'
+    );
   });
 });
 
