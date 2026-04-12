@@ -507,7 +507,7 @@ export default class PostgresDB {
     // Re-key the record in the store if PostgreSQL generated the ID (via RETURNING)
     if (isPendingId && result.rows.length > 0) {
       const pendingId = record.id;
-      const realId = result.rows[0].id;
+      const realId = result.rows[0].id as string | number;
       const modelStore = (this.deps.store as unknown as { get(name: string): Map<unknown, unknown> }).get(modelName);
 
       modelStore.delete(pendingId);

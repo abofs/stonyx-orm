@@ -5,13 +5,17 @@ declare module 'pg' {
     password?: string;
     database?: string;
     port?: number;
-    [key: string]: unknown;
+    max?: number;
+    idleTimeoutMillis?: number;
+    connectionTimeoutMillis?: number;
   }
 
+  type RowData = Record<string, string | number | boolean | null>;
+
   interface QueryResult {
-    rows: Record<string, unknown>[];
+    rows: RowData[];
     rowCount: number;
-    fields?: { name: string }[];
+    fields?: { name: string; dataTypeID: number }[];
   }
 
   export class Pool {

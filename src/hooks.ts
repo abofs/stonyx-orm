@@ -19,7 +19,23 @@
  * Unlike event-based hooks, middleware hooks run sequentially and can halt operations.
  */
 
-type HookHandler = (context: Record<string, unknown>) => unknown | Promise<unknown>;
+export interface HookContext {
+  model: string;
+  operation: string;
+  request?: unknown;
+  params?: Record<string, string>;
+  body?: Record<string, unknown>;
+  query?: Record<string, string>;
+  state?: Record<string, unknown>;
+  oldState?: unknown;
+  recordId?: string | number;
+  response?: unknown;
+  record?: unknown;
+  records?: unknown[];
+  [key: string]: unknown;
+}
+
+type HookHandler = (context: HookContext) => unknown | Promise<unknown>;
 
 // Map of "operation:model" -> handler[]
 const beforeHooks: Map<string, HookHandler[]> = new Map();

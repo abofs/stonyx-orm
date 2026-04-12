@@ -33,7 +33,7 @@ function query(rawData: unknown, pathPrefix: string, subPath: unknown): unknown 
 
   const [path, getter, pointer] = makeArray(subPath) as [string, unknown, string | undefined];
   const fullPath = `${pathPrefix}${path}`;
-  const value = get(rawData, fullPath);
+  const value = get(rawData as Record<string, unknown>, fullPath);
 
   if (getter === undefined || getter === null) return value;
 
