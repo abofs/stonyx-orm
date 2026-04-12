@@ -27,13 +27,15 @@ export class AggregateProperty {
       return 0;
     }
 
-    switch (this.aggregateType) {
-      case 'count':
-        return relatedRecords.length;
+    if (this.aggregateType === 'count') return relatedRecords.length;
 
+    const field = this.field;
+    if (!field) return null;
+
+    switch (this.aggregateType) {
       case 'sum':
         return relatedRecords.reduce((acc, record) => {
-          const val = parseFloat(record?.__data?.[this.field!] as string ?? record?.[this.field!] as string);
+          const val = parseFloat(record?.__data?.[field] as string ?? record?.[field] as string);
           return acc + (isNaN(val) ? 0 : val);
         }, 0);
 
@@ -41,7 +43,7 @@ export class AggregateProperty {
         let sum = 0;
         let count = 0;
         for (const record of relatedRecords) {
-          const val = parseFloat(record?.__data?.[this.field!] as string ?? record?.[this.field!] as string);
+          const val = parseFloat(record?.__data?.[field] as string ?? record?.[field] as string);
           if (!isNaN(val)) {
             sum += val;
             count++;
@@ -53,7 +55,7 @@ export class AggregateProperty {
       case 'min': {
         let min: number | null = null;
         for (const record of relatedRecords) {
-          const val = parseFloat(record?.__data?.[this.field!] as string ?? record?.[this.field!] as string);
+          const val = parseFloat(record?.__data?.[field] as string ?? record?.[field] as string);
           if (!isNaN(val) && (min === null || val < min)) min = val;
         }
         return min;
@@ -62,7 +64,7 @@ export class AggregateProperty {
       case 'max': {
         let max: number | null = null;
         for (const record of relatedRecords) {
-          const val = parseFloat(record?.__data?.[this.field!] as string ?? record?.[this.field!] as string);
+          const val = parseFloat(record?.__data?.[field] as string ?? record?.[field] as string);
           if (!isNaN(val) && (max === null || val > max)) max = val;
         }
         return max;

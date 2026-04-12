@@ -40,7 +40,8 @@ export function beforeHook(operation: string, model: string, handler: HookHandle
   if (!beforeHooks.has(key)) {
     beforeHooks.set(key, []);
   }
-  beforeHooks.get(key)!.push(handler);
+  const hooks = beforeHooks.get(key);
+  if (hooks) hooks.push(handler);
 
   // Return unsubscribe function
   return () => {
@@ -66,7 +67,8 @@ export function afterHook(operation: string, model: string, handler: HookHandler
   if (!afterHooks.has(key)) {
     afterHooks.set(key, []);
   }
-  afterHooks.get(key)!.push(handler);
+  const hooks = afterHooks.get(key);
+  if (hooks) hooks.push(handler);
 
   // Return unsubscribe function
   return () => {

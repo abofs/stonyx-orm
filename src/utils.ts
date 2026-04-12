@@ -8,7 +8,8 @@ export function isDbError(error: unknown): error is { code: string; message: str
 export function pluralize(word: string): string {
   if (word.includes('-')) {
     const parts = word.split('-');
-    const pluralizedLast = basePluralize(parts.pop()!);
+    const last = parts.pop() as string;
+    const pluralizedLast = basePluralize(last);
     return [...parts, pluralizedLast].join('-');
   }
 

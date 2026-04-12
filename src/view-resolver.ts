@@ -137,7 +137,8 @@ export default class ViewResolver {
       if (!groups.has(key)) {
         groups.set(key, []);
       }
-      groups.get(key)!.push(record);
+      const group = groups.get(key);
+      if (group) group.push(record);
     }
 
     const results: unknown[] = [];

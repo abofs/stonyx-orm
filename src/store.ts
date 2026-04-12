@@ -332,7 +332,8 @@ export default class Store {
     }];
 
     while (queue.length > 0) {
-      const item = queue.shift()!;
+      const item = queue.shift();
+      if (!item) break;
       const key = `${item.modelName}:${item.recordId}`;
 
       if (visited.has(key)) continue;

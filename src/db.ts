@@ -84,7 +84,7 @@ export default class DB {
         const hasData = collectionKeys.some(key => Array.isArray(data[key]) && data[key].length > 0);
 
         if (hasData) {
-          log.error!(`DB mode mismatch: db.json contains data but mode is set to 'directory'. Run migration first:\n\n  stonyx db:migrate-to-directory\n`);
+          log.error?.(`DB mode mismatch: db.json contains data but mode is set to 'directory'. Run migration first:\n\n  stonyx db:migrate-to-directory\n`);
           process.exit(1);
         }
       }
@@ -97,7 +97,7 @@ export default class DB {
         )).some(Boolean);
 
         if (hasCollectionFiles) {
-          log.error!(`DB mode mismatch: directory '${config.orm.db.directory}/' contains collection files but mode is set to 'file'. Run migration first:\n\n  stonyx db:migrate-to-file\n`);
+          log.error?.(`DB mode mismatch: directory '${config.orm.db.directory}/' contains collection files but mode is set to 'file'. Run migration first:\n\n  stonyx db:migrate-to-file\n`);
           process.exit(1);
         }
       }
@@ -176,13 +176,13 @@ export default class DB {
       if (dbFileExists) await updateFile(dbFilePath, skeleton, { json: true });
       else await createFile(dbFilePath, skeleton, { json: true });
 
-      log.db!(`DB has been successfully saved to ${config.orm.db.directory}/ directory`);
+      log.db?.(`DB has been successfully saved to ${config.orm.db.directory}/ directory`);
       return;
     }
 
     await updateFile(`${config.rootPath}/${file}`, jsonData, { json: true });
 
-    log.db!(`DB has been successfully saved to ${file}`);
+    log.db?.(`DB has been successfully saved to ${file}`);
   }
 
   async getRecord(): Promise<DBRecord> {

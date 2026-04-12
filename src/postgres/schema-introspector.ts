@@ -93,9 +93,10 @@ export function introspectModels(): Record<string, ModelSchema> {
 
     // Build foreign keys from belongsTo relationships
     for (const [relName, targetModelName] of Object.entries(relationships.belongsTo)) {
+      if (!targetModelName) continue;
       const fkColumn = `${relName}_id`;
       foreignKeys[fkColumn] = {
-        references: sanitizeTableName(getPluralName(targetModelName!)),
+        references: sanitizeTableName(getPluralName(targetModelName)),
         column: 'id',
       };
     }
@@ -189,7 +190,7 @@ export function getTopologicalOrder(schemas: Record<string, ModelSchema>): strin
 
     // Visit dependencies (belongsTo targets) first
     for (const targetModelName of Object.values(schema.relationships.belongsTo)) {
-      visit(targetModelName!);
+      if (targetModelName) visit(targetModelName);
     }
 
     order.push(name);
@@ -233,11 +234,13 @@ export function introspectViews(): Record<string, ViewSchema> {
 
       if (relInfo?.type === 'belongsTo') {
         relationships.belongsTo[key] = relInfo.modelName;
-        const fkColumn = `${key}_id`;
-        foreignKeys[fkColumn] = {
-          references: sanitizeTableName(getPluralName(relInfo.modelName!)),
-          column: 'id',
-        };
+        if (relInfo.modelName) {
+          const fkColumn = `${key}_id`;
+          foreignKeys[fkColumn] = {
+            references: sanitizeTableName(getPluralName(relInfo.modelName)),
+            column: 'id',
+          };
+        }
       } else if (relInfo?.type === 'hasMany') {
         relationships.hasMany[key] = relInfo.modelName;
       } else if (property instanceof ModelProperty) {

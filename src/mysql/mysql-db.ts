@@ -89,7 +89,9 @@ export default class MysqlDB {
 
     this.deps = { ...defaultDeps, ...deps } as MysqlDBDeps;
     this.pool = null;
-    this.mysqlConfig = this.deps.config.orm.mysql!;
+    const mysqlConfig = this.deps.config.orm.mysql;
+    if (!mysqlConfig) throw new Error('MySQL configuration (config.orm.mysql) is required');
+    this.mysqlConfig = mysqlConfig;
   }
 
   private requirePool(): Pool {
@@ -104,7 +106,8 @@ export default class MysqlDB {
   }
 
   async startup(): Promise<void> {
-    const migrationsPath = this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir!);
+    if (!this.mysqlConfig.migrationsDir) throw new Error('MySQL migrationsDir is required in config');
+    const migrationsPath = this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir);
 
     // Check for pending migrations
     const applied = await this.deps.getAppliedMigrations(this.requirePool(), this.mysqlConfig.migrationsTable);
@@ -112,7 +115,7 @@ export default class MysqlDB {
     const pending = files.filter(f => !applied.includes(f));
 
     if (pending.length > 0) {
-      this.deps.log.db!(`${pending.length} pending migration(s) found.`);
+      this.deps.log.db?.(`${pending.length} pending migration(s) found.`);
 
       const shouldApply = await this.deps.confirm(`${pending.length} pending migration(s) found. Apply now?`);
 
@@ -122,13 +125,13 @@ export default class MysqlDB {
           const { up } = this.deps.parseMigrationFile(content);
 
           await this.deps.applyMigration(this.requirePool(), filename, up, this.mysqlConfig.migrationsTable);
-          this.deps.log.db!(`Applied migration: ${filename}`);
+          this.deps.log.db?.(`Applied migration: ${filename}`);
         }
 
         // Reload records after applying migrations
         await this.loadMemoryRecords();
       } else {
-        this.deps.log.warn!('Skipping pending migrations. Schema may be outdated.');
+        this.deps.log.warn?.('Skipping pending migrations. Schema may be outdated.');
       }
     } else if (files.length === 0) {
       const schemas = this.deps.introspectModels();
@@ -146,25 +149,26 @@ export default class MysqlDB {
           if (result) {
             const { up } = this.deps.parseMigrationFile(result.content);
             await this.deps.applyMigration(this.requirePool(), result.filename, up, this.mysqlConfig.migrationsTable);
-            this.deps.log.db!(`Applied migration: ${result.filename}`);
+            this.deps.log.db?.(`Applied migration: ${result.filename}`);
             await this.loadMemoryRecords();
           }
         } else {
-          this.deps.log.warn!('Skipping initial migration. Tables may not exist.');
+          this.deps.log.warn?.('Skipping initial migration. Tables may not exist.');
         }
       }
     }
 
     // Check for schema drift
     const schemas = this.deps.introspectModels();
-    const snapshot = await this.deps.loadLatestSnapshot(this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir!)) as Record<string, SnapshotEntry>;
+    if (!this.mysqlConfig.migrationsDir) throw new Error('MySQL migrationsDir is required in config');
+    const snapshot = await this.deps.loadLatestSnapshot(this.deps.path.resolve(this.deps.config.rootPath, this.mysqlConfig.migrationsDir)) as Record<string, SnapshotEntry>;
 
     if (Object.keys(snapshot).length > 0) {
       const drift = this.deps.detectSchemaDrift(schemas, snapshot);
 
       if (drift.hasChanges) {
-        this.deps.log.warn!('Schema drift detected: models have changed since the last migration.');
-        this.deps.log.warn!('Run `stonyx db:generate-migration` to create a new migration.');
+        this.deps.log.warn?.('Schema drift detected: models have changed since the last migration.');
+        this.deps.log.warn?.('Run `stonyx db:generate-migration` to create a new migration.');
       }
     }
   }
@@ -191,7 +195,7 @@ export default class MysqlDB {
       // Check the model's memory flag — skip non-memory models
       const { modelClass } = Orm.instance.getRecordClasses(modelName) as { modelClass?: { memory?: boolean } };
       if (modelClass?.memory === false) {
-        this.deps.log.db!(`Skipping memory load for '${modelName}' (memory: false)`);
+        this.deps.log.db?.(`Skipping memory load for '${modelName}' (memory: false)`);
         continue;
       }
 
@@ -209,7 +213,7 @@ export default class MysqlDB {
       } catch (error) {
         // Table may not exist yet (pre-migration) — skip gracefully
         if (isDbError(error) && error.code === 'ER_NO_SUCH_TABLE') {
-          this.deps.log.db!(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
+          this.deps.log.db?.(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
           continue;
         }
 
@@ -223,7 +227,7 @@ export default class MysqlDB {
     for (const [viewName, viewSchema] of Object.entries(viewSchemas)) {
       const { modelClass: viewClass } = Orm.instance.getRecordClasses(viewName) as { modelClass?: { memory?: boolean } };
       if (viewClass?.memory !== true) {
-        this.deps.log.db!(`Skipping memory load for view '${viewName}' (memory: false)`);
+        this.deps.log.db?.(`Skipping memory load for view '${viewName}' (memory: false)`);
         continue;
       }
 
@@ -240,7 +244,7 @@ export default class MysqlDB {
         }
       } catch (error) {
         if (isDbError(error) && error.code === 'ER_NO_SUCH_TABLE') {
-          this.deps.log.db!(`View '${viewSchema.viewName}' does not exist yet. Skipping load for '${viewName}'.`);
+          this.deps.log.db?.(`View '${viewSchema.viewName}' does not exist yet. Skipping load for '${viewName}'.`);
           continue;
         }
         throw error;
@@ -314,14 +318,15 @@ export default class MysqlDB {
 
     if (!schema) return [];
 
-    const { sql, values } = this.deps.buildSelect(schema.table, conditions);
+    const resolvedSchema = schema;
+    const { sql, values } = this.deps.buildSelect(resolvedSchema.table, conditions);
 
     try {
       const result = await this.requirePool().execute(sql, values);
       const rows = result[0] as Record<string, unknown>[];
 
       const records = rows.map(row => {
-        const rawData = this._rowToRawData(row, schema!);
+        const rawData = this._rowToRawData(row, resolvedSchema);
         return this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false }) as unknown as OrmRecord;
       });
 
@@ -432,7 +437,8 @@ export default class MysqlDB {
     if (isPendingId && result.insertId) {
       const pendingId = record.id;
       const realId = result.insertId;
-      const modelStore = this.deps.store.get(modelName)!;
+      const modelStore = this.deps.store.get(modelName);
+      if (!modelStore) throw new Error(`Model "${modelName}" not found in store during ID re-key`);
 
       modelStore.delete(pendingId as number | string);
       record.__data.id = realId;
