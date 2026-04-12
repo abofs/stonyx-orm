@@ -86,9 +86,24 @@ export default class Record {
     const records: { [key: string]: unknown } = {};
 
     for (const [key, childRecord] of Object.entries(this.__relationships)) {
-      records[key] = Array.isArray(childRecord)
-        ? childRecord.map((r: Record) => r.serialize())
-        : (childRecord as Record)?.serialize() ?? null;
+      if (Array.isArray(childRecord)) {
+        // Deduplicate by record ID — keep last occurrence (latest data wins)
+        const seen = new Set<unknown>();
+        const unique: Record[] = [];
+
+        for (let i = childRecord.length - 1; i >= 0; i--) {
+          const r = childRecord[i] as Record;
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            unique.push(r);
+          }
+        }
+
+        unique.reverse();
+        records[key] = unique.map((r: Record) => r.serialize());
+      } else {
+        records[key] = (childRecord as Record)?.serialize() ?? null;
+      }
     }
 
     return { ...data, ...records };

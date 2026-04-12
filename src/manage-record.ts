@@ -44,7 +44,12 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
 
   assignRecordId(modelName, rawData);
   const existingRecord = modelStore.get(rawData.id as number | string);
-  if (existingRecord) return existingRecord as OrmRecord;
+
+  if (existingRecord) {
+    // Update the existing record with new data so the last entry wins
+    updateRecord(existingRecord as OrmRecord, rawData, { ...options, update: true });
+    return existingRecord as OrmRecord;
+  }
 
   const recordClasses = orm.getRecordClasses(modelName);
   const modelClass = recordClasses.modelClass as (new (name: string) => { __name: string; [key: string]: unknown }) | undefined;
