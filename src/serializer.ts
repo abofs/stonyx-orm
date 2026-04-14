@@ -5,6 +5,14 @@ import type ModelProperty from './model-property.js';
 
 const RESERVED_KEYS = ['__name'];
 
+function isAggregateProperty(v: unknown): v is AggregateProperty {
+  return typeof v === 'object' && v !== null && (v as { __kind?: string }).__kind === 'AggregateProperty';
+}
+
+function isModelProperty(v: unknown): v is ModelProperty {
+  return typeof v === 'object' && v !== null && (v as { __kind?: string }).__kind === 'ModelProperty';
+}
+
 function searchQuery(query: Record<string, unknown>, array: unknown, key?: string): unknown {
   const result = makeArray(array).find((item: unknown) => {
     for (const [prop, value] of Object.entries(query)) {
@@ -25,7 +33,7 @@ function query(rawData: unknown, pathPrefix: string, subPath: unknown): unknown 
 
   const [path, getter, pointer] = makeArray(subPath) as [string, unknown, string | undefined];
   const fullPath = `${pathPrefix}${path}`;
-  const value = get(rawData, fullPath);
+  const value = get(rawData as Record<string, unknown>, fullPath);
 
   if (getter === undefined || getter === null) return value;
 
@@ -93,14 +101,14 @@ export default class Serializer {
       }
 
       // Aggregate property handling — use the rawData value, not the aggregate descriptor
-      if ((handler as AggregateProperty)?.__kind === 'AggregateProperty') {
+      if (isAggregateProperty(handler)) {
         parsedData[key] = data;
         rec[key] = data;
         continue;
       }
 
       // Direct assignment handling
-      if ((handler as ModelProperty)?.__kind !== 'ModelProperty') {
+      if (!isModelProperty(handler)) {
         parsedData[key] = handler;
         rec[key] = handler;
         continue;

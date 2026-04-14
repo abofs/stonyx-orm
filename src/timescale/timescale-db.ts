@@ -22,6 +22,14 @@ interface CompressionOptions {
   orderBy?: string;
 }
 
+interface TimescaleDeps {
+  buildCreateHypertable: typeof buildCreateHypertable;
+  buildTimeBucket: typeof buildTimeBucket;
+  buildContinuousAggregate: typeof buildContinuousAggregate;
+  buildEnableCompression: typeof buildEnableCompression;
+  buildCompressionPolicy: typeof buildCompressionPolicy;
+}
+
 export default class TimescaleDB extends PostgresDB {
   static override extensions: string[] = ['timescaledb'];
   static override configKey: string = 'timescale';
@@ -37,6 +45,10 @@ export default class TimescaleDB extends PostgresDB {
     });
   }
 
+  private get tsDeps(): TimescaleDeps {
+    return this.deps as unknown as TimescaleDeps;
+  }
+
   /**
    * Convert a table to a TimescaleDB hypertable.
    * Should be called after the table is created (e.g. after initial migration).
@@ -46,7 +58,7 @@ export default class TimescaleDB extends PostgresDB {
     const schema = schemas[modelName];
     if (!schema) throw new Error(`Model '${modelName}' not found`);
 
-    const { sql } = (this.deps as unknown as { buildCreateHypertable: typeof buildCreateHypertable }).buildCreateHypertable(schema.table, timeColumn, options);
+    const { sql } = this.tsDeps.buildCreateHypertable(schema.table, timeColumn, options);
     await this.requirePool().query(sql);
   }
 
@@ -58,7 +70,7 @@ export default class TimescaleDB extends PostgresDB {
     const schema = schemas[modelName];
     if (!schema) return [];
 
-    const { sql, values } = (this.deps as unknown as { buildTimeBucket: typeof buildTimeBucket }).buildTimeBucket(schema.table, timeColumn, bucketSize, options);
+    const { sql, values } = this.tsDeps.buildTimeBucket(schema.table, timeColumn, bucketSize, options);
 
     try {
       const result = await this.requirePool().query(sql, values);
@@ -77,7 +89,7 @@ export default class TimescaleDB extends PostgresDB {
     const schema = schemas[modelName];
     if (!schema) throw new Error(`Model '${modelName}' not found`);
 
-    const { sql } = (this.deps as unknown as { buildContinuousAggregate: typeof buildContinuousAggregate }).buildContinuousAggregate(viewName, schema.table, timeColumn, bucketSize, aggregates, options);
+    const { sql } = this.tsDeps.buildContinuousAggregate(viewName, schema.table, timeColumn, bucketSize, aggregates, options);
     await this.requirePool().query(sql);
   }
 
@@ -89,7 +101,7 @@ export default class TimescaleDB extends PostgresDB {
     const schema = schemas[modelName];
     if (!schema) throw new Error(`Model '${modelName}' not found`);
 
-    const { sql } = (this.deps as unknown as { buildEnableCompression: typeof buildEnableCompression }).buildEnableCompression(schema.table, options.segmentBy, options.orderBy);
+    const { sql } = this.tsDeps.buildEnableCompression(schema.table, options.segmentBy, options.orderBy);
     await this.requirePool().query(sql);
   }
 
@@ -101,7 +113,7 @@ export default class TimescaleDB extends PostgresDB {
     const schema = schemas[modelName];
     if (!schema) throw new Error(`Model '${modelName}' not found`);
 
-    const { sql } = (this.deps as unknown as { buildCompressionPolicy: typeof buildCompressionPolicy }).buildCompressionPolicy(schema.table, compressAfter);
+    const { sql } = this.tsDeps.buildCompressionPolicy(schema.table, compressAfter);
     await this.requirePool().query(sql);
   }
 }

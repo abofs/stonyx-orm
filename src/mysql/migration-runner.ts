@@ -2,6 +2,7 @@ import { readFile, fileExists } from '@stonyx/utils/file';
 import path from 'path';
 import fs from 'fs/promises';
 import type { Pool, PoolConnection } from 'mysql2/promise';
+import { validateIdentifier } from './query-builder.js';
 
 interface ParsedMigration {
   up: string;
@@ -9,6 +10,7 @@ interface ParsedMigration {
 }
 
 export async function ensureMigrationsTable(pool: Pool, tableName: string = '__migrations'): Promise<void> {
+  validateIdentifier(tableName, 'migration table name');
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS \`${tableName}\` (
       id INT AUTO_INCREMENT PRIMARY KEY,
@@ -19,6 +21,7 @@ export async function ensureMigrationsTable(pool: Pool, tableName: string = '__m
 }
 
 export async function getAppliedMigrations(pool: Pool, tableName: string = '__migrations'): Promise<string[]> {
+  validateIdentifier(tableName, 'migration table name');
   const [rows] = await pool.execute(
     `SELECT filename FROM \`${tableName}\` ORDER BY id ASC`
   ) as [Array<{ filename: string }>, unknown];
@@ -56,6 +59,7 @@ export function parseMigrationFile(content: string): ParsedMigration {
 }
 
 export async function applyMigration(pool: Pool, filename: string, upSql: string, tableName: string = '__migrations'): Promise<void> {
+  validateIdentifier(tableName, 'migration table name');
   const connection = await pool.getConnection();
 
   try {
@@ -83,6 +87,7 @@ export async function applyMigration(pool: Pool, filename: string, upSql: string
 }
 
 export async function rollbackMigration(pool: Pool, filename: string, downSql: string, tableName: string = '__migrations'): Promise<void> {
+  validateIdentifier(tableName, 'migration table name');
   const connection = await pool.getConnection();
 
   try {

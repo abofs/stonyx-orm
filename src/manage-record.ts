@@ -2,6 +2,7 @@ import Orm, { store } from '@stonyx/orm';
 import OrmRecord from './record.js';
 import { getGlobalRegistry, getPendingRegistry, getPendingBelongsToRegistry, getBelongsToRegistry, getHasManyRegistry } from './relationships.js';
 import type Serializer from './serializer.js';
+import { isOrmRecord } from './utils.js';
 
 interface CreateRecordOptions {
   isDbRecord?: boolean;
@@ -43,7 +44,13 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   if (!modelStore) throw new Error(`Model store for '${modelName}' is not registered. Ensure the model is defined before creating records.`);
 
   assignRecordId(modelName, rawData);
-  if (modelStore.has(rawData.id as number | string)) return modelStore.get(rawData.id as number | string)! as OrmRecord;
+  const existingRecord = modelStore.get(rawData.id as number | string);
+
+  if (existingRecord instanceof OrmRecord) {
+    // Update the existing record with new data so the last entry wins
+    updateRecord(existingRecord, rawData, { ...options, update: true });
+    return existingRecord;
+  }
 
   const recordClasses = orm.getRecordClasses(modelName);
   const modelClass = recordClasses.modelClass as (new (name: string) => { __name: string; [key: string]: unknown }) | undefined;
@@ -71,7 +78,8 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
 
   // Fulfill pending belongsTo relationships
   const pendingBelongsToQueue = getPendingBelongsToRegistry();
-  const pendingBelongsTo = pendingBelongsToQueue.get(modelName)?.get(record.id) as PendingBelongsToEntry[] | undefined;
+  const pendingBelongsToRaw = pendingBelongsToQueue.get(modelName)?.get(record.id);
+  const pendingBelongsTo = Array.isArray(pendingBelongsToRaw) ? pendingBelongsToRaw as PendingBelongsToEntry[] : undefined;
 
   if (pendingBelongsTo) {
     const belongsToReg = getBelongsToRegistry();
@@ -136,8 +144,11 @@ function assignRecordId(modelName: string, rawData: { [key: string]: unknown }):
     return;
   }
 
-  const modelStore = Array.from(store.get(modelName)!.values()) as OrmRecord[];
-  rawData.id = modelStore.length ? (modelStore.at(-1)!.id as number) + 1 : 1;
+  const storeMap = store.get(modelName);
+  if (!storeMap) throw new Error(`Cannot assign record ID: model "${modelName}" not found in store`);
+  const modelStore = Array.from(storeMap.values()).filter(isOrmRecord);
+  const lastRecord = modelStore.at(-1);
+  rawData.id = lastRecord ? (lastRecord.id as number) + 1 : 1;
 }
 
 function isStringIdModel(modelName: string): boolean {

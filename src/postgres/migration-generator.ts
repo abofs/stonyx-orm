@@ -1,4 +1,5 @@
 import { introspectModels, introspectViews, buildTableDDL, buildViewDDL, buildVectorIndexDDL, schemasToSnapshot, viewSchemasToSnapshot, getTopologicalOrder } from './schema-introspector.js';
+import { buildCreateHypertable, buildEnableCompression, buildCompressionPolicy } from '../timescale/query-builder.js';
 import { readFile, createFile, createDirectory, fileExists } from '@stonyx/utils/file';
 import path from 'path';
 import config from 'stonyx/config';
@@ -68,7 +69,7 @@ export async function generateMigration(description: string = 'migration', confi
     const viewDiffPrelim = diffViewSnapshots(previousViewSnapshotPrelim, currentViewSnapshotPrelim);
 
     if (!viewDiffPrelim.hasChanges) {
-      log.db!('No schema changes detected.');
+      log.db?.('No schema changes detected.');
       return null;
     }
   }
@@ -97,6 +98,27 @@ export async function generateMigration(description: string = 'migration', confi
     downStatements.unshift(`DROP TABLE IF EXISTS "${schemas[name].table}" CASCADE;`);
   }
 
+  // Hypertable conversion + compression (TimescaleDB only)
+  if (configKey === 'timescale') {
+    for (const name of addedOrdered) {
+      const schema = schemas[name];
+      if (!schema.hypertable) continue;
+
+      const { timeColumn, chunkInterval } = schema.hypertable;
+      upStatements.push(buildCreateHypertable(schema.table, timeColumn, { chunkInterval }).sql + ';');
+
+      if (schema.hypertable.compress) {
+        const { segmentBy, orderBy, after } = schema.hypertable.compress;
+        upStatements.push(buildEnableCompression(schema.table, segmentBy, orderBy).sql + ';');
+        if (after) {
+          upStatements.push(buildCompressionPolicy(schema.table, after).sql + ';');
+        }
+      }
+
+      downStatements.unshift('-- Hypertable conversion is not reversible; table drop handles cleanup');
+    }
+  }
+
   // Removed tables (warn only, commented out)
   for (const name of diff.removedModels) {
     upStatements.push(`-- WARNING: Model '${name}' was removed. Uncomment to drop table:`);
@@ -118,7 +140,8 @@ export async function generateMigration(description: string = 'migration', confi
 
   // Removed columns
   for (const { model, column, type } of diff.removedColumns) {
-    const table = previousSnapshot[model].table!;
+    const table = previousSnapshot[model]?.table;
+    if (!table) throw new Error(`Missing table name in snapshot for model "${model}"`);
     upStatements.push(`ALTER TABLE "${table}" DROP COLUMN "${column}";`);
     downStatements.push(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${type};`);
   }
@@ -144,7 +167,8 @@ export async function generateMigration(description: string = 'migration', confi
 
   // Removed foreign keys
   for (const { model, column, references } of diff.removedForeignKeys) {
-    const table = previousSnapshot[model].table!;
+    const table = previousSnapshot[model]?.table;
+    if (!table) throw new Error(`Missing table name in snapshot for model "${model}"`);
     const refModel = Object.entries(previousSnapshot).find(([, s]) => s.table === references.references);
     const fkType = refModel && refModel[1].idType === 'string' ? 'VARCHAR(255)' : 'INTEGER';
     const constraintName = `fk_${table}_${column}`;
@@ -198,7 +222,7 @@ export async function generateMigration(description: string = 'migration', confi
   const combinedHasChanges = diff.hasChanges || viewDiff.hasChanges;
 
   if (!combinedHasChanges) {
-    log.db!('No schema changes detected.');
+    log.db?.('No schema changes detected.');
     return null;
   }
 
@@ -216,7 +240,7 @@ export async function generateMigration(description: string = 'migration', confi
   await createFile(path.join(migrationsPath, filename), content);
   await createFile(path.join(migrationsPath, '.snapshot.json'), JSON.stringify(combinedSnapshot, null, 2));
 
-  log.db!(`Migration generated: ${filename}`);
+  log.db?.(`Migration generated: ${filename}`);
 
   return { filename, content, snapshot: combinedSnapshot };
 }

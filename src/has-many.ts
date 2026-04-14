@@ -44,7 +44,7 @@ export default function hasMany(modelName: string): RelationshipHandler {
     const modelStore = store.get(modelName);
     const pendingRelationshipQueue: PendingItem[] = [];
 
-    const output: unknown[] = !rawData ? [] : (makeArray(rawData) as unknown[]).map((elementData: unknown) => {
+    const output: unknown[] = !rawData ? [] : makeArray(rawData).map((elementData: unknown) => {
       let record: unknown;
 
       if (typeof elementData !== 'object') {
@@ -66,8 +66,9 @@ export default function hasMany(modelName: string): RelationshipHandler {
       }
 
       // Populate belongTo side if the relationship is defined
-      const otherSide = getBelongsToRegistry()
-        .get(modelName)?.get(sourceModelName)?.get((record as SourceRecord).id);
+      const recordWithId = typeof record === 'object' && record !== null && 'id' in record ? record as SourceRecord : undefined;
+      const otherSide = recordWithId ? getBelongsToRegistry()
+        .get(modelName)?.get(sourceModelName)?.get(recordWithId.id) : undefined;
 
       if (otherSide) Object.assign(otherSide, sourceRecord);
 

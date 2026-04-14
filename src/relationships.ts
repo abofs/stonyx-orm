@@ -3,16 +3,22 @@ import type { HasManyMap, BelongsToMap, GlobalMap, PendingMap, PendingBelongsToM
 
 // TODO: Refactor mapping to remove a level of iteration
 export function getRelationships(type: string, sourceModel: string, targetModel: string, relationshipId?: string): Map<unknown, unknown> | undefined {
-  const allRelationships = relationships.get(type) as Map<string, Map<string, Map<unknown, unknown>>> | undefined;
+  let allRelationships = relationships.get(type) as Map<string, Map<string, Map<unknown, unknown>>> | undefined;
+
+  if (!allRelationships) {
+    allRelationships = new Map();
+    relationships.set(type, allRelationships);
+  }
 
   // create relationship map for this type of it doesn't already exist
-  if (!allRelationships!.has(sourceModel)) allRelationships!.set(sourceModel, new Map());
+  if (!allRelationships.has(sourceModel)) allRelationships.set(sourceModel, new Map());
 
-  const modelRelationship = allRelationships!.get(sourceModel)!;
+  const modelRelationship = allRelationships.get(sourceModel) as Map<string, Map<unknown, unknown>> | undefined;
+  if (!modelRelationship) return undefined;
 
   if (!modelRelationship.has(targetModel)) modelRelationship.set(targetModel, new Map());
 
-  const relationship = modelRelationship.get(targetModel)!;
+  const relationship = modelRelationship.get(targetModel) as Map<unknown, unknown> | undefined;
 
   // TODO: Determine whether already having id should be handled differently
   //if (relationship.has(relationshipId)) return;

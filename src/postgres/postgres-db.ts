@@ -122,7 +122,7 @@ export default class PostgresDB {
     const pending = files.filter(f => !applied.includes(f));
 
     if (pending.length > 0) {
-      this.deps.log.db!(`${pending.length} pending migration(s) found.`);
+      this.deps.log.db?.(`${pending.length} pending migration(s) found.`);
 
       const shouldApply = await this.deps.confirm(`${pending.length} pending migration(s) found. Apply now?`);
 
@@ -132,13 +132,13 @@ export default class PostgresDB {
           const { up } = this.deps.parseMigrationFile(content);
 
           await this.deps.applyMigration(this.requirePool(), filename, up, this.pgConfig.migrationsTable as string | undefined);
-          this.deps.log.db!(`Applied migration: ${filename}`);
+          this.deps.log.db?.(`Applied migration: ${filename}`);
         }
 
         // Reload records after applying migrations
         await this.loadMemoryRecords();
       } else {
-        this.deps.log.warn!('Skipping pending migrations. Schema may be outdated.');
+        this.deps.log.warn?.('Skipping pending migrations. Schema may be outdated.');
       }
     } else if (files.length === 0) {
       const schemas = this.deps.introspectModels();
@@ -156,11 +156,11 @@ export default class PostgresDB {
           if (result) {
             const { up } = this.deps.parseMigrationFile(result.content);
             await this.deps.applyMigration(this.requirePool(), result.filename, up, this.pgConfig.migrationsTable as string | undefined);
-            this.deps.log.db!(`Applied migration: ${result.filename}`);
+            this.deps.log.db?.(`Applied migration: ${result.filename}`);
             await this.loadMemoryRecords();
           }
         } else {
-          this.deps.log.warn!('Skipping initial migration. Tables may not exist.');
+          this.deps.log.warn?.('Skipping initial migration. Tables may not exist.');
         }
       }
     }
@@ -173,8 +173,8 @@ export default class PostgresDB {
       const drift = this.deps.detectSchemaDrift(schemas, snapshot as Parameters<typeof detectSchemaDrift>[1]);
 
       if (drift.hasChanges) {
-        this.deps.log.warn!('Schema drift detected: models have changed since the last migration.');
-        this.deps.log.warn!('Run `stonyx db:generate-migration` to create a new migration.');
+        this.deps.log.warn?.('Schema drift detected: models have changed since the last migration.');
+        this.deps.log.warn?.('Run `stonyx db:generate-migration` to create a new migration.');
       }
     }
   }
@@ -200,7 +200,7 @@ export default class PostgresDB {
     for (const modelName of order) {
       const { modelClass } = Orm.instance.getRecordClasses(modelName) as { modelClass: { memory?: boolean } };
       if (modelClass?.memory === false) {
-        this.deps.log.db!(`Skipping memory load for '${modelName}' (memory: false)`);
+        this.deps.log.db?.(`Skipping memory load for '${modelName}' (memory: false)`);
         continue;
       }
 
@@ -217,7 +217,7 @@ export default class PostgresDB {
       } catch (error) {
         // 42P01 = undefined_table (PG equivalent of ER_NO_SUCH_TABLE)
         if (isDbError(error) && error.code === '42P01') {
-          this.deps.log.db!(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
+          this.deps.log.db?.(`Table '${schema.table}' does not exist yet. Skipping load for '${modelName}'.`);
           continue;
         }
 
@@ -231,13 +231,14 @@ export default class PostgresDB {
     for (const [viewName, viewSchema] of Object.entries(viewSchemas)) {
       const { modelClass: viewClass } = Orm.instance.getRecordClasses(viewName) as { modelClass: { memory?: boolean } };
       if (viewClass?.memory !== true) {
-        this.deps.log.db!(`Skipping memory load for view '${viewName}' (memory: false)`);
+        this.deps.log.db?.(`Skipping memory load for view '${viewName}' (memory: false)`);
         continue;
       }
 
+      const sourceIdType = schemas[viewSchema.source]?.idType || 'number';
       const schema: ModelSchema = {
         table: viewSchema.viewName,
-        idType: 'number',
+        idType: sourceIdType,
         columns: viewSchema.columns || {},
         foreignKeys: (viewSchema.foreignKeys || {}) as Record<string, ForeignKeyDef>,
         relationships: { belongsTo: {}, hasMany: {} },
@@ -255,7 +256,7 @@ export default class PostgresDB {
         }
       } catch (error) {
         if (isDbError(error) && error.code === '42P01') {
-          this.deps.log.db!(`View '${viewSchema.viewName}' does not exist yet. Skipping load for '${viewName}'.`);
+          this.deps.log.db?.(`View '${viewSchema.viewName}' does not exist yet. Skipping load for '${viewName}'.`);
           continue;
         }
         throw error;
@@ -283,9 +284,10 @@ export default class PostgresDB {
       const viewSchemas = this.deps.introspectViews();
       const viewSchema = viewSchemas[modelName];
       if (viewSchema) {
+        const sourceIdType = schemas[viewSchema.source]?.idType || 'number';
         schema = {
           table: viewSchema.viewName,
-          idType: 'number',
+          idType: sourceIdType,
           columns: viewSchema.columns || {},
           foreignKeys: (viewSchema.foreignKeys || {}) as Record<string, ForeignKeyDef>,
           relationships: { belongsTo: {}, hasMany: {} },
@@ -328,9 +330,10 @@ export default class PostgresDB {
       const viewSchemas = this.deps.introspectViews();
       const viewSchema = viewSchemas[modelName];
       if (viewSchema) {
+        const sourceIdType = schemas[viewSchema.source]?.idType || 'number';
         schema = {
           table: viewSchema.viewName,
-          idType: 'number',
+          idType: sourceIdType,
           columns: viewSchema.columns || {},
           foreignKeys: (viewSchema.foreignKeys || {}) as Record<string, ForeignKeyDef>,
           relationships: { belongsTo: {}, hasMany: {} },
@@ -342,13 +345,14 @@ export default class PostgresDB {
 
     if (!schema) return [];
 
-    const { sql, values } = this.deps.buildSelect(schema.table, conditions);
+    const resolvedSchema = schema;
+    const { sql, values } = this.deps.buildSelect(resolvedSchema.table, conditions);
 
     try {
       const result = await this.requirePool().query(sql, values);
 
       const records = result.rows.map(row => {
-        const rawData = this._rowToRawData(row, schema!);
+        const rawData = this._rowToRawData(row, resolvedSchema);
         return this.deps.createRecord(modelName, rawData, { isDbRecord: true, serialize: false, transform: false }) as unknown as OrmRecord;
       });
 
@@ -423,7 +427,7 @@ export default class PostgresDB {
    * @private
    */
   private _evictIfNotMemory(modelName: string, record: OrmRecord): void {
-    const storeRef = this.deps.store as unknown as {
+    const storeRef = this.deps.store as {
       _memoryResolver?: (name: string) => boolean;
       get?: (name: string) => Map<unknown, unknown> | undefined;
       data?: { get(name: string): Map<unknown, unknown> | undefined };
@@ -503,7 +507,7 @@ export default class PostgresDB {
     // Re-key the record in the store if PostgreSQL generated the ID (via RETURNING)
     if (isPendingId && result.rows.length > 0) {
       const pendingId = record.id;
-      const realId = result.rows[0].id;
+      const realId = result.rows[0].id as string | number;
       const modelStore = (this.deps.store as unknown as { get(name: string): Map<unknown, unknown> }).get(modelName);
 
       modelStore.delete(pendingId);

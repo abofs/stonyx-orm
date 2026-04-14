@@ -4,7 +4,7 @@ import type { SourceRecord } from './types/orm-types.js';
 
 function getOrSet<K, V>(map: Map<K, V>, key: K, defaultValue: V): V {
   if (!map.has(key)) map.set(key, defaultValue);
-  return map.get(key)!;
+  return map.get(key) as V;
 }
 
 interface BelongsToOptions {
@@ -69,7 +69,8 @@ export default function belongsTo(modelName: string): RelationshipHandler {
     relationship.set(relationshipId, output || {});
 
     // Populate hasMany side if the relationship is defined
-    const otherSide = hasManyRelationships.get(modelName)?.get(sourceModelName)?.get((output as SourceRecord)?.id) as unknown[] | undefined;
+    const outputRecord = typeof output === 'object' && output !== null && 'id' in output ? output as SourceRecord : undefined;
+    const otherSide = outputRecord ? hasManyRelationships.get(modelName)?.get(sourceModelName)?.get(outputRecord.id) as unknown[] | undefined : undefined;
 
     if (otherSide) {
       otherSide.push(sourceRecord);

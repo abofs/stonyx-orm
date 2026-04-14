@@ -7,7 +7,7 @@ const transforms: Record<string, (value: unknown) => unknown> = {
   number: (value: unknown) => parseInt(value as string),
   passthrough: (value: unknown) => value,
   string: (value: unknown) => String(value),
-  timestamp: (value: unknown) => getTimestamp(value),
+  timestamp: (value: unknown) => getTimestamp(value as string | number | Date | undefined),
   trim: (value: unknown) => (value as string)?.trim(),
   uppercase: (value: unknown) => (value as string)?.toUpperCase(),
 };

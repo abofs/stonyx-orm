@@ -14,7 +14,7 @@ interface AccessInstance {
 }
 
 export default async function(route: string, accessPath: string, metaRoute: boolean): Promise<void> {
-  let accessFiles: Record<string, (request: unknown) => unknown> | null = {};
+  const accessFiles: Record<string, (request: unknown) => unknown> = {};
 
   try {
     await forEachFileImport(accessPath, (accessClass: unknown) => {
@@ -37,8 +37,8 @@ export default async function(route: string, accessPath: string, metaRoute: bool
       }
     });
   } catch (error) {
-    log.error!(error instanceof Error ? error.message : String(error));
-    log.warn!('You must define a valid access configuration file in order to access ORM generated REST endpoints.');
+    log.error?.(error instanceof Error ? error.message : String(error));
+    log.warn?.('You must define a valid access configuration file in order to access ORM generated REST endpoints.');
   }
 
   await waitForModule('rest-server');
@@ -55,11 +55,8 @@ export default async function(route: string, accessPath: string, metaRoute: bool
 
   // Mount the meta route when metaRoute config is enabled
   if (metaRoute) {
-    log.warn!('SECURITY RISK! - Meta route is enabled via metaRoute config. This feature is intended for development purposes only!');
+    log.warn?.('SECURITY RISK! - Meta route is enabled via metaRoute config. This feature is intended for development purposes only!');
 
     RestServer.instance.mountRoute(MetaRequest, { name });
   }
-
-  // Cleanup references
-  accessFiles = null;
 }

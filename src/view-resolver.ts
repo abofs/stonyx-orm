@@ -73,8 +73,9 @@ export default class ViewResolver {
 
       // Compute aggregate fields from source record's relationships
       for (const [key, aggProp] of Object.entries(aggregateFields)) {
-        const relatedRecords = sourceRecord.__relationships?.[aggProp.relationship!]
-          || sourceRecord[aggProp.relationship!];
+        if (!aggProp.relationship) continue;
+        const relatedRecords = sourceRecord.__relationships?.[aggProp.relationship]
+          || sourceRecord[aggProp.relationship];
         const relArray = Array.isArray(relatedRecords) ? relatedRecords : [];
         rawData[key] = aggProp.compute(relArray);
       }
@@ -136,7 +137,8 @@ export default class ViewResolver {
       if (!groups.has(key)) {
         groups.set(key, []);
       }
-      groups.get(key)!.push(record);
+      const group = groups.get(key);
+      if (group) group.push(record);
     }
 
     const results: unknown[] = [];
@@ -151,6 +153,7 @@ export default class ViewResolver {
           rawData[key] = aggProp.compute(groupRecords);
         } else {
           // Relationship aggregate — flatten related records across all group members
+          if (!aggProp.relationship) continue;
           const allRelated: unknown[] = [];
           for (const record of groupRecords) {
             const relatedRecords = record.__relationships?.[aggProp.relationship!]

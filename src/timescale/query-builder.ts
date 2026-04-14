@@ -3,6 +3,26 @@ export { validateIdentifier, buildInsert, buildUpdate, buildDelete, buildSelect 
 
 import { validateIdentifier } from '../postgres/query-builder.js';
 
+const SAFE_INTERVAL = /^\d+\s+(microsecond|millisecond|second|minute|hour|day|week|month|year)s?$/i;
+
+export function validateInterval(interval: string, context: string = 'interval'): string {
+  if (!interval || typeof interval !== 'string' || !SAFE_INTERVAL.test(interval.trim())) {
+    throw new Error(`Invalid SQL ${context}: "${interval}". Intervals must match pattern like "7 days", "1 hour", "30 minutes".`);
+  }
+
+  return interval.trim();
+}
+
+const SAFE_AGGREGATE = /^(COUNT|SUM|AVG|MIN|MAX|FIRST|LAST)\s*\(\s*("?[a-zA-Z_][a-zA-Z0-9_]*"?|\*)\s*\)\s*(AS\s+"?[a-zA-Z_][a-zA-Z0-9_]*"?)?$/i;
+
+export function validateAggregate(expr: string, context: string = 'aggregate'): string {
+  if (!expr || typeof expr !== 'string' || !SAFE_AGGREGATE.test(expr.trim())) {
+    throw new Error(`Invalid SQL ${context}: "${expr}". Aggregates must be simple function calls like "AVG(value) AS avg_value".`);
+  }
+
+  return expr.trim();
+}
+
 interface QueryResult {
   sql: string;
   values: unknown[];
@@ -36,6 +56,7 @@ export function buildCreateHypertable(table: string, timeColumn: string, options
   validateIdentifier(timeColumn, 'column name');
 
   const { chunkInterval = '7 days' } = options;
+  validateInterval(chunkInterval, 'chunk interval');
 
   const sql = `SELECT create_hypertable('"${table}"', '${timeColumn}', chunk_time_interval => INTERVAL '${chunkInterval}', if_not_exists => TRUE)`;
 
@@ -57,7 +78,7 @@ export function buildTimeBucket(table: string, timeColumn: string, bucketSize: s
   values.push(bucketSize);
 
   for (const agg of aggregates) {
-    selectCols.push(agg);
+    selectCols.push(validateAggregate(agg));
   }
 
   const whereClauses: string[] = [];
@@ -70,7 +91,20 @@ export function buildTimeBucket(table: string, timeColumn: string, bucketSize: s
   }
 
   const whereStr = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : '';
-  const orderStr = orderBy ? ` ORDER BY ${orderBy}` : '';
+  let orderStr = '';
+  if (orderBy) {
+    const parts = orderBy.trim().split(/\s+/);
+    const col = parts[0];
+    const dir = parts[1]?.toUpperCase();
+
+    validateIdentifier(col, 'ORDER BY column');
+
+    if (dir && dir !== 'ASC' && dir !== 'DESC') {
+      throw new Error(`Invalid ORDER BY direction: "${dir}". Must be ASC or DESC.`);
+    }
+
+    orderStr = ` ORDER BY "${col}"${dir ? ` ${dir}` : ''}`;
+  }
   let limitStr = '';
   if (limit != null) {
     limitStr = ` LIMIT $${paramIndex++}`;
@@ -91,6 +125,8 @@ export function buildContinuousAggregate(viewName: string, table: string, timeCo
   validateIdentifier(timeColumn, 'column name');
 
   const { withNoData = false } = options;
+  validateInterval(bucketSize, 'bucket size');
+  aggregates.forEach(agg => validateAggregate(agg));
 
   const selectCols: string[] = [
     `time_bucket('${bucketSize}', "${timeColumn}") AS bucket`,
@@ -109,6 +145,7 @@ export function buildContinuousAggregate(viewName: string, table: string, timeCo
  */
 export function buildCompressionPolicy(table: string, compressAfter: string): SqlResult {
   validateIdentifier(table, 'table name');
+  validateInterval(compressAfter, 'compress after interval');
 
   const sql = `SELECT add_compression_policy('"${table}"', INTERVAL '${compressAfter}', if_not_exists => TRUE)`;
 

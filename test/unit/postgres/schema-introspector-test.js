@@ -251,4 +251,104 @@ module('[Unit] Postgres Schema Introspector — schemasToSnapshot', function() {
 
     assert.strictEqual(snapshot.author.vectorColumns, undefined, 'no vectorColumns key');
   });
+
+  test('includes hypertable config in snapshot when present', function(assert) {
+    const schemas = {
+      'stat-snapshot': {
+        table: 'stat_snapshots',
+        idType: 'number',
+        columns: { minute: 'INTEGER' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+        hypertable: { timeColumn: 'created_at', chunkInterval: '7 days' },
+        memory: false,
+      },
+    };
+
+    const snapshot = schemasToSnapshot(schemas);
+
+    assert.deepEqual(snapshot['stat-snapshot'].hypertable, { timeColumn: 'created_at', chunkInterval: '7 days' }, 'hypertable config included');
+  });
+
+  test('omits hypertable from snapshot when absent', function(assert) {
+    const schemas = numericPkSchemas();
+    const snapshot = schemasToSnapshot(schemas);
+
+    assert.strictEqual(snapshot.author.hypertable, undefined, 'no hypertable key');
+  });
+});
+
+module('[Unit] Postgres Schema Introspector — buildTableDDL hypertable', function() {
+
+  function hypertableSchema() {
+    return {
+      'stat-snapshot': {
+        table: 'stat_snapshots',
+        idType: 'number',
+        columns: { minute: 'INTEGER', possession: 'REAL' },
+        foreignKeys: { match_id: { references: 'matches', column: 'id' } },
+        relationships: { belongsTo: { match: 'match' }, hasMany: {} },
+        hypertable: { timeColumn: 'created_at', chunkInterval: '7 days' },
+        memory: false,
+      },
+      match: {
+        table: 'matches',
+        idType: 'string',
+        columns: { status: 'VARCHAR(255)' },
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+        memory: false,
+      },
+    };
+  }
+
+  test('emits composite PK for hypertable model with numeric id', function(assert) {
+    const schemas = hypertableSchema();
+    const ddl = buildTableDDL('stat-snapshot', schemas['stat-snapshot'], schemas);
+
+    assert.true(ddl.includes('PRIMARY KEY ("id", "created_at")'), 'composite PK present');
+    assert.false(ddl.includes('IDENTITY PRIMARY KEY'), 'no inline PK on id column');
+    assert.true(ddl.includes('"id" INTEGER GENERATED ALWAYS AS IDENTITY'), 'id still uses IDENTITY');
+  });
+
+  test('emits NOT NULL on created_at for hypertable model', function(assert) {
+    const schemas = hypertableSchema();
+    const ddl = buildTableDDL('stat-snapshot', schemas['stat-snapshot'], schemas);
+
+    assert.true(ddl.includes('"created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()'), 'created_at has NOT NULL');
+  });
+
+  test('non-hypertable model keeps inline PK unchanged', function(assert) {
+    const schemas = hypertableSchema();
+    const ddl = buildTableDDL('match', schemas.match, schemas);
+
+    assert.true(ddl.includes('"id" VARCHAR(255) PRIMARY KEY'), 'inline PK on string id');
+    assert.false(ddl.includes('PRIMARY KEY ("id"'), 'no table-level composite PK');
+    assert.true(ddl.includes('"created_at" TIMESTAMPTZ DEFAULT NOW()'), 'created_at without NOT NULL');
+  });
+
+  test('string PK model with hypertable keeps inline PK (no composite)', function(assert) {
+    const schemas = {
+      event: {
+        table: 'events',
+        idType: 'string',
+        columns: {},
+        foreignKeys: {},
+        relationships: { belongsTo: {}, hasMany: {} },
+        hypertable: { timeColumn: 'created_at' },
+        memory: false,
+      },
+    };
+    const ddl = buildTableDDL('event', schemas.event, schemas);
+
+    assert.true(ddl.includes('"id" VARCHAR(255) PRIMARY KEY'), 'string PK stays inline');
+    assert.false(ddl.includes('PRIMARY KEY ("id", "created_at")'), 'no composite PK for string ids');
+  });
+
+  test('hypertable DDL includes FK constraints', function(assert) {
+    const schemas = hypertableSchema();
+    const ddl = buildTableDDL('stat-snapshot', schemas['stat-snapshot'], schemas);
+
+    assert.true(ddl.includes('FOREIGN KEY ("match_id") REFERENCES "matches"("id") ON DELETE SET NULL'), 'FK constraint present');
+  });
 });

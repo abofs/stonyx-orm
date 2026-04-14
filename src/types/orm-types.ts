@@ -6,7 +6,7 @@ export interface OrmDbConfig {
   mode: string;
   directory: string;
   autosave: string;
-  saveInterval: unknown;
+  saveInterval: string | number;
 }
 
 export interface OrmMysqlConfig {
@@ -68,22 +68,32 @@ export interface SourceRecord {
   __model: { __name: string; [key: string]: unknown };
   __data?: Record<string, unknown>;
   __relationships?: Record<string, unknown>;
-  id: unknown;
+  id: string | number;
   [key: string]: unknown;
 }
 
 export interface OrmRecord {
-  id: string | number | unknown;
+  id: string | number;
   __model?: { __name: string };
-  __data: Record<string, unknown> & { id?: unknown; __pendingSqlId?: boolean };
+  __data: Record<string, unknown> & { id?: string | number; __pendingSqlId?: boolean };
   __relationships: Record<string, unknown>;
-  toJSON?(options?: { fields?: Set<string>; baseUrl?: string }): unknown;
+  toJSON?(options?: { fields?: Set<string>; baseUrl?: string }): Record<string, unknown>;
   [key: string]: unknown;
 }
 
 export interface ForeignKeyDef {
   references: string;
   column: string;
+}
+
+export interface HypertableConfig {
+  timeColumn: string;
+  chunkInterval?: string;
+  compress?: {
+    segmentBy?: string;
+    orderBy?: string;
+    after?: string;
+  };
 }
 
 export interface ModelSchema {
@@ -96,6 +106,7 @@ export interface ModelSchema {
     hasMany: Record<string, string | null>;
   };
   vectorColumns?: Record<string, number>;
+  hypertable?: HypertableConfig;
   memory: boolean;
 }
 
@@ -139,6 +150,7 @@ export interface SnapshotEntry {
   columns?: Record<string, string>;
   foreignKeys?: Record<string, ForeignKeyDef>;
   vectorColumns?: Record<string, number>;
+  hypertable?: HypertableConfig;
   isView?: boolean;
   viewName?: string;
   source?: string;

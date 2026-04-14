@@ -3,8 +3,10 @@ import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from './plural-registry.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
+import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
 import type { OrmRecord } from './types/orm-types.js';
+import { isOrmRecord } from './utils.js';
 
 interface OrmRequest$ extends Request {
   protocol?: string;
@@ -23,22 +25,6 @@ interface RelationshipInfo {
 interface Filter {
   path: string[];
   value: string;
-}
-
-interface HookContext {
-  model: string;
-  operation: string;
-  request: OrmRequest$;
-  params: { [key: string]: string };
-  body?: { [key: string]: unknown };
-  query?: { [key: string]: string };
-  state: { [key: string]: unknown };
-  oldState?: unknown;
-  recordId?: string | number;
-  response?: unknown;
-  record?: unknown;
-  records?: unknown;
-  [key: string]: unknown;
 }
 
 interface JsonApiResponse {
@@ -74,7 +60,7 @@ function getRelationshipInfo(property: unknown): RelationshipInfo | null {
 
 // Helper to introspect model relationships
 function getModelRelationships(modelName: string): { [key: string]: RelationshipInfo } {
-  const { modelClass } = (Orm.instance as Orm).getRecordClasses(modelName);
+  const { modelClass } = Orm.instance.getRecordClasses(modelName);
   if (!modelClass) return {};
 
   const model = new (modelClass as new (name: string) => { [key: string]: unknown })(modelName);
@@ -127,7 +113,7 @@ function buildResponse(
 
   const includedRecords = collectIncludedRecords(recordOrRecords, includes);
   if (includedRecords.length > 0) {
-    response.included = includedRecords.map(record => record.toJSON!({ baseUrl }));
+    response.included = includedRecords.map(record => record.toJSON?.({ baseUrl }));
   }
 
   return response;
@@ -157,23 +143,26 @@ function traverseIncludePath(
 
     // Handle both belongsTo (single) and hasMany (array)
     const recordsToProcess: OrmRecord[] = Array.isArray(relatedRecords)
-      ? relatedRecords as OrmRecord[]
-      : [relatedRecords as OrmRecord];
+      ? relatedRecords.filter(isOrmRecord)
+      : isOrmRecord(relatedRecords) ? [relatedRecords] : [];
 
     for (const relatedRecord of recordsToProcess) {
       if (!relatedRecord) continue;
 
-      const type = relatedRecord.__model!.__name;
+      if (!relatedRecord.__model) continue;
+      const type = relatedRecord.__model.__name;
       const id = relatedRecord.id as string | number;
 
       // Initialize Set for this type if needed
-      if (!seen.has(type)) {
-        seen.set(type, new Set());
+      let seenIds = seen.get(type);
+      if (!seenIds) {
+        seenIds = new Set();
+        seen.set(type, seenIds);
       }
 
       // Check if we've already seen this type+id combination
-      if (!seen.get(type)!.has(id)) {
-        seen.get(type)!.add(id);
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
         included.push(relatedRecord);
         nextRecords.push(relatedRecord); // Prepare for next depth level
       } else if (depth < includePath.length - 1) {
@@ -278,7 +267,7 @@ export default class OrmRequest extends Request {
 
     // Define raw handlers first
     const getCollectionHandler: HandlerFn = async (request, { filter: accessFilter }) => {
-      const allRecords = await store.findAll(model) as OrmRecord[];
+      const allRecords = (await store.findAll(model)).filter(isOrmRecord);
 
       const queryFilters = parseFilters(request.query);
       const queryFilterPredicate = createFilterPredicate(queryFilters);
@@ -290,7 +279,7 @@ export default class OrmRequest extends Request {
       if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate as (record: OrmRecord) => boolean);
 
       const baseUrl = getBaseUrl(request);
-      const data = recordsToReturn.map(record => record.toJSON!({ fields: modelFields, baseUrl }));
+      const data = recordsToReturn.map(record => record.toJSON?.({ fields: modelFields, baseUrl }));
 
       return buildResponse(data, request.query?.include, recordsToReturn, {
         links: { self: `${baseUrl}/${pluralizedModel}` },
@@ -306,7 +295,7 @@ export default class OrmRequest extends Request {
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
       const baseUrl = getBaseUrl(request);
-      return buildResponse(record.toJSON!({ fields: modelFields, baseUrl }), request.query?.include, record, {
+      return buildResponse(record.toJSON?.({ fields: modelFields, baseUrl }), request.query?.include, record, {
         links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
         baseUrl
       });
@@ -341,13 +330,17 @@ export default class OrmRequest extends Request {
       }
 
       const recordAttributes = id !== undefined ? { id, ...sanitizedAttributes } : sanitizedAttributes;
-      const record = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false }) as unknown as OrmRecord;
+      const created = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false });
+      const record = isOrmRecord(created) ? created : null;
+      if (!record) return 500;
 
-      return { data: record.toJSON!({ fields: modelFields }) };
+      return { data: record.toJSON?.({ fields: modelFields }) };
     };
 
     const updateHandler: HandlerFn = async ({ body, params }) => {
-      const record = await store.find(model, getId(params)) as OrmRecord;
+      const found = await store.find(model, getId(params));
+      if (!found || !isOrmRecord(found)) return 404;
+      const record = found;
       const { attributes, relationships: rels } = (body?.data || {}) as {
         attributes?: { [key: string]: unknown };
         relationships?: { [key: string]: { data?: { id?: string | number } } };
@@ -379,7 +372,7 @@ export default class OrmRequest extends Request {
         }
       }
 
-      return { data: record.toJSON!() };
+      return { data: record.toJSON?.() };
     };
 
     const deleteHandler: HandlerFn = ({ params }) => {
@@ -451,8 +444,9 @@ export default class OrmRequest extends Request {
       const response = await handler(request, state);
 
       // Persist to SQL database for write operations
-      if ((Orm.instance as Orm).sqlDb && WRITE_OPERATIONS.has(operation)) {
-        await (Orm.instance as Orm).sqlDb!.persist(operation, this.model, context, response);
+      const sqlDb = Orm.instance.sqlDb;
+      if (sqlDb && WRITE_OPERATIONS.has(operation)) {
+        await sqlDb.persist(operation, this.model, context, response);
       }
 
       // Add response and relevant records to context
@@ -510,10 +504,11 @@ export default class OrmRequest extends Request {
         let data: unknown;
         if (info.isArray) {
           // hasMany - return array
-          data = ((relatedData || []) as OrmRecord[]).map(r => r.toJSON!({ baseUrl }));
+          const related = Array.isArray(relatedData) ? relatedData.filter(isOrmRecord) : [];
+          data = related.map(r => r.toJSON?.({ baseUrl }));
         } else {
           // belongsTo - return single or null
-          data = relatedData ? (relatedData as OrmRecord).toJSON!({ baseUrl }) : null;
+          data = isOrmRecord(relatedData) ? relatedData.toJSON?.({ baseUrl }) : null;
         }
 
         return {
@@ -533,10 +528,17 @@ export default class OrmRequest extends Request {
         let data: unknown;
         if (info.isArray) {
           // hasMany - return array of linkage objects
-          data = ((relatedData || []) as OrmRecord[]).map(r => ({ type: r.__model!.__name, id: r.id }));
+          const related = Array.isArray(relatedData) ? relatedData.filter(isOrmRecord) : [];
+          data = related
+            .filter((r): r is OrmRecord & { __model: { __name: string } } => Boolean(r.__model))
+            .map(r => ({ type: r.__model.__name, id: r.id }));
         } else {
           // belongsTo - return single linkage or null
-          data = relatedData ? { type: (relatedData as OrmRecord).__model!.__name, id: (relatedData as OrmRecord).id } : null;
+          if (isOrmRecord(relatedData) && relatedData.__model) {
+            data = { type: relatedData.__model.__name, id: relatedData.id };
+          } else {
+            data = null;
+          }
         }
 
         return {
@@ -575,5 +577,6 @@ export default class OrmRequest extends Request {
     if (!access) return 403;
     if (Array.isArray(access) && !access.includes(methodAccessMap[request.method])) return 403;
     if (typeof access === 'function') state.filter = access;
+    return undefined;
   }
 }

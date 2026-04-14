@@ -51,9 +51,12 @@ interface GeneratedMigration {
 type Snapshot = Record<string, SnapshotEntry & { isView?: boolean; viewName?: string; viewQuery?: string; source?: string }>;
 
 export async function generateMigration(description: string = 'migration'): Promise<GeneratedMigration | null> {
-  const { migrationsDir } = config.orm.mysql!;
+  const mysqlConfig = config.orm.mysql;
+  if (!mysqlConfig) throw new Error('MySQL configuration (config.orm.mysql) is required for migration generation');
+  const { migrationsDir } = mysqlConfig;
+  if (!migrationsDir) throw new Error('MySQL migrationsDir is required in config');
   const rootPath = config.rootPath;
-  const migrationsPath = path.resolve(rootPath, migrationsDir!);
+  const migrationsPath = path.resolve(rootPath, migrationsDir);
 
   await createDirectory(migrationsPath);
 
@@ -71,7 +74,7 @@ export async function generateMigration(description: string = 'migration'): Prom
     const viewDiffPrelim = diffViewSnapshots(previousViewSnapshotPrelim, currentViewSnapshotPrelim);
 
     if (!viewDiffPrelim.hasChanges) {
-      log.db!('No schema changes detected.');
+      log.db?.('No schema changes detected.');
       return null;
     }
   }
@@ -104,7 +107,8 @@ export async function generateMigration(description: string = 'migration'): Prom
 
   // Removed columns
   for (const { model, column, type } of diff.removedColumns) {
-    const table = previousSnapshot[model].table!;
+    const table = previousSnapshot[model]?.table;
+    if (!table) throw new Error(`Missing table name in snapshot for model "${model}"`);
     upStatements.push(`ALTER TABLE \`${table}\` DROP COLUMN \`${column}\`;`);
     downStatements.push(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${type};`);
   }
@@ -130,7 +134,8 @@ export async function generateMigration(description: string = 'migration'): Prom
 
   // Removed foreign keys
   for (const { model, column, references } of diff.removedForeignKeys) {
-    const table = previousSnapshot[model].table!;
+    const table = previousSnapshot[model]?.table;
+    if (!table) throw new Error(`Missing table name in snapshot for model "${model}"`);
     // Resolve FK column type from the referenced table's PK type in previous snapshot
     const refModel = Object.entries(previousSnapshot).find(([, s]) => s.table === references.references);
     const fkType = refModel && refModel[1].idType === 'string' ? 'VARCHAR(255)' : 'INT';
@@ -184,7 +189,7 @@ export async function generateMigration(description: string = 'migration'): Prom
   const combinedHasChanges = diff.hasChanges || viewDiff.hasChanges;
 
   if (!combinedHasChanges) {
-    log.db!('No schema changes detected.');
+    log.db?.('No schema changes detected.');
     return null;
   }
 
@@ -202,7 +207,7 @@ export async function generateMigration(description: string = 'migration'): Prom
   await createFile(path.join(migrationsPath, filename), content);
   await createFile(path.join(migrationsPath, '.snapshot.json'), JSON.stringify(combinedSnapshot, null, 2));
 
-  log.db!(`Migration generated: ${filename}`);
+  log.db?.(`Migration generated: ${filename}`);
 
   return { filename, content, snapshot: combinedSnapshot };
 }

@@ -98,7 +98,8 @@ export default class Orm {
           registerPluralName(name, exported as { pluralName?: string });
         }
 
-        return (this as unknown as Record<string, Record<string, unknown>>)[pluralize(lowerCaseType)][alias] = exported;
+        const collection = this[pluralize(lowerCaseType) as keyof this] as Record<string, unknown>;
+        return collection[alias] = exported;
       }, { ignoreAccessFailure: true, rawName: true, recursive: true, recursiveNaming: true });
     });
 
@@ -186,7 +187,8 @@ export default class Orm {
   static get db(): OrmDB | SqlDb {
     if (!Orm.initialized) throw new Error('ORM has not been initialized yet');
 
-    return Orm.instance.db!;
+    if (!Orm.instance.db) throw new Error('ORM database has not been initialized');
+    return Orm.instance.db;
   }
 
   getRecordClasses(modelName: string): { modelClass: unknown; serializerClass: unknown } {
@@ -217,7 +219,7 @@ export default class Orm {
     this.warnings.add(message);
 
     setTimeout(() => {
-      this.warnings.forEach(warning => log.warn!(warning));
+      this.warnings.forEach(warning => log.warn?.(warning));
       this.warnings.clear();
     }, 0);
   }
