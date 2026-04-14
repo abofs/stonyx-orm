@@ -86,6 +86,16 @@ export interface ForeignKeyDef {
   column: string;
 }
 
+export interface HypertableConfig {
+  timeColumn: string;
+  chunkInterval?: string;
+  compress?: {
+    segmentBy?: string;
+    orderBy?: string;
+    after?: string;
+  };
+}
+
 export interface ModelSchema {
   table: string;
   idType: string;
@@ -96,6 +106,7 @@ export interface ModelSchema {
     hasMany: Record<string, string | null>;
   };
   vectorColumns?: Record<string, number>;
+  hypertable?: HypertableConfig;
   memory: boolean;
 }
 
@@ -139,6 +150,7 @@ export interface SnapshotEntry {
   columns?: Record<string, string>;
   foreignKeys?: Record<string, ForeignKeyDef>;
   vectorColumns?: Record<string, number>;
+  hypertable?: HypertableConfig;
   isView?: boolean;
   viewName?: string;
   source?: string;

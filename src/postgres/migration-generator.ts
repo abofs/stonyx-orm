@@ -1,4 +1,5 @@
 import { introspectModels, introspectViews, buildTableDDL, buildViewDDL, buildVectorIndexDDL, schemasToSnapshot, viewSchemasToSnapshot, getTopologicalOrder } from './schema-introspector.js';
+import { buildCreateHypertable, buildEnableCompression, buildCompressionPolicy } from '../timescale/query-builder.js';
 import { readFile, createFile, createDirectory, fileExists } from '@stonyx/utils/file';
 import path from 'path';
 import config from 'stonyx/config';
@@ -95,6 +96,27 @@ export async function generateMigration(description: string = 'migration', confi
     }
 
     downStatements.unshift(`DROP TABLE IF EXISTS "${schemas[name].table}" CASCADE;`);
+  }
+
+  // Hypertable conversion + compression (TimescaleDB only)
+  if (configKey === 'timescale') {
+    for (const name of addedOrdered) {
+      const schema = schemas[name];
+      if (!schema.hypertable) continue;
+
+      const { timeColumn, chunkInterval } = schema.hypertable;
+      upStatements.push(buildCreateHypertable(schema.table, timeColumn, { chunkInterval }).sql + ';');
+
+      if (schema.hypertable.compress) {
+        const { segmentBy, orderBy, after } = schema.hypertable.compress;
+        upStatements.push(buildEnableCompression(schema.table, segmentBy, orderBy).sql + ';');
+        if (after) {
+          upStatements.push(buildCompressionPolicy(schema.table, after).sql + ';');
+        }
+      }
+
+      downStatements.unshift('-- Hypertable conversion is not reversible; table drop handles cleanup');
+    }
   }
 
   // Removed tables (warn only, commented out)
