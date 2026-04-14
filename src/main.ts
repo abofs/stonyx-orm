@@ -25,8 +25,6 @@ import baseTransforms from './transforms.js';
 import Store from './store.js';
 import Serializer from './serializer.js';
 import { setup } from '@stonyx/events';
-import type { OrmRecord } from './types/orm-types.js';
-import { isOrmRecord } from './utils.js';
 
 interface OrmOptions {
   dbType?: string;
@@ -214,63 +212,6 @@ export default class Orm {
   isView(modelName: string): boolean {
     const modelClassPrefix = kebabCaseToPascalCase(modelName);
     return !!this.views[`${modelClassPrefix}View`];
-  }
-
-  /**
-   * Programmatic create — writes to memory AND persists to SQL database.
-   * Use instead of createRecord() when records must be persisted to PostgreSQL/TimescaleDB.
-   */
-  static async create(modelName: string, data: Record<string, unknown> = {}): Promise<OrmRecord> {
-    if (!Orm.initialized) throw new Error('ORM is not ready');
-
-    const { createRecord } = await import('./manage-record.js');
-    const record = createRecord(modelName, data, { serialize: false }) as unknown as OrmRecord;
-
-    if (Orm.instance.sqlDb) {
-      const response: { data: { id: unknown } } = { data: { id: record.id } };
-      await Orm.instance.sqlDb.persist('create', modelName, { rawData: data }, response);
-    }
-
-    return record;
-  }
-
-  /**
-   * Programmatic update — updates in memory AND persists to SQL database.
-   * Captures old state for diff-based UPDATE queries.
-   */
-  static async update(modelName: string, id: string | number, data: Record<string, unknown>): Promise<OrmRecord> {
-    if (!Orm.initialized) throw new Error('ORM is not ready');
-
-    const record = Orm.store.get(modelName, id);
-    if (!record || !isOrmRecord(record)) throw new Error(`Record ${modelName}:${id} not found`);
-
-    const oldState = JSON.parse(JSON.stringify(record.__data));
-
-    // Apply attribute updates directly, matching the REST handler pattern
-    for (const [key, value] of Object.entries(data)) {
-      if (key === 'id') continue;
-      record[key] = value;
-    }
-
-    if (Orm.instance.sqlDb) {
-      await Orm.instance.sqlDb.persist('update', modelName, { record, oldState }, {});
-    }
-
-    return record;
-  }
-
-  /**
-   * Programmatic delete — removes from SQL database AND memory store.
-   * SQL delete runs first to ensure consistency on failure.
-   */
-  static async remove(modelName: string, id: string | number): Promise<void> {
-    if (!Orm.initialized) throw new Error('ORM is not ready');
-
-    if (Orm.instance.sqlDb) {
-      await Orm.instance.sqlDb.persist('delete', modelName, { recordId: id }, {});
-    }
-
-    Orm.store.remove(modelName, id);
   }
 
   // Queue warnings to avoid the same error from being logged in the same iteration

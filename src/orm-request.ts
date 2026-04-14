@@ -330,7 +330,7 @@ export default class OrmRequest extends Request {
       }
 
       const recordAttributes = id !== undefined ? { id, ...sanitizedAttributes } : sanitizedAttributes;
-      const created = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false });
+      const created = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false, _skipAutoPersist: true });
       const record = isOrmRecord(created) ? created : null;
       if (!record) return 500;
 
@@ -368,7 +368,7 @@ export default class OrmRequest extends Request {
           }
         }
         if (Object.keys(relUpdates).length > 0) {
-          updateRecord(record as never, relUpdates);
+          updateRecord(record as never, relUpdates, { _skipAutoPersist: true });
         }
       }
 
@@ -443,9 +443,9 @@ export default class OrmRequest extends Request {
       // Execute main handler
       const response = await handler(request, state);
 
-      // Persist to SQL database for write operations
+      // Persist to SQL database for create/update (delete is handled by store.remove auto-persist)
       const sqlDb = Orm.instance.sqlDb;
-      if (sqlDb && WRITE_OPERATIONS.has(operation)) {
+      if (sqlDb && (operation === 'create' || operation === 'update')) {
         await sqlDb.persist(operation, this.model, context, response);
       }
 

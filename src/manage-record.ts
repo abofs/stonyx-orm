@@ -3,12 +3,14 @@ import OrmRecord from './record.js';
 import { getGlobalRegistry, getPendingRegistry, getPendingBelongsToRegistry, getBelongsToRegistry, getHasManyRegistry } from './relationships.js';
 import type Serializer from './serializer.js';
 import { isOrmRecord } from './utils.js';
+import log from 'stonyx/log';
 
 interface CreateRecordOptions {
   isDbRecord?: boolean;
   serialize?: boolean;
   transform?: boolean;
   update?: boolean;
+  _skipAutoPersist?: boolean;
   [key: string]: unknown;
 }
 
@@ -111,6 +113,15 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
     pendingBelongsTo.length = 0;
   }
 
+  // Auto-persist to SQL — skip for DB loads (isDbRecord) and relationship resolution (_relationshipKey)
+  const shouldPersist = orm?.sqlDb && !options.isDbRecord && !userOptions._relationshipKey && !options._skipAutoPersist;
+  if (shouldPersist) {
+    const response = { data: { id: record.id } };
+    orm!.sqlDb!.persist('create', modelName, { rawData }, response).catch((err: unknown) => {
+      log.error?.(`[ORM] Failed to persist create for ${modelName}:${String(record.id)}`, err);
+    });
+  }
+
   return record;
 }
 
@@ -125,7 +136,19 @@ export function updateRecord(record: OrmRecord, rawData: unknown, userOptions: C
 
   const options = { ...defaultOptions, ...userOptions, update: true };
 
+  // Capture old state before update for SQL diff
+  const oldState = record.__data ? JSON.parse(JSON.stringify(record.__data)) : {};
+
   record.serialize(rawData, options);
+
+  // Auto-persist to SQL — skip for DB loads (isDbRecord) and relationship resolution (_relationshipKey)
+  const orm = Orm.instance;
+  const shouldPersist = orm?.sqlDb && !options.isDbRecord && !userOptions._relationshipKey && !options._skipAutoPersist;
+  if (shouldPersist && modelName) {
+    orm!.sqlDb!.persist('update', modelName, { record, oldState }, {}).catch((err: unknown) => {
+      log.error?.(`[ORM] Failed to persist update for ${modelName}:${String(record.id)}`, err);
+    });
+  }
 }
 
 /**
