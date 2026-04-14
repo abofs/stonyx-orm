@@ -37,7 +37,7 @@ export { beforeHook, afterHook, clearHook, clearAllHooks } from './hooks.js'; //
 // store.findAll(model)   -- async, all records
 // store.query(model, conditions) -- async, always hits SQL
 //
-// Programmatic CRUD (memory + SQL persistence):
-// Orm.create(model, data)      -- async, createRecord + sqlDb.persist
-// Orm.update(model, id, data)  -- async, updateRecord + sqlDb.persist
-// Orm.remove(model, id)        -- async, sqlDb.persist + store.remove
+// Data-layer auto-persist (memory + SQL persistence):
+// createRecord(model, data)  -- sync, auto-persists to SQL (fire-and-forget)
+// updateRecord(record, data) -- sync, auto-persists to SQL (fire-and-forget)
+// store.remove(model, id)    -- sync, auto-persists delete to SQL (fire-and-forget)

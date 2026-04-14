@@ -21,12 +21,12 @@ module('[Unit] FK Resolution | belongsTo raw string FK values', function(hooks) 
     sinon.restore();
   });
 
-  test('Orm.create passes rawData through context for FK resolution', async function(assert) {
+  test('createRecord passes rawData through context to sqlDb.persist for FK resolution', function(assert) {
     const persistStub = sinon.stub().resolves();
     Orm.initialized = true;
     Orm.instance.sqlDb = { persist: persistStub };
 
-    await Orm.create('animal', { id: 'fk-test-1', type: 'dog', age: 3, size: 'large', owner: 'unresolved-owner-id' });
+    createRecord('animal', { id: 'fk-test-1', type: 'dog', age: 3, size: 'large', owner: 'unresolved-owner-id' }, { serialize: false });
 
     assert.ok(persistStub.calledOnce, 'sqlDb.persist was called');
     assert.strictEqual(persistStub.firstCall.args[0], 'create', 'persist called with create operation');
