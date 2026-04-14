@@ -1,6 +1,7 @@
 import QUnit from 'qunit';
 import sinon from 'sinon';
 import Orm, { createRecord, updateRecord, store } from '@stonyx/orm';
+import log from 'stonyx/log';
 
 const { module, test } = QUnit;
 
@@ -17,6 +18,7 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
     if (Orm.instance) Orm.instance.sqlDb = originalSqlDb;
     Orm.initialized = originalInitialized;
     store.get('owner')?.clear();
+    store.get('animal')?.clear();
     sinon.restore();
   });
 
@@ -156,6 +158,60 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
     });
   });
 
+  module('pending ID assignment for auto-increment models', function() {
+    test('assigns a unique negative integer when model has numeric ID and sqlDb is configured', function(assert) {
+      const persistStub = sinon.stub().resolves();
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      // animal model does NOT define id = attr('string'), so it's a numeric-ID model
+      const record = createRecord('animal', { type: 'dog', age: 3, size: 'large' }, { serialize: false });
+
+      assert.ok(typeof record.id === 'number', 'record.id is a number');
+      assert.ok(record.id < 0, 'record.id is negative (pending)');
+      assert.notOk(isNaN(record.id), 'record.id is NOT NaN');
+    });
+
+    test('assigns distinct negative IDs for multiple records', function(assert) {
+      const persistStub = sinon.stub().resolves();
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      const record1 = createRecord('animal', { type: 'dog', age: 3, size: 'large' }, { serialize: false });
+      const record2 = createRecord('animal', { type: 'cat', age: 2, size: 'small' }, { serialize: false });
+
+      assert.notStrictEqual(record1.id, record2.id, 'each record gets a unique pending ID');
+      assert.ok(record1.id < 0 && record2.id < 0, 'both IDs are negative');
+      assert.ok(store.get('animal').has(record1.id), 'first record in store under its own key');
+      assert.ok(store.get('animal').has(record2.id), 'second record in store under its own key');
+    });
+
+    test('persist context includes rawData with __pendingSqlId flag', function(assert) {
+      const persistStub = sinon.stub().resolves();
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      createRecord('animal', { type: 'dog', age: 3, size: 'large' }, { serialize: false });
+
+      assert.ok(persistStub.calledOnce, 'sqlDb.persist was called');
+      const context = persistStub.firstCall.args[2];
+      assert.strictEqual(context.rawData.__pendingSqlId, true, 'rawData.__pendingSqlId is true');
+      assert.ok(context.rawData.id < 0, 'rawData.id is the negative pending integer');
+    });
+
+    test('string-ID models do NOT get pending IDs', function(assert) {
+      const persistStub = sinon.stub().resolves();
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      // owner has id = attr('string'), so it should NOT get a pending ID
+      // Without an explicit id, it falls through to store-based increment
+      const record = createRecord('owner', { gender: 'female' }, { serialize: false });
+
+      assert.ok(record.id > 0, 'string-ID model gets a positive store-based ID');
+    });
+  });
+
   module('error handling', function() {
     test('persist error is caught and logged, not thrown', function(assert) {
       const done = assert.async();
@@ -172,6 +228,29 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
 
       // Give the catch handler time to execute
       setTimeout(() => done(), 50);
+    });
+
+    test('persist error message includes actual error content', function(assert) {
+      const done = assert.async();
+      const error = new Error('column "match_id" violates not-null constraint');
+      const persistStub = sinon.stub().rejects(error);
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      const originalLogError = log.error;
+      const logStub = sinon.stub();
+      log.error = logStub;
+
+      createRecord('owner', { id: 'err-msg-1', gender: 'female' }, { serialize: false });
+
+      setTimeout(() => {
+        assert.ok(logStub.calledOnce, 'log.error was called');
+        const logMessage = logStub.firstCall?.args[0] || '';
+        assert.ok(logMessage.includes('column "match_id" violates not-null constraint'), 'log message includes the actual SQL error');
+        assert.ok(logMessage.includes('owner:err-msg-1'), 'log message includes model and record id');
+        log.error = originalLogError;
+        done();
+      }, 50);
     });
   });
 });

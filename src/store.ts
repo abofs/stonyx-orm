@@ -179,7 +179,7 @@ export default class Store {
     // Auto-persist delete to SQL
     if (id && Orm.instance?.sqlDb) {
       Orm.instance.sqlDb.persist('delete', key, { recordId: id }, {}).catch((err: unknown) => {
-        console.error(`[ORM] Failed to persist delete for ${key}:${id}`, err);
+        console.error(`[ORM] Failed to persist delete for ${key}:${id}: ${err instanceof Error ? err.message : String(err)}`);
       });
     }
 
