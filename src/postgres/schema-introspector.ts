@@ -5,7 +5,7 @@ import { getPluralName } from '../plural-registry.js';
 import { dbKey } from '../db.js';
 import { AggregateProperty } from '../aggregates.js';
 import { getRelationshipInfo, sanitizeTableName } from '../schema-helpers.js';
-import type { ForeignKeyDef, ModelSchema, ViewSchema } from '../types/orm-types.js';
+import type { ForeignKeyDef, HypertableConfig, ModelSchema, ViewSchema } from '../types/orm-types.js';
 import ModelProperty from '../model-property.js';
 
 interface ViewSnapshotEntry {
@@ -24,6 +24,7 @@ interface ModelSnapshotEntry {
   columns: Record<string, string>;
   foreignKeys: Record<string, ForeignKeyDef>;
   vectorColumns?: Record<string, number>;
+  hypertable?: HypertableConfig;
 }
 
 interface JoinDef {
@@ -82,6 +83,8 @@ export function introspectModels(): Record<string, ModelSchema> {
       };
     }
 
+    const hypertable = (modelClass as { hypertable?: HypertableConfig }).hypertable;
+
     schemas[name] = {
       table: sanitizeTableName(getPluralName(name)),
       idType,
@@ -89,6 +92,7 @@ export function introspectModels(): Record<string, ModelSchema> {
       foreignKeys,
       relationships,
       vectorColumns,
+      hypertable: hypertable || undefined,
       memory: (modelClass as { memory?: boolean }).memory === true,
     };
   }
@@ -97,13 +101,16 @@ export function introspectModels(): Record<string, ModelSchema> {
 }
 
 export function buildTableDDL(name: string, schema: ModelSchema, allSchemas: Record<string, ModelSchema> = {}): string {
-  const { idType, columns, foreignKeys } = schema;
+  const { idType, columns, foreignKeys, hypertable } = schema;
   const table = sanitizeTableName(schema.table);
   const lines: string[] = [];
+  const useCompositePK = hypertable && idType !== 'string';
 
   // Primary key
   if (idType === 'string') {
     lines.push('  "id" VARCHAR(255) PRIMARY KEY');
+  } else if (useCompositePK) {
+    lines.push('  "id" INTEGER GENERATED ALWAYS AS IDENTITY');
   } else {
     lines.push('  "id" INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY');
   }
@@ -120,13 +127,22 @@ export function buildTableDDL(name: string, schema: ModelSchema, allSchemas: Rec
   }
 
   // Timestamps
-  lines.push('  "created_at" TIMESTAMPTZ DEFAULT NOW()');
+  if (useCompositePK) {
+    lines.push('  "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+  } else {
+    lines.push('  "created_at" TIMESTAMPTZ DEFAULT NOW()');
+  }
   lines.push('  "updated_at" TIMESTAMPTZ DEFAULT NOW()');
 
   // Foreign key constraints
   for (const [fkCol, fkDef] of Object.entries(foreignKeys)) {
     const refTable = sanitizeTableName(fkDef.references);
     lines.push(`  FOREIGN KEY ("${fkCol}") REFERENCES "${refTable}"("${fkDef.column}") ON DELETE SET NULL`);
+  }
+
+  // Composite primary key for hypertable models
+  if (useCompositePK) {
+    lines.push(`  PRIMARY KEY ("id", "${hypertable.timeColumn}")`);
   }
 
   return `CREATE TABLE IF NOT EXISTS "${table}" (\n${lines.join(',\n')}\n)`;
@@ -336,6 +352,7 @@ export function schemasToSnapshot(schemas: Record<string, ModelSchema>): Record<
       ...(schema.vectorColumns && Object.keys(schema.vectorColumns).length > 0
         ? { vectorColumns: { ...schema.vectorColumns } }
         : {}),
+      ...(schema.hypertable ? { hypertable: schema.hypertable } : {}),
     };
   }
 
