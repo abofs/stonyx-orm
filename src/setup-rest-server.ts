@@ -31,9 +31,9 @@ export default async function(route: string, accessPath: string, metaRoute: bool
       for (const model of models === '*' ? availableModels : models) {
         if (model === dbKey) continue;
         if (!store.data.has(model)) throw new Error(`Unable to define access for Invalid Model "${model}". Model does not exist`);
-        if (accessFiles[model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
+        if (accessFiles![model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
 
-        accessFiles[model] = accessInstance.access;
+        accessFiles![model] = accessInstance.access;
       }
     });
   } catch (error) {
@@ -47,7 +47,7 @@ export default async function(route: string, accessPath: string, metaRoute: bool
   const name = route === '/' ? 'index' : (route[0] === '/' ? route.slice(1) : route);
 
   // Configure endpoints for models and views with access configuration
-  for (const [model, access] of Object.entries(accessFiles)) {
+  for (const [model, access] of Object.entries(accessFiles!)) {
     const pluralizedModel = getPluralName(model);
     const modelName = name === 'index' ? pluralizedModel : `${name}/${pluralizedModel}`;
     RestServer.instance.mountRoute(OrmRequest, { name: modelName, options: { model, access } });

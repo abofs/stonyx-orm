@@ -315,9 +315,9 @@ export default class Store {
         }
       } else if (value && isStoreRecord(value) && value.__model && !this._isBidirectionalRelationship(
         record.__model.__name,
-        value.__model.__name
+        (value as StoreRecord).__model.__name
       )) {
-        children.push({ childRecord: value, relationshipKey: key, type: 'belongsTo' });
+        children.push({ childRecord: value as StoreRecord, relationshipKey: key, type: 'belongsTo' });
       }
     }
 

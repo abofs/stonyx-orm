@@ -115,7 +115,7 @@ export default class DB {
     const { autosave, saveInterval } = config.orm.db;
 
     store.set(dbKey, new Map());
-    Orm.instance.models[`${dbKey}Model`] = await this.getSchema();
+    (Orm.instance as Orm).models[`${dbKey}Model`] = await this.getSchema();
 
     await this.validateMode();
     this.record = await this.getRecord();

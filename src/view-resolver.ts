@@ -156,8 +156,8 @@ export default class ViewResolver {
           if (!aggProp.relationship) continue;
           const allRelated: unknown[] = [];
           for (const record of groupRecords) {
-            const relatedRecords = record.__relationships?.[aggProp.relationship]
-              || record[aggProp.relationship];
+            const relatedRecords = record.__relationships?.[aggProp.relationship!]
+              || record[aggProp.relationship!];
             if (Array.isArray(relatedRecords)) {
               allRelated.push(...relatedRecords);
             }
