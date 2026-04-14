@@ -27,6 +27,8 @@ const defaultOptions: CreateRecordOptions = {
   transform: true
 };
 
+let pendingIdCounter = 0;
+
 export function createRecord(modelName: string, rawData: { [key: string]: unknown } = {}, userOptions: CreateRecordOptions = {}): OrmRecord {
   const orm = Orm.instance;
   const { initialized } = Orm;
@@ -118,7 +120,7 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   if (shouldPersist) {
     const response = { data: { id: record.id } };
     orm!.sqlDb!.persist('create', modelName, { rawData }, response).catch((err: unknown) => {
-      log.error?.(`[ORM] Failed to persist create for ${modelName}:${String(record.id)}`, err);
+      log.error?.(`[ORM] Failed to persist create for ${modelName}:${String(record.id)}: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
@@ -146,7 +148,7 @@ export function updateRecord(record: OrmRecord, rawData: unknown, userOptions: C
   const shouldPersist = orm?.sqlDb && !options.isDbRecord && !userOptions._relationshipKey && !options._skipAutoPersist;
   if (shouldPersist && modelName) {
     orm!.sqlDb!.persist('update', modelName, { record, oldState }, {}).catch((err: unknown) => {
-      log.error?.(`[ORM] Failed to persist update for ${modelName}:${String(record.id)}`, err);
+      log.error?.(`[ORM] Failed to persist update for ${modelName}:${String(record.id)}: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 }
@@ -160,9 +162,11 @@ export function updateRecord(record: OrmRecord, rawData: unknown, userOptions: C
 function assignRecordId(modelName: string, rawData: { [key: string]: unknown }): void {
   if (rawData.id) return;
 
-  // In SQL mode with numeric IDs, defer to database auto-increment
+  // In SQL mode with numeric IDs, defer to database auto-increment.
+  // Use unique negative integers — they survive the number transform (parseInt preserves negatives)
+  // and avoid NaN store-key collisions that string pending IDs caused.
   if (Orm.instance?.sqlDb && !isStringIdModel(modelName)) {
-    rawData.id = `__pending_${Date.now()}_${Math.random()}`;
+    rawData.id = -(++pendingIdCounter);
     rawData.__pendingSqlId = true;
     return;
   }

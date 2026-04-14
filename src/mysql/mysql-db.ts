@@ -21,6 +21,7 @@ interface PersistContext {
   record?: OrmRecord;
   recordId?: unknown;
   oldState?: Record<string, unknown>;
+  rawData?: Record<string, unknown>;
 }
 
 interface PersistResponse {
@@ -420,8 +421,10 @@ export default class MysqlDB {
 
     const insertData = this._recordToRow(record, schema);
 
-    // For auto-increment models, remove the pending ID
-    const isPendingId = record.__data.__pendingSqlId;
+    // For auto-increment models, remove the pending ID.
+    // Check context.rawData (not record.__data) because __pendingSqlId is not a model
+    // attribute and gets lost during serialization.
+    const isPendingId = context.rawData?.__pendingSqlId === true;
 
     if (isPendingId) {
       delete insertData.id;
