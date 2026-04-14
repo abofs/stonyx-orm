@@ -228,7 +228,7 @@ export default class Orm {
 
     if (Orm.instance.sqlDb) {
       const response: { data: { id: unknown } } = { data: { id: record.id } };
-      await Orm.instance.sqlDb.persist('create', modelName, {}, response);
+      await Orm.instance.sqlDb.persist('create', modelName, { rawData: data }, response);
     }
 
     return record;

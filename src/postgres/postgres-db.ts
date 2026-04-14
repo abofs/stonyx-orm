@@ -19,6 +19,7 @@ interface PersistContext {
   record?: OrmRecord;
   recordId?: unknown;
   oldState?: Record<string, unknown>;
+  rawData?: Record<string, unknown>;
 }
 
 interface PersistResponse {
@@ -477,7 +478,7 @@ export default class PostgresDB {
     }
   }
 
-  private async _persistCreate(modelName: string, _context: PersistContext, response: PersistResponse): Promise<void> {
+  private async _persistCreate(modelName: string, context: PersistContext, response: PersistResponse): Promise<void> {
     const schemas = this.deps.introspectModels();
     const schema = schemas[modelName];
 
@@ -491,7 +492,7 @@ export default class PostgresDB {
 
     if (!record) return;
 
-    const insertData = this._recordToRow(record, schema);
+    const insertData = this._recordToRow(record, schema, context.rawData);
 
     // For auto-increment models, remove the pending ID
     const isPendingId = record.__data.__pendingSqlId;
@@ -549,7 +550,10 @@ export default class PostgresDB {
     // Check FK changes too
     for (const fkCol of Object.keys(schema.foreignKeys)) {
       const relName = fkCol.replace(/_id$/, '');
-      const currentFkValue = (record.__relationships[relName] as { id: unknown } | undefined)?.id ?? null;
+      const relValue = record.__relationships[relName];
+      const currentFkValue = (relValue && typeof relValue === 'object' && relValue !== null)
+        ? (relValue as { id: unknown }).id ?? null
+        : relValue ?? record.__data[relName] ?? null;
       const oldFkValue = oldState[relName] ?? null;
 
       if (currentFkValue !== oldFkValue) {
@@ -579,7 +583,7 @@ export default class PostgresDB {
     await this.requirePool().query(sql, values);
   }
 
-  private _recordToRow(record: OrmRecord, schema: ModelSchema): Record<string, unknown> {
+  private _recordToRow(record: OrmRecord, schema: ModelSchema, rawData?: Record<string, unknown>): Record<string, unknown> {
     const row: Record<string, unknown> = {};
     const data = record.__data;
 
@@ -603,11 +607,16 @@ export default class PostgresDB {
       const relName = fkCol.replace(/_id$/, '');
       const related = record.__relationships[relName];
 
-      if (related) {
+      if (related && typeof related === 'object' && related !== null) {
         row[fkCol] = (related as { id: unknown }).id;
+      } else if (related != null) {
+        // Raw FK value (e.g., string ID stored directly in __relationships)
+        row[fkCol] = related;
       } else if (data[relName] !== undefined) {
-        // Raw FK value (e.g., from create payload)
         row[fkCol] = data[relName];
+      } else if (rawData?.[relName] !== undefined) {
+        // Fallback to original create payload for unresolved belongsTo FKs
+        row[fkCol] = rawData[relName];
       }
     }
 
