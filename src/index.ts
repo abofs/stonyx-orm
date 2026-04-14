@@ -33,6 +33,11 @@ export { beforeHook, afterHook, clearHook, clearAllHooks } from './hooks.js'; //
 
 // Store API:
 // store.get(model, id)   -- sync, memory-only
-// store.find(model, id)  -- async, MySQL for memory:false models
+// store.find(model, id)  -- async, SQL for memory:false models
 // store.findAll(model)   -- async, all records
-// store.query(model, conditions) -- async, always hits MySQL
+// store.query(model, conditions) -- async, always hits SQL
+//
+// Programmatic CRUD (memory + SQL persistence):
+// Orm.create(model, data)      -- async, createRecord + sqlDb.persist
+// Orm.update(model, id, data)  -- async, updateRecord + sqlDb.persist
+// Orm.remove(model, id)        -- async, sqlDb.persist + store.remove
