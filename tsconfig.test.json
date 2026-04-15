@@ -4,8 +4,9 @@
     "rootDir": ".",
     "outDir": "dist-test",
     "declaration": false,
-    "allowJs": true,
-    "checkJs": false
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false
   },
   "include": ["src", "test", "config"]
 }
