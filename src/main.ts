@@ -227,7 +227,7 @@ export default class Orm {
    * Register a callback to be invoked when a fire-and-forget SQL persist fails.
    * Without a handler, persist errors are logged via log.error (backwards-compatible).
    */
-  onPersistError(handler: (detail: PersistErrorDetail) => void): void {
+  onPersistError(handler: ((detail: PersistErrorDetail) => void) | null): void {
     this._persistErrorHandler = handler;
   }
 
