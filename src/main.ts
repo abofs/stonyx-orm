@@ -49,6 +49,13 @@ const defaultOptions: OrmOptions = {
   dbType: 'json'
 }
 
+export interface PersistErrorDetail {
+  operation: 'create' | 'update' | 'delete';
+  modelName: string;
+  recordId: unknown;
+  error: Error;
+}
+
 export default class Orm {
   static initialized: boolean = false;
   static relationships: Map<string, Map<string, unknown>> = new Map();
@@ -64,6 +71,8 @@ export default class Orm {
   options!: OrmOptions;
   sqlDb?: SqlDb;
   db?: OrmDB | SqlDb;
+
+  private _persistErrorHandler: ((detail: PersistErrorDetail) => void) | null = null;
 
   constructor(options: OrmOptions = {}) {
     if (Orm.instance) return Orm.instance;
@@ -212,6 +221,32 @@ export default class Orm {
   isView(modelName: string): boolean {
     const modelClassPrefix = kebabCaseToPascalCase(modelName);
     return !!this.views[`${modelClassPrefix}View`];
+  }
+
+  /**
+   * Register a callback to be invoked when a fire-and-forget SQL persist fails.
+   * Without a handler, persist errors are logged via log.error (backwards-compatible).
+   */
+  onPersistError(handler: ((detail: PersistErrorDetail) => void) | null): void {
+    this._persistErrorHandler = handler;
+  }
+
+  /**
+   * Emit a persist error to the registered handler, or fall back to log.error.
+   */
+  emitPersistError(detail: PersistErrorDetail): void {
+    const fallbackLog = () => log.error?.(`[ORM] Failed to persist ${detail.operation} for ${detail.modelName}:${String(detail.recordId)}: ${detail.error.message}`);
+
+    if (this._persistErrorHandler) {
+      try {
+        this._persistErrorHandler(detail);
+      } catch (handlerError) {
+        fallbackLog();
+        log.error?.(`[ORM] onPersistError handler threw: ${handlerError instanceof Error ? handlerError.message : String(handlerError)}`);
+      }
+    } else {
+      fallbackLog();
+    }
   }
 
   // Queue warnings to avoid the same error from being logged in the same iteration

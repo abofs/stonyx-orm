@@ -3,7 +3,6 @@ import OrmRecord from './record.js';
 import { getGlobalRegistry, getPendingRegistry, getPendingBelongsToRegistry, getBelongsToRegistry, getHasManyRegistry } from './relationships.js';
 import type Serializer from './serializer.js';
 import { isOrmRecord } from './utils.js';
-import log from 'stonyx/log';
 
 interface CreateRecordOptions {
   isDbRecord?: boolean;
@@ -120,7 +119,12 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   if (shouldPersist) {
     const response = { data: { id: record.id } };
     orm!.sqlDb!.persist('create', modelName, { rawData }, response).catch((err: unknown) => {
-      log.error?.(`[ORM] Failed to persist create for ${modelName}:${String(record.id)}: ${err instanceof Error ? err.message : String(err)}`);
+      orm!.emitPersistError({
+        operation: 'create',
+        modelName,
+        recordId: record.id,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     });
   }
 
@@ -148,7 +152,12 @@ export function updateRecord(record: OrmRecord, rawData: unknown, userOptions: C
   const shouldPersist = orm?.sqlDb && !options.isDbRecord && !userOptions._relationshipKey && !options._skipAutoPersist;
   if (shouldPersist && modelName) {
     orm!.sqlDb!.persist('update', modelName, { record, oldState }, {}).catch((err: unknown) => {
-      log.error?.(`[ORM] Failed to persist update for ${modelName}:${String(record.id)}: ${err instanceof Error ? err.message : String(err)}`);
+      orm!.emitPersistError({
+        operation: 'update',
+        modelName,
+        recordId: record.id,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     });
   }
 }
