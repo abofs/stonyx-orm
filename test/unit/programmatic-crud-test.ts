@@ -213,25 +213,100 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
     });
   });
 
-  module('error handling', function() {
-    test('persist error is caught and logged, not thrown', function(assert) {
+  module('error handling — onPersistError callback', function(hooks) {
+    let originalHandler;
+
+    hooks.afterEach(function() {
+      // Reset the persist error handler after each test
+      if (Orm.instance) {
+        Orm.instance.onPersistError(null);
+      }
+    });
+
+    test('createRecord with SQL persist failure invokes registered onPersistError callback', function(assert) {
       const done = assert.async();
       const error = new Error('SQL connection failed');
       const persistStub = sinon.stub().rejects(error);
       Orm.initialized = true;
       Orm.instance.sqlDb = { persist: persistStub };
 
-      // This should NOT throw — the error is caught internally
-      const record = createRecord('owner', { id: 'err-1', gender: 'female' }, { serialize: false });
+      const handlerStub = sinon.stub();
+      Orm.instance.onPersistError(handlerStub);
 
-      assert.strictEqual(record.id, 'err-1', 'record created despite persist failure');
-      assert.ok(persistStub.calledOnce, 'persist was attempted');
+      const record = createRecord('owner', { id: 'err-cb-1', gender: 'female' }, { serialize: false });
 
-      // Give the catch handler time to execute
-      setTimeout(() => done(), 50);
+      assert.strictEqual(record.id, 'err-cb-1', 'record created despite persist failure');
+
+      setTimeout(() => {
+        assert.ok(handlerStub.calledOnce, 'onPersistError handler was called');
+        const detail = handlerStub.firstCall.args[0];
+        assert.strictEqual(detail.operation, 'create', 'detail.operation is create');
+        assert.strictEqual(detail.modelName, 'owner', 'detail.modelName is owner');
+        assert.strictEqual(detail.recordId, 'err-cb-1', 'detail.recordId is err-cb-1');
+        assert.ok(detail.error instanceof Error, 'detail.error is an Error');
+        assert.strictEqual(detail.error.message, 'SQL connection failed', 'detail.error has correct message');
+        done();
+      }, 50);
     });
 
-    test('persist error message includes actual error content', function(assert) {
+    test('updateRecord with SQL persist failure invokes registered onPersistError callback', function(assert) {
+      const done = assert.async();
+      const error = new Error('update constraint violation');
+      const persistStub = sinon.stub();
+      // Resolve for create, reject for update
+      persistStub.onFirstCall().resolves();
+      persistStub.onSecondCall().rejects(error);
+
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      const record = createRecord('owner', { id: 'err-cb-2', gender: 'female' }, { serialize: false, _skipAutoPersist: true });
+
+      const handlerStub = sinon.stub();
+      Orm.instance.onPersistError(handlerStub);
+
+      updateRecord(record, { gender: 'male' });
+
+      setTimeout(() => {
+        assert.ok(handlerStub.calledOnce, 'onPersistError handler was called');
+        const detail = handlerStub.firstCall.args[0];
+        assert.strictEqual(detail.operation, 'update', 'detail.operation is update');
+        assert.strictEqual(detail.modelName, 'owner', 'detail.modelName is owner');
+        assert.strictEqual(detail.recordId, 'err-cb-2', 'detail.recordId is err-cb-2');
+        assert.ok(detail.error instanceof Error, 'detail.error is an Error');
+        assert.strictEqual(detail.error.message, 'update constraint violation', 'detail.error has correct message');
+        done();
+      }, 50);
+    });
+
+    test('store.remove with SQL persist failure invokes registered onPersistError callback', function(assert) {
+      const done = assert.async();
+      const error = new Error('delete FK constraint');
+      const persistStub = sinon.stub().rejects(error);
+
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      createRecord('owner', { id: 'err-cb-3', gender: 'male' }, { serialize: false, _skipAutoPersist: true });
+
+      const handlerStub = sinon.stub();
+      Orm.instance.onPersistError(handlerStub);
+
+      store.remove('owner', 'err-cb-3');
+
+      setTimeout(() => {
+        assert.ok(handlerStub.calledOnce, 'onPersistError handler was called');
+        const detail = handlerStub.firstCall.args[0];
+        assert.strictEqual(detail.operation, 'delete', 'detail.operation is delete');
+        assert.strictEqual(detail.modelName, 'owner', 'detail.modelName is owner');
+        assert.strictEqual(detail.recordId, 'err-cb-3', 'detail.recordId is err-cb-3');
+        assert.ok(detail.error instanceof Error, 'detail.error is an Error');
+        assert.strictEqual(detail.error.message, 'delete FK constraint', 'detail.error has correct message');
+        done();
+      }, 50);
+    });
+
+    test('when no onPersistError handler is registered, persist errors fall back to log.error', function(assert) {
       const done = assert.async();
       const error = new Error('column "match_id" violates not-null constraint');
       const persistStub = sinon.stub().rejects(error);
@@ -242,14 +317,84 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
       const logStub = sinon.stub();
       log.error = logStub;
 
-      createRecord('owner', { id: 'err-msg-1', gender: 'female' }, { serialize: false });
+      createRecord('owner', { id: 'err-fallback-1', gender: 'female' }, { serialize: false });
 
       setTimeout(() => {
-        assert.ok(logStub.calledOnce, 'log.error was called');
+        assert.ok(logStub.calledOnce, 'log.error was called as fallback');
         const logMessage = logStub.firstCall?.args[0] || '';
         assert.ok(logMessage.includes('column "match_id" violates not-null constraint'), 'log message includes the actual SQL error');
-        assert.ok(logMessage.includes('owner:err-msg-1'), 'log message includes model and record id');
+        assert.ok(logMessage.includes('owner:err-fallback-1'), 'log message includes model and record id');
         log.error = originalLogError;
+        done();
+      }, 50);
+    });
+
+    test('createRecord still returns the record synchronously regardless of persist outcome', function(assert) {
+      const error = new Error('SQL failure');
+      const persistStub = sinon.stub().rejects(error);
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      const handlerStub = sinon.stub();
+      Orm.instance.onPersistError(handlerStub);
+
+      const record = createRecord('owner', { id: 'sync-1', gender: 'female' }, { serialize: false });
+
+      // Verify synchronous return — record is available immediately, not a Promise
+      assert.strictEqual(record.id, 'sync-1', 'record returned synchronously with correct id');
+      assert.notOk(record instanceof Promise, 'return value is NOT a Promise');
+      assert.ok(store.get('owner').has('sync-1'), 'record is in the store immediately');
+    });
+
+    test('updateRecord still returns void synchronously regardless of persist outcome', function(assert) {
+      const error = new Error('SQL failure');
+      const persistStub = sinon.stub().rejects(error);
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      const record = createRecord('owner', { id: 'sync-2', gender: 'female' }, { serialize: false, _skipAutoPersist: true });
+
+      const handlerStub = sinon.stub();
+      Orm.instance.onPersistError(handlerStub);
+
+      const result = updateRecord(record, { gender: 'male' });
+
+      // Verify synchronous return — void, not a Promise
+      assert.strictEqual(result, undefined, 'updateRecord returns void (undefined)');
+    });
+
+    test('_skipAutoPersist callers are unaffected — no persist attempt, no callback invocation', function(assert) {
+      const done = assert.async();
+      const persistStub = sinon.stub().rejects(new Error('should not be called'));
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      const handlerStub = sinon.stub();
+      Orm.instance.onPersistError(handlerStub);
+
+      createRecord('owner', { id: 'skip-err-1', gender: 'female' }, { serialize: false, _skipAutoPersist: true });
+
+      setTimeout(() => {
+        assert.ok(persistStub.notCalled, 'sqlDb.persist was NOT called');
+        assert.ok(handlerStub.notCalled, 'onPersistError handler was NOT called');
+        done();
+      }, 50);
+    });
+
+    test('isDbRecord callers are unaffected — no persist attempt, no callback invocation', function(assert) {
+      const done = assert.async();
+      const persistStub = sinon.stub().rejects(new Error('should not be called'));
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+
+      const handlerStub = sinon.stub();
+      Orm.instance.onPersistError(handlerStub);
+
+      createRecord('owner', { id: 'db-err-1', gender: 'male' }, { serialize: false, isDbRecord: true });
+
+      setTimeout(() => {
+        assert.ok(persistStub.notCalled, 'sqlDb.persist was NOT called');
+        assert.ok(handlerStub.notCalled, 'onPersistError handler was NOT called');
         done();
       }, 50);
     });
