@@ -235,10 +235,17 @@ export default class Orm {
    * Emit a persist error to the registered handler, or fall back to log.error.
    */
   emitPersistError(detail: PersistErrorDetail): void {
+    const fallbackLog = () => log.error?.(`[ORM] Failed to persist ${detail.operation} for ${detail.modelName}:${String(detail.recordId)}: ${detail.error.message}`);
+
     if (this._persistErrorHandler) {
-      this._persistErrorHandler(detail);
+      try {
+        this._persistErrorHandler(detail);
+      } catch (handlerError) {
+        fallbackLog();
+        log.error?.(`[ORM] onPersistError handler threw: ${handlerError instanceof Error ? handlerError.message : String(handlerError)}`);
+      }
     } else {
-      log.error?.(`[ORM] Failed to persist ${detail.operation} for ${detail.modelName}:${String(detail.recordId)}: ${detail.error.message}`);
+      fallbackLog();
     }
   }
 
