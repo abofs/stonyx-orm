@@ -214,13 +214,19 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
   });
 
   module('error handling — onPersistError callback', function(hooks) {
-    let originalHandler;
+    let originalLogError;
+
+    hooks.beforeEach(function() {
+      originalLogError = log.error;
+    });
 
     hooks.afterEach(function() {
       // Reset the persist error handler after each test
       if (Orm.instance) {
         Orm.instance.onPersistError(null);
       }
+      // Restore log.error in case a test stubbed it
+      log.error = originalLogError;
     });
 
     test('createRecord with SQL persist failure invokes registered onPersistError callback', function(assert) {
@@ -252,10 +258,7 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
     test('updateRecord with SQL persist failure invokes registered onPersistError callback', function(assert) {
       const done = assert.async();
       const error = new Error('update constraint violation');
-      const persistStub = sinon.stub();
-      // Resolve for create, reject for update
-      persistStub.onFirstCall().resolves();
-      persistStub.onSecondCall().rejects(error);
+      const persistStub = sinon.stub().rejects(error);
 
       Orm.initialized = true;
       Orm.instance.sqlDb = { persist: persistStub };
@@ -313,7 +316,6 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
       Orm.initialized = true;
       Orm.instance.sqlDb = { persist: persistStub };
 
-      const originalLogError = log.error;
       const logStub = sinon.stub();
       log.error = logStub;
 
@@ -324,7 +326,6 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
         const logMessage = logStub.firstCall?.args[0] || '';
         assert.ok(logMessage.includes('column "match_id" violates not-null constraint'), 'log message includes the actual SQL error');
         assert.ok(logMessage.includes('owner:err-fallback-1'), 'log message includes model and record id');
-        log.error = originalLogError;
         done();
       }, 50);
     });

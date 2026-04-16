@@ -50,7 +50,7 @@ const defaultOptions: OrmOptions = {
 }
 
 export interface PersistErrorDetail {
-  operation: string;
+  operation: 'create' | 'update' | 'delete';
   modelName: string;
   recordId: unknown;
   error: Error;
