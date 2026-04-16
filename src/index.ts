@@ -26,6 +26,7 @@ import { count, avg, sum, min, max } from './aggregates.js';
 
 export { default } from './main.js';
 export { store, relationships } from './main.js';
+export type { PersistErrorDetail } from './main.js';
 export { Model, View, Serializer }; // base classes
 export { attr, belongsTo, hasMany, createRecord, updateRecord }; // helpers
 export { count, avg, sum, min, max }; // aggregate helpers
@@ -33,6 +34,11 @@ export { beforeHook, afterHook, clearHook, clearAllHooks } from './hooks.js'; //
 
 // Store API:
 // store.get(model, id)   -- sync, memory-only
-// store.find(model, id)  -- async, MySQL for memory:false models
+// store.find(model, id)  -- async, SQL for memory:false models
 // store.findAll(model)   -- async, all records
-// store.query(model, conditions) -- async, always hits MySQL
+// store.query(model, conditions) -- async, always hits SQL
+//
+// Data-layer auto-persist (memory + SQL persistence):
+// createRecord(model, data)  -- sync, auto-persists to SQL (fire-and-forget)
+// updateRecord(record, data) -- sync, auto-persists to SQL (fire-and-forget)
+// store.remove(model, id)    -- sync, auto-persists delete to SQL (fire-and-forget)

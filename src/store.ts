@@ -176,6 +176,18 @@ export default class Store {
       throw new Error(`Cannot remove records from read-only view '${key}'`);
     }
 
+    // Auto-persist delete to SQL
+    if (id && Orm.instance?.sqlDb) {
+      Orm.instance.sqlDb.persist('delete', key, { recordId: id }, {}).catch((err: unknown) => {
+        Orm.instance.emitPersistError({
+          operation: 'delete',
+          modelName: key,
+          recordId: id,
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
+      });
+    }
+
     if (id) return this.unloadRecord(key, id);
 
     this.unloadAllRecords(key);

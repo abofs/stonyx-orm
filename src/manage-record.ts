@@ -9,6 +9,7 @@ interface CreateRecordOptions {
   serialize?: boolean;
   transform?: boolean;
   update?: boolean;
+  _skipAutoPersist?: boolean;
   [key: string]: unknown;
 }
 
@@ -24,6 +25,8 @@ const defaultOptions: CreateRecordOptions = {
   serialize: true,
   transform: true
 };
+
+let pendingIdCounter = 0;
 
 export function createRecord(modelName: string, rawData: { [key: string]: unknown } = {}, userOptions: CreateRecordOptions = {}): OrmRecord {
   const orm = Orm.instance;
@@ -111,6 +114,20 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
     pendingBelongsTo.length = 0;
   }
 
+  // Auto-persist to SQL — skip for DB loads (isDbRecord) and relationship resolution (_relationshipKey)
+  const shouldPersist = orm?.sqlDb && !options.isDbRecord && !userOptions._relationshipKey && !options._skipAutoPersist;
+  if (shouldPersist) {
+    const response = { data: { id: record.id } };
+    orm!.sqlDb!.persist('create', modelName, { rawData }, response).catch((err: unknown) => {
+      orm!.emitPersistError({
+        operation: 'create',
+        modelName,
+        recordId: record.id,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    });
+  }
+
   return record;
 }
 
@@ -125,7 +142,24 @@ export function updateRecord(record: OrmRecord, rawData: unknown, userOptions: C
 
   const options = { ...defaultOptions, ...userOptions, update: true };
 
+  // Capture old state before update for SQL diff
+  const oldState = record.__data ? JSON.parse(JSON.stringify(record.__data)) : {};
+
   record.serialize(rawData, options);
+
+  // Auto-persist to SQL — skip for DB loads (isDbRecord) and relationship resolution (_relationshipKey)
+  const orm = Orm.instance;
+  const shouldPersist = orm?.sqlDb && !options.isDbRecord && !userOptions._relationshipKey && !options._skipAutoPersist;
+  if (shouldPersist && modelName) {
+    orm!.sqlDb!.persist('update', modelName, { record, oldState }, {}).catch((err: unknown) => {
+      orm!.emitPersistError({
+        operation: 'update',
+        modelName,
+        recordId: record.id,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    });
+  }
 }
 
 /**
@@ -137,9 +171,11 @@ export function updateRecord(record: OrmRecord, rawData: unknown, userOptions: C
 function assignRecordId(modelName: string, rawData: { [key: string]: unknown }): void {
   if (rawData.id) return;
 
-  // In SQL mode with numeric IDs, defer to database auto-increment
+  // In SQL mode with numeric IDs, defer to database auto-increment.
+  // Use unique negative integers — they survive the number transform (parseInt preserves negatives)
+  // and avoid NaN store-key collisions that string pending IDs caused.
   if (Orm.instance?.sqlDb && !isStringIdModel(modelName)) {
-    rawData.id = `__pending_${Date.now()}_${Math.random()}`;
+    rawData.id = -(++pendingIdCounter);
     rawData.__pendingSqlId = true;
     return;
   }
