@@ -14,8 +14,8 @@ importers:
   .:
     dependencies:
       '@stonyx/cron':
-        specifier: 0.2.1-beta.45
-        version: 0.2.1-beta.45
+        specifier: 0.2.1-beta.46
+        version: 0.2.1-beta.46
       '@stonyx/events':
         specifier: 0.1.1-beta.47
         version: 0.1.1-beta.47
@@ -24,8 +24,8 @@ importers:
         version: 0.2.3-beta.53
     devDependencies:
       '@stonyx/rest-server':
-        specifier: 0.2.1-beta.45
-        version: 0.2.1-beta.45
+        specifier: 0.2.1-beta.46
+        version: 0.2.1-beta.46
       '@stonyx/utils':
         specifier: 0.2.3-beta.23
         version: 0.2.3-beta.23
@@ -218,8 +218,8 @@ packages:
   '@sinonjs/samsam@9.0.3':
     resolution: {integrity: sha512-ZgYY7Dc2RW+OUdnZ1DEHg00lhRt+9BjymPKHog4PRFzr1U3MbK57+djmscWyKxzO1qfunHqs4N45WWyKIFKpiQ==}
 
-  '@stonyx/cron@0.2.1-beta.45':
-    resolution: {integrity: sha512-1YdVD7mubxB+ydx4g8tCthb3R4y0rX0USmAbhrtPmjFlHhvQ7CzrK0f5BJOP2SRm7ki4ce+gxjyBX24nw8F3gQ==}
+  '@stonyx/cron@0.2.1-beta.46':
+    resolution: {integrity: sha512-+SSh46b7TQJGE57S9X3PvAGzkBMnDM+yMmwg+eCqL94USkZj+ReFQmTR0qmYJqWjQnZlQK7yvyRmj0u3/kExnA==}
 
   '@stonyx/events@0.1.1-beta.47':
     resolution: {integrity: sha512-5jCTfv7f6iGtRQwfNz6VIaWDjrZLQXj/NDhie0YefdHOL1eUJJikLRSbhAQ/9z7C1uZN8L///HrYJ25EM90uJw==}
@@ -227,8 +227,8 @@ packages:
   '@stonyx/logs@1.0.1-beta.16':
     resolution: {integrity: sha512-6UccOlU3hnVDKSruFZ/uGXBjK/i8USNjjc7me3ooUxSVbSn+tWhdgkWH/CWDymmvOz+A/FBdDD3dPr1nchbZqQ==}
 
-  '@stonyx/rest-server@0.2.1-beta.45':
-    resolution: {integrity: sha512-V8HLG/d9xGMRaGcZZrq6D0n2+8/nPvSQD79DnTVyUMa1aujqIPOIbJ7eM47DUJ3DVoiLid8AWpbufLj+0+6Zjw==}
+  '@stonyx/rest-server@0.2.1-beta.46':
+    resolution: {integrity: sha512-7JAWYsMBMBvbaO02V+dw60wrdcytJt/as1E815Ak/m+ITR9j/XLQEnXmKoOSD7iX+z3sCu+HrjCQj6tV6ISeng==}
 
   '@stonyx/utils@0.2.3-beta.23':
     resolution: {integrity: sha512-6LRYN4FA/bYFp3r3/1dUuByC76o3QOMm1n+tot09oi0SRmYyGwgPigAZC0JX2wqkw4Fc9rYyhTLqY8o1g2QOMA==}
@@ -766,7 +766,7 @@ snapshots:
       '@sinonjs/commons': 3.0.1
       type-detect: 4.1.0
 
-  '@stonyx/cron@0.2.1-beta.45':
+  '@stonyx/cron@0.2.1-beta.46':
     dependencies:
       stonyx: 0.2.3-beta.53
 
@@ -776,7 +776,7 @@ snapshots:
     dependencies:
       chalk: 5.6.2
 
-  '@stonyx/rest-server@0.2.1-beta.45':
+  '@stonyx/rest-server@0.2.1-beta.46':
     dependencies:
       cors: 2.8.6
       express: 5.2.1
