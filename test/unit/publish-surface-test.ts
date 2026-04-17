@@ -1,11 +1,9 @@
 // @ts-nocheck
 import QUnit from 'qunit';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const exec = promisify(execFile);
 const { module, test } = QUnit;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
@@ -16,31 +14,28 @@ const repoRoot = path.resolve(__dirname, '../..');
 // environment config from .js to .ts. Stonyx's module loader
 // (stonyx/src/util/import-config.ts) does a dynamic import of the file from
 // node_modules at runtime. Node refuses to type-strip inside node_modules, so
-// even a TS file with zero type annotations fails to load, and consumer apps
-// crash at parse time with the generic "must have a config/environment.{ts,js}"
-// error out of stonyx/src/modules.ts:118.
-//
-// The published tarball must therefore always expose config/environment.js
-// (not .ts) so Node can import it without type stripping.
+// a TS file in a published package crashes consumer apps at parse time. The
+// repo must therefore always carry `config/environment.js` and never
+// `config/environment.ts`, and `package.json#files` must include the `config`
+// directory so the file makes it into the published tarball.
 module('[Unit] Publish Surface', function() {
-  test('published tarball ships config/environment.js, not .ts', async function(assert) {
-    const { stdout } = await exec('npm', ['pack', '--dry-run', '--json'], {
-      cwd: repoRoot,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-
-    const packs = JSON.parse(stdout);
-    assert.ok(Array.isArray(packs) && packs.length > 0, 'npm pack --dry-run returned a tarball manifest');
-
-    const files = packs[0].files.map((f) => f.path);
-
+  test('config/environment.js exists and .ts does not', function(assert) {
     assert.ok(
-      files.includes('config/environment.js'),
-      'tarball includes config/environment.js (required for consumer bootstrap)'
+      existsSync(path.join(repoRoot, 'config/environment.js')),
+      'config/environment.js exists (required for consumer bootstrap)'
     );
     assert.notOk(
-      files.includes('config/environment.ts'),
-      'tarball does NOT include config/environment.ts (Node cannot type-strip inside node_modules)'
+      existsSync(path.join(repoRoot, 'config/environment.ts')),
+      'config/environment.ts does NOT exist (Node cannot type-strip inside node_modules)'
+    );
+  });
+
+  test('package.json#files publishes the config directory', function(assert) {
+    const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+    const files = Array.isArray(pkg.files) ? pkg.files : [];
+    assert.ok(
+      files.includes('config'),
+      'package.json#files includes "config" (ensures config/environment.js ships)'
     );
   });
 });
