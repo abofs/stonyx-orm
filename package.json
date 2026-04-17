@@ -4,7 +4,7 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.3.2-beta.22",
+  "version": "0.3.2-beta.23",
   "description": "",
   "main": "dist/index.js",
   "type": "module",
@@ -67,7 +67,7 @@
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "@stonyx/cron": "0.2.1-beta.49",
+    "@stonyx/cron": "0.2.1-beta.50",
     "@stonyx/events": "0.1.1-beta.47",
     "stonyx": "0.2.3-beta.58"
   },
@@ -95,7 +95,7 @@
     }
   },
   "devDependencies": {
-    "@stonyx/rest-server": "0.2.1-beta.49",
+    "@stonyx/rest-server": "0.2.1-beta.50",
     "@stonyx/utils": "0.2.3-beta.23",
     "@types/node": "^25.6.0",
     "mysql2": "^3.20.0",
