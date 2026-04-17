@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  stonyx: 0.2.3-beta.53
+  stonyx: 0.2.3-beta.61
   '@stonyx/utils': 0.2.3-beta.23
   '@stonyx/logs': 1.0.1-beta.16
 
@@ -20,8 +20,8 @@ importers:
         specifier: 0.1.1-beta.47
         version: 0.1.1-beta.47
       stonyx:
-        specifier: 0.2.3-beta.53
-        version: 0.2.3-beta.53
+        specifier: 0.2.3-beta.61
+        version: 0.2.3-beta.61
     devDependencies:
       '@stonyx/rest-server':
         specifier: 0.2.1-beta.54
@@ -618,8 +618,8 @@ packages:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
 
-  stonyx@0.2.3-beta.53:
-    resolution: {integrity: sha512-lUFJck8Pr21vnKEdmEa955UUODGrVkqk+zX5q/YEueTcurBX7N+vZg4ouB3Gi1fU9gTLGdENWjcCycWCM6Byug==}
+  stonyx@0.2.3-beta.61:
+    resolution: {integrity: sha512-lBs/YAvKmyJfhnz5vFe3EyrbTqiwqmoNbZTaeub+WXnc5M8HcOrFOtyycyvW1UKDbvRrqL9GQMZV3Emw2DcrOQ==}
     hasBin: true
 
   supports-color@7.2.0:
@@ -768,7 +768,7 @@ snapshots:
 
   '@stonyx/cron@0.2.1-beta.54':
     dependencies:
-      stonyx: 0.2.3-beta.53
+      stonyx: 0.2.3-beta.61
 
   '@stonyx/events@0.1.1-beta.47': {}
 
@@ -780,7 +780,7 @@ snapshots:
     dependencies:
       cors: 2.8.6
       express: 5.2.1
-      stonyx: 0.2.3-beta.53
+      stonyx: 0.2.3-beta.61
     transitivePeerDependencies:
       - supports-color
 
@@ -1220,7 +1220,7 @@ snapshots:
 
   statuses@2.0.2: {}
 
-  stonyx@0.2.3-beta.53:
+  stonyx@0.2.3-beta.61:
     dependencies:
       '@stonyx/logs': 1.0.1-beta.16
       '@stonyx/utils': 0.2.3-beta.23
