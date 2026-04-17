@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 
 const { module, test } = QUnit;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const envPath = path.resolve(__dirname, '../../config/environment.js');
+const envPath = path.resolve(__dirname, '../../config/environment.ts');
 
 module('[Unit] Environment Config', function(hooks) {
   let savedEnv;

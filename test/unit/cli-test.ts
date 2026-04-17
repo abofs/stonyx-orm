@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 const exec = promisify(execFile);
 const { module, test } = QUnit;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const cliPath = path.resolve(__dirname, '../../src/cli.js');
+const cliPath = path.resolve(__dirname, '../../dist/cli.js');
 const tmpDir = path.join(__dirname, '..', '.tmp-cli-test');
 
 async function runCLI(args, env = {}) {
