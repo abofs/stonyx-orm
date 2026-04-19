@@ -298,3 +298,44 @@ store.remove('owner-stats', id);      // Throws: Cannot remove records from read
 ### REST API
 
 Only GET endpoints are mounted for views — no POST, PATCH, or DELETE.
+
+## 11. Field Assignment Semantics
+
+ModelProperty treats `undefined` and `null` as **distinct sentinels** by design:
+
+- `undefined` means **"not provided — leave the existing value alone"**
+- `null` means **"explicitly clear the field"**
+
+This split is what makes PATCH-style partial updates work: a payload that omits a field (`undefined` at that key) leaves the stored value untouched, while a payload that sets a field to `null` actually clears it.
+
+### The Four Assignment Paths
+
+| Path | Result |
+|------|--------|
+| `record.field = undefined` | **No-op** — existing value preserved |
+| `record.field = null` | Sets to `null` (clears the field) |
+| Update payload omits the field | Field not touched |
+| Update payload sets field to `null` | Sets to `null` |
+
+### Example
+
+```javascript
+import { createRecord, updateRecord } from '@stonyx/orm';
+
+const record = createRecord('owner', { id: 'bob', gender: 'female' }, { serialize: false });
+
+record.gender = undefined; // no-op — still 'female'
+record.gender = null;      // clears — now null
+
+// Partial update: omitted fields stay untouched
+record.gender = 'male';
+updateRecord(record, { age: 31 });  // gender still 'male'
+updateRecord(record, { sex: null }); // explicitly clears gender (mapped via serializer)
+```
+
+**Key Points:**
+- Direct assignment of `undefined` is safe — it never overwrites
+- Direct assignment of `null` is the canonical way to clear a field (no `setNull()` helper is needed)
+- Update payloads behave the same way: missing key = untouched, explicit `null` = cleared
+- The setter lives in [`src/model-property.ts`](../src/model-property.ts) (the `if (newValue === undefined) return;` no-op); the partial-update skip lives in [`src/serializer.ts`](../src/serializer.ts) (`if (data === undefined && options.update) continue;`)
+
