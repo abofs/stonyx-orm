@@ -5,7 +5,13 @@ declare module 'stonyx/config' {
 }
 
 declare module 'stonyx/log' {
-  const log: Record<string, ((...args: unknown[]) => void) | undefined>;
+  interface Log {
+    db(message: string): void;
+    error(message: string, ...args: unknown[]): void;
+    defineType(type: string, setting: string, options?: Record<string, unknown> | null): void;
+    [key: string]: ((...args: unknown[]) => void) | undefined;
+  }
+  const log: Log;
   export default log;
 }
 
