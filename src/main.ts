@@ -90,6 +90,11 @@ export default class Orm {
   }
 
   async init(): Promise<void> {
+    // Self-register so log.db works even when @stonyx/orm is in the
+    // consumer's `dependencies` (stonyx loader only merges devDependencies).
+    const { logColor = 'white', logMethod = 'db' } = config.orm;
+    log.defineType(logMethod, logColor);
+
     const { paths, restServer } = config.orm;
 
     const promises: Promise<unknown>[] = ['Model', 'Serializer', 'Transform'].map(type => {

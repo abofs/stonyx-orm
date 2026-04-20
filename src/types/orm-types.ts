@@ -55,6 +55,8 @@ export interface OrmSection {
   mysql?: OrmMysqlConfig;
   postgres?: OrmPostgresConfig;
   timescale?: OrmPostgresConfig;
+  logColor?: string;
+  logMethod?: string;
   [key: string]: unknown;
 }
 
