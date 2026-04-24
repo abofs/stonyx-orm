@@ -31,7 +31,6 @@ A lightweight ORM for the Stonyx framework that provides structured data modelin
 
 | Category | Technology | Version | Notes |
 |----------|-----------|---------|-------|
-| Language | JavaScript (ES Modules) | Node 24.13.0 | `"type": "module"` in package.json |
 | Framework | Stonyx | file ref | Core framework (peer dependency) |
 | Database (JSON) | Built-in `DB` class | N/A | File-based JSON persistence |
 | Database (SQL) | MySQL via mysql2 | ^3.0.0 | Optional peer dependency |
