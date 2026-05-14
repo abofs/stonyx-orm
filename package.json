@@ -72,11 +72,19 @@
     "stonyx": "0.2.3-beta.66"
   },
   "peerDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0",
     "@stonyx/rest-server": ">=0.2.1-beta.14",
     "mysql2": "^3.0.0",
     "pg": "^8.0.0"
   },
   "peerDependenciesMeta": {
+    "@aws-sdk/client-dynamodb": {
+      "optional": true
+    },
+    "@aws-sdk/lib-dynamodb": {
+      "optional": true
+    },
     "mysql2": {
       "optional": true
     },

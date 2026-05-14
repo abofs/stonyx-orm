@@ -48,6 +48,12 @@ export interface OrmRestServerConfig {
   metaRoute: boolean;
 }
 
+export interface OrmDynamoDBConfig {
+  region?: string;
+  endpoint?: string;
+  [key: string]: unknown;
+}
+
 export interface OrmSection {
   db: OrmDbConfig;
   paths: OrmPaths;
@@ -55,6 +61,7 @@ export interface OrmSection {
   mysql?: OrmMysqlConfig;
   postgres?: OrmPostgresConfig;
   timescale?: OrmPostgresConfig;
+  dynamodb?: OrmDynamoDBConfig;
   logColor?: string;
   logMethod?: string;
   [key: string]: unknown;

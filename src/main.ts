@@ -164,6 +164,11 @@ export default class Orm {
       this.sqlDb = new MysqlDB() as SqlDb;
       this.db = this.sqlDb;
       promises.push(this.sqlDb.init());
+    } else if (config.orm.dynamodb) {
+      const { default: DynamoDBDB } = await import('./dynamodb/dynamodb-db.js');
+      this.sqlDb = new DynamoDBDB() as SqlDb;
+      this.db = this.sqlDb;
+      promises.push(this.sqlDb.init());
     } else if (this.options.dbType !== 'none') {
       const db = new DB();
       this.db = db;
