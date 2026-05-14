@@ -1,4 +1,3 @@
-// @ts-nocheck
 import QUnit from 'qunit';
 import { getDynamoType, getDynamoKeyType } from '../../../src/dynamodb/type-map.js';
 

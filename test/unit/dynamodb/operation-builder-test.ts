@@ -1,4 +1,3 @@
-// @ts-nocheck
 import QUnit from 'qunit';
 import {
   buildPutItem,

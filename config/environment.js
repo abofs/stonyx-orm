@@ -33,6 +33,9 @@ const {
   TIMESCALE_DATABASE,
   TIMESCALE_CONNECTION_LIMIT,
   TIMESCALE_MIGRATIONS_DIR,
+  DYNAMODB_REGION,
+  DYNAMODB_ENDPOINT,
+  DYNAMODB_TABLE_PREFIX,
 } = process.env;
 
 export default {
@@ -83,6 +86,11 @@ export default {
     connectionLimit: parseInt(TIMESCALE_CONNECTION_LIMIT ?? '10'),
     migrationsDir: TIMESCALE_MIGRATIONS_DIR ?? 'migrations',
     migrationsTable: '__migrations',
+  } : undefined,
+  dynamodb: DYNAMODB_REGION ? {
+    region: DYNAMODB_REGION,
+    endpoint: DYNAMODB_ENDPOINT || undefined,
+    tablePrefix: DYNAMODB_TABLE_PREFIX || '',
   } : undefined,
   restServer: {
     enabled: ORM_USE_REST_SERVER ?? 'true', // Whether to load restServer for automatic route setup or

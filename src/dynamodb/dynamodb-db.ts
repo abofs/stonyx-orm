@@ -133,7 +133,7 @@ export interface DynamoDBDeps {
   store: typeof store;
   getPluralName: typeof getPluralName;
   config: typeof config;
-  log: Record<string, ((...args: unknown[]) => void) | undefined>;
+  log: typeof log;
   /** Injected for testing — import('@stonyx/orm') replacement */
   _importOrm?: () => Promise<OrmModule>;
   [key: string]: unknown;
@@ -182,8 +182,9 @@ export default class DynamoDBDB {
   private _gsiRegistry: GsiRegistry = new Map();
 
   constructor(deps: Partial<DynamoDBDeps> = {}) {
-    if (DynamoDBDB.instance) return DynamoDBDB.instance;
-    DynamoDBDB.instance = this;
+    const Ctor = this.constructor as typeof DynamoDBDB;
+    if (Ctor.instance) return Ctor.instance;
+    Ctor.instance = this;
 
     this.deps = { ...defaultDeps, ...deps } as DynamoDBDeps;
     this.client = null;
@@ -744,7 +745,7 @@ export default class DynamoDBDB {
   // Private — store eviction
   // -------------------------------------------------------------------------
 
-  _evictIfNotMemory(modelName: string, record: OrmRecord): void {
+  private _evictIfNotMemory(modelName: string, record: OrmRecord): void {
     const storeRef = this.deps.store as {
       _memoryResolver?: (name: string) => boolean;
       get?: (name: string) => Map<unknown, unknown> | undefined;

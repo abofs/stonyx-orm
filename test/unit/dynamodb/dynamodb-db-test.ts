@@ -1,97 +1,14 @@
-// @ts-nocheck
 import QUnit from 'qunit';
 import sinon from 'sinon';
 import DynamoDBDB from '../../../src/dynamodb/dynamodb-db.js';
+import {
+  createMockDeps,
+  resetInstance,
+  buildDb,
+  makeCommandStub,
+} from '../../helpers/dynamodb-test-helper.js';
 
 const { module, test } = QUnit;
-
-/** Command stub factory — returns a class whose instances can be passed to send(). */
-function makeCommandStub(name) {
-  function Cmd(params) { this.params = params; }
-  Cmd.displayName = name;
-  return Cmd;
-}
-
-/** Build a stub loadDocClientCommands dep that resolves to no-op command stubs. */
-function makeDocClientCommands() {
-  return {
-    PutCommand: makeCommandStub('PutCommand'),
-    GetCommand: makeCommandStub('GetCommand'),
-    UpdateCommand: makeCommandStub('UpdateCommand'),
-    DeleteCommand: makeCommandStub('DeleteCommand'),
-    ScanCommand: makeCommandStub('ScanCommand'),
-    QueryCommand: makeCommandStub('QueryCommand'),
-  };
-}
-
-function createMockDeps(overrides = {}) {
-  const docCommands = makeDocClientCommands();
-
-  return {
-    createDocumentClient: sinon.stub().resolves({ send: sinon.stub().resolves({}) }),
-    destroyDocumentClient: sinon.stub().returns(null),
-    loadDocClientCommands: sinon.stub().resolves(docCommands),
-    loadTableCommands: sinon.stub().resolves({
-      DynamoDBClient: function() { this.send = sinon.stub().resolves({ Table: { TableStatus: 'ACTIVE', GlobalSecondaryIndexes: [] } }); },
-      DescribeTableCommand: makeCommandStub('DescribeTableCommand'),
-      CreateTableCommand: makeCommandStub('CreateTableCommand'),
-      UpdateTableCommand: makeCommandStub('UpdateTableCommand'),
-    }),
-    buildPutItem: sinon.stub().returns({ TableName: 'test', Item: {} }),
-    buildGetItem: sinon.stub().returns({ TableName: 'test', Key: {} }),
-    buildUpdateItem: sinon.stub().returns({ TableName: 'test', Key: {}, UpdateExpression: 'SET #x = :x', ExpressionAttributeNames: {}, ExpressionAttributeValues: {}, ReturnValues: 'NONE' }),
-    buildDeleteItem: sinon.stub().returns({ TableName: 'test', Key: {} }),
-    buildScan: sinon.stub().returns({ TableName: 'test' }),
-    buildQuery: sinon.stub().returns({ TableName: 'test', IndexName: 'idx', KeyConditionExpression: '#id = :id', ExpressionAttributeNames: {}, ExpressionAttributeValues: {} }),
-    introspectModels: sinon.stub().returns({}),
-    getTopologicalOrder: sinon.stub().returns([]),
-    getDynamoKeyType: sinon.stub().returns('S'),
-    createRecord: sinon.stub().callsFake((name, data) => ({
-      id: data.id,
-      __model: { __name: name },
-      __data: { ...data },
-      __relationships: {},
-    })),
-    store: { get: sinon.stub(), _memoryResolver: null },
-    getPluralName: sinon.stub().callsFake(name => `${name}s`),
-    config: {
-      rootPath: '/app',
-      orm: {
-        dynamodb: { region: 'us-east-1' }
-      }
-    },
-    log: {
-      db: sinon.stub(),
-      warn: sinon.stub(),
-    },
-    _importOrm: sinon.stub().resolves({
-      default: {
-        instance: {
-          getRecordClasses(_name) {
-            return { modelClass: { memory: true } };
-          },
-          isView() { return false; }
-        }
-      }
-    }),
-    ...overrides,
-  };
-}
-
-// Reset singleton between tests
-function resetInstance() {
-  DynamoDBDB.instance = undefined;
-}
-
-// Build a DynamoDBDB with a pre-wired mock client
-function buildDb(deps) {
-  const db = new DynamoDBDB(deps);
-  const mockClient = {
-    send: sinon.stub().resolves({ Items: [], LastEvaluatedKey: undefined }),
-  };
-  db.client = mockClient;
-  return { db, mockClient };
-}
 
 module('[Unit] DynamoDBDB — constructor + singleton', function(hooks) {
   hooks.beforeEach(resetInstance);
@@ -105,12 +22,21 @@ module('[Unit] DynamoDBDB — constructor + singleton', function(hooks) {
   });
 
   test('throws when dynamodb config missing', function(assert) {
-    const deps = createMockDeps({ config: { rootPath: '/app', orm: {} } });
+    const deps = createMockDeps({
+      config: { rootPath: '/app', orm: {} } as typeof deps.config,
+    });
     assert.throws(
       () => new DynamoDBDB(deps),
       /DynamoDB configuration/,
       'error thrown when dynamodb not configured'
     );
+  });
+
+  test('uses this.constructor for singleton key (subclass-safe)', function(assert) {
+    const deps = createMockDeps();
+    const db = new DynamoDBDB(deps);
+    // Singleton should be stored on DynamoDBDB, not on a parent class static
+    assert.strictEqual(DynamoDBDB.instance, db, 'instance stored on DynamoDBDB');
   });
 });
 
@@ -163,6 +89,287 @@ module('[Unit] DynamoDBDB.shutdown', function(hooks) {
   });
 });
 
+module('[Unit] DynamoDBDB.persist — create', function(hooks) {
+  hooks.beforeEach(resetInstance);
+  hooks.afterEach(() => { resetInstance(); sinon.restore(); });
+
+  test('calls PutItem with attribute_not_exists(id) condition', async function(assert) {
+    const recordId = 'r1';
+    const record = { id: recordId, __data: { id: recordId, name: 'Alice' }, __relationships: {} };
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+      store: {
+        get: sinon.stub().returns(record),
+        _memoryResolver: null,
+      } as unknown as typeof deps.store,
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({});
+
+    await db.persist('create', 'user', { rawData: {} }, { data: { id: recordId } });
+
+    assert.ok(deps.buildPutItem.calledOnce, 'buildPutItem called');
+    const putArgs = deps.buildPutItem.firstCall.args;
+    assert.strictEqual(putArgs[0], 'users', 'correct table name');
+    assert.strictEqual(putArgs[2], 'attribute_not_exists(id)', 'condition expression set');
+    assert.ok(mockClient.send.calledOnce, 'send called once (PutCommand)');
+  });
+
+  test('generates ULID for numeric-ID model with __pendingSqlId', async function(assert) {
+    const recordId = 99;
+    const record = {
+      id: recordId,
+      __data: { id: recordId, name: 'Bob', __pendingSqlId: true },
+      __relationships: {},
+    };
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'number' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+      store: {
+        get: sinon.stub().returns(record),
+        _memoryResolver: null,
+      } as unknown as typeof deps.store,
+    });
+
+    // Store needs .get(modelName) -> Map for the re-key step
+    const modelStoreMap = new Map<unknown, unknown>();
+    modelStoreMap.set(recordId, record);
+    (deps.store as unknown as { get: sinon.SinonStub }).get
+      .withArgs('user', recordId).returns(record)
+      .withArgs('user').returns(modelStoreMap);
+
+    const response = { data: { id: recordId } };
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({});
+
+    await db.persist('create', 'user', { rawData: { __pendingSqlId: true } }, response);
+
+    assert.ok(deps.buildPutItem.calledOnce, 'buildPutItem called');
+    const item = deps.buildPutItem.firstCall.args[1];
+    // ULID is a 26-char Crockford base32 string
+    assert.ok(typeof item.id === 'string' && item.id.length === 26, 'id replaced with ULID string');
+    assert.ok(typeof response.data.id === 'string', 'response.data.id updated to ULID');
+  });
+});
+
+module('[Unit] DynamoDBDB.persist — update', function(hooks) {
+  hooks.beforeEach(resetInstance);
+  hooks.afterEach(() => { resetInstance(); sinon.restore(); });
+
+  test('calls UpdateItem with SET expression from diff', async function(assert) {
+    const record = {
+      id: 'r1',
+      __data: { id: 'r1', name: 'Alice Updated' },
+      __relationships: {},
+    };
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({});
+
+    await db.persist('update', 'user', {
+      record: record as unknown as import('../../../src/types/orm-types.js').OrmRecord,
+      oldState: { name: 'Alice' },
+    }, {});
+
+    assert.ok(deps.buildUpdateItem.calledOnce, 'buildUpdateItem called');
+    const [tableName, key, changedData] = deps.buildUpdateItem.firstCall.args;
+    assert.strictEqual(tableName, 'users', 'correct table');
+    assert.deepEqual(key, { id: 'r1' }, 'correct key');
+    assert.deepEqual(changedData, { name: 'Alice Updated' }, 'diff contains only changed columns');
+    assert.ok(mockClient.send.calledOnce, 'UpdateCommand sent');
+  });
+
+  test('skips UpdateItem when no columns changed', async function(assert) {
+    const record = {
+      id: 'r1',
+      __data: { id: 'r1', name: 'Alice' },
+      __relationships: {},
+    };
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+
+    await db.persist('update', 'user', {
+      record: record as unknown as import('../../../src/types/orm-types.js').OrmRecord,
+      oldState: { name: 'Alice' },  // same — no diff
+    }, {});
+
+    assert.ok(mockClient.send.notCalled, 'no DynamoDB call when nothing changed');
+  });
+});
+
+module('[Unit] DynamoDBDB.persist — delete', function(hooks) {
+  hooks.beforeEach(resetInstance);
+  hooks.afterEach(() => { resetInstance(); sinon.restore(); });
+
+  test('calls DeleteItem with correct key', async function(assert) {
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: {}, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({});
+
+    await db.persist('delete', 'user', { recordId: 'r1' }, {});
+
+    assert.ok(deps.buildDeleteItem.calledOnce, 'buildDeleteItem called');
+    const [tableName, key] = deps.buildDeleteItem.firstCall.args;
+    assert.strictEqual(tableName, 'users', 'correct table');
+    assert.deepEqual(key, { id: 'r1' }, 'correct key');
+    assert.ok(mockClient.send.calledOnce, 'DeleteCommand sent');
+  });
+
+  test('skips DeleteItem when recordId is null', async function(assert) {
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: {}, foreignKeys: {}, idType: 'string' }
+      }),
+    });
+    const { db, mockClient } = buildDb(deps);
+
+    await db.persist('delete', 'user', { recordId: null }, {});
+
+    assert.ok(mockClient.send.notCalled, 'no DynamoDB call when recordId is null');
+  });
+});
+
+module('[Unit] DynamoDBDB.startup', function(hooks) {
+  hooks.beforeEach(resetInstance);
+  hooks.afterEach(() => { resetInstance(); sinon.restore(); });
+
+  test('calls DescribeTable and skips CreateTable when table already ACTIVE', async function(assert) {
+    const rawClientSend = sinon.stub().resolves({
+      Table: { TableStatus: 'ACTIVE', GlobalSecondaryIndexes: [] }
+    });
+
+    const DescribeTableCommand = makeCommandStub('DescribeTableCommand');
+    const CreateTableCommand = makeCommandStub('CreateTableCommand');
+    const UpdateTableCommand = makeCommandStub('UpdateTableCommand');
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+      loadTableCommands: sinon.stub().resolves({
+        DynamoDBClient: function(this: { send: sinon.SinonStub }) { this.send = rawClientSend; },
+        DescribeTableCommand,
+        CreateTableCommand,
+        UpdateTableCommand,
+      }),
+    });
+
+    const { db } = buildDb(deps);
+    await db.startup();
+
+    assert.ok(rawClientSend.calledOnce, 'DescribeTable called once');
+    const sentCmd = rawClientSend.firstCall.args[0];
+    assert.ok(sentCmd instanceof DescribeTableCommand, 'DescribeTableCommand sent');
+    assert.ok(!rawClientSend.args.some((a: unknown[]) => a[0] instanceof CreateTableCommand), 'CreateTable NOT called');
+  });
+
+  test('calls CreateTable when DescribeTable throws ResourceNotFoundException', async function(assert) {
+    const DescribeTableCommand = makeCommandStub('DescribeTableCommand');
+    const CreateTableCommand = makeCommandStub('CreateTableCommand');
+    const UpdateTableCommand = makeCommandStub('UpdateTableCommand');
+
+    const rawClientSend = sinon.stub();
+    // Call 0: DescribeTable → ResourceNotFoundException (table missing)
+    // Call 1: CreateTable → resolves
+    // Call 2: _waitForTableActive polls DescribeTable → ACTIVE
+    rawClientSend.onCall(0).rejects(Object.assign(new Error('No such table'), { name: 'ResourceNotFoundException' }));
+    rawClientSend.onCall(1).resolves({});  // CreateTable
+    rawClientSend.onCall(2).resolves({ Table: { TableStatus: 'ACTIVE' } });  // poll
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+      loadTableCommands: sinon.stub().resolves({
+        DynamoDBClient: function(this: { send: sinon.SinonStub }) { this.send = rawClientSend; },
+        DescribeTableCommand,
+        CreateTableCommand,
+        UpdateTableCommand,
+      }),
+    });
+
+    const { db } = buildDb(deps);
+    await db.startup();
+
+    // 1st call = DescribeTable (throws), 2nd call = CreateTable, 3rd call = DescribeTable (ACTIVE poll)
+    assert.ok(rawClientSend.callCount >= 2, 'at least 2 calls made');
+    assert.ok(rawClientSend.args[1][0] instanceof CreateTableCommand, 'CreateTableCommand sent on 2nd call');
+  });
+
+  test('calls UpdateTable for missing GSIs on existing table', async function(assert) {
+    const DescribeTableCommand = makeCommandStub('DescribeTableCommand');
+    const CreateTableCommand = makeCommandStub('CreateTableCommand');
+    const UpdateTableCommand = makeCommandStub('UpdateTableCommand');
+
+    const rawClientSend = sinon.stub();
+    // DescribeTable: table exists but no GSIs
+    rawClientSend.onFirstCall().resolves({ Table: { TableStatus: 'ACTIVE', GlobalSecondaryIndexes: [] } });
+    // Poll after UpdateTable
+    rawClientSend.onSecondCall().resolves({ Table: { TableStatus: 'ACTIVE' } });
+    // UpdateTable itself
+    rawClientSend.onThirdCall().resolves({});
+
+    // Reorder stubs: UpdateTable is called at index 1, DescribeTable poll at index 2
+    rawClientSend.reset();
+    rawClientSend.onCall(0).resolves({ Table: { TableStatus: 'ACTIVE', GlobalSecondaryIndexes: [] } });
+    rawClientSend.onCall(1).resolves({});  // UpdateTable
+    rawClientSend.onCall(2).resolves({ Table: { TableStatus: 'ACTIVE' } });  // poll
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'comment': {
+          table: 'comments',
+          columns: { body: 'S' },
+          foreignKeys: { post_id: { references: 'posts', column: 'id' } },
+          idType: 'string',
+        }
+      }),
+      getPluralName: sinon.stub().callsFake((name: string) => `${name}s`),
+      loadTableCommands: sinon.stub().resolves({
+        DynamoDBClient: function(this: { send: sinon.SinonStub }) { this.send = rawClientSend; },
+        DescribeTableCommand,
+        CreateTableCommand,
+        UpdateTableCommand,
+      }),
+    });
+
+    const { db } = buildDb(deps);
+    await db.startup();
+
+    assert.ok(rawClientSend.args.some((a: unknown[]) => a[0] instanceof UpdateTableCommand), 'UpdateTableCommand sent for missing GSI');
+  });
+});
+
 module('[Unit] DynamoDBDB.findRecord', function(hooks) {
   hooks.beforeEach(resetInstance);
   hooks.afterEach(() => { resetInstance(); sinon.restore(); });
@@ -182,7 +389,7 @@ module('[Unit] DynamoDBDB.findRecord', function(hooks) {
 
     assert.ok(deps.buildGetItem.calledOnce, 'buildGetItem called');
     assert.ok(deps.createRecord.calledOnce, 'createRecord called');
-    assert.strictEqual(record.id, 'abc', 'record has correct id');
+    assert.strictEqual(record!.id, 'abc', 'record has correct id');
   });
 
   test('returns undefined when no item found', async function(assert) {
@@ -246,8 +453,8 @@ module('[Unit] DynamoDBDB.findRecord', function(hooks) {
     await db.findRecord('comment', 'c1');
 
     const passedData = deps.createRecord.firstCall.args[1];
-    assert.strictEqual(passedData.post, 'p1', 'FK column remapped to relationship key');
-    assert.strictEqual(passedData.post_id, undefined, 'original FK column removed');
+    assert.strictEqual(passedData['post'], 'p1', 'FK column remapped to relationship key');
+    assert.strictEqual(passedData['post_id'], undefined, 'original FK column removed');
   });
 });
 
@@ -331,7 +538,7 @@ module('[Unit] DynamoDBDB.findAll', function(hooks) {
 
     const records = await db.findAll('alert', { status: 'active' });
 
-    assert.ok(deps.log.warn.calledOnce, 'warning logged for unindexed scan');
+    assert.ok((deps.log as unknown as { warn: sinon.SinonStub }).warn.calledOnce, 'warning logged for unindexed scan');
     assert.ok(deps.buildScan.calledOnce, 'buildScan called (not buildQuery)');
     assert.strictEqual(records.length, 1);
   });
@@ -351,14 +558,13 @@ module('[Unit] DynamoDBDB.loadMemoryRecords', function(hooks) {
       _importOrm: sinon.stub().resolves({
         default: {
           instance: {
-            getRecordClasses(name) {
-              // session=true (memory), alert=false (on-demand)
+            getRecordClasses(name: string) {
               return { modelClass: { memory: name === 'session' } };
             }
           }
         }
       }),
-      getPluralName: sinon.stub().callsFake(name => `${name}s`),
+      getPluralName: sinon.stub().callsFake((name: string) => `${name}s`),
     });
 
     const { db, mockClient } = buildDb(deps);
@@ -366,9 +572,11 @@ module('[Unit] DynamoDBDB.loadMemoryRecords', function(hooks) {
 
     await db.loadMemoryRecords();
 
-    // buildScan should only be called once (for 'session'), not for 'alert'
     assert.strictEqual(deps.buildScan.callCount, 1, 'Scan only called for memory:true model');
-    assert.ok(deps.log.db.calledWith(`Skipping memory load for 'alert' (memory: false)`), 'skip logged');
+    assert.ok(
+      (deps.log as unknown as { db: sinon.SinonStub }).db.calledWith(`Skipping memory load for 'alert' (memory: false)`),
+      'skip logged'
+    );
   });
 
   test('handles ResourceNotFoundException gracefully (table not yet created)', async function(assert) {
@@ -386,7 +594,7 @@ module('[Unit] DynamoDBDB.loadMemoryRecords', function(hooks) {
 
     await db.loadMemoryRecords(); // should not throw
 
-    assert.ok(deps.log.db.called, 'skip message logged');
+    assert.ok((deps.log as unknown as { db: sinon.SinonStub }).db.called, 'skip message logged');
     assert.ok(deps.createRecord.notCalled, 'createRecord not called');
   });
 });
@@ -402,11 +610,12 @@ module('[Unit] DynamoDBDB._evictIfNotMemory', function(hooks) {
     const deps = createMockDeps({
       store: {
         get: sinon.stub().returns(modelStore),
-        _memoryResolver: name => name !== 'alert',
-      },
+        _memoryResolver: (name: string) => name !== 'alert',
+      } as unknown as typeof deps.store,
     });
 
     const { db } = buildDb(deps);
+    // @ts-expect-error — accessing private method for test coverage
     db._evictIfNotMemory('alert', { id: 'abc' });
 
     assert.notOk(modelStore.has('abc'), 'record evicted from store');
@@ -420,10 +629,11 @@ module('[Unit] DynamoDBDB._evictIfNotMemory', function(hooks) {
       store: {
         get: sinon.stub().returns(modelStore),
         _memoryResolver: () => true,
-      },
+      } as unknown as typeof deps.store,
     });
 
     const { db } = buildDb(deps);
+    // @ts-expect-error — accessing private method for test coverage
     db._evictIfNotMemory('session', { id: 's1' });
 
     assert.ok(modelStore.has('s1'), 'record stays in store');
@@ -437,10 +647,11 @@ module('[Unit] DynamoDBDB._evictIfNotMemory', function(hooks) {
       store: {
         get: sinon.stub().returns(modelStore),
         _memoryResolver: null,
-      },
+      } as unknown as typeof deps.store,
     });
 
     const { db } = buildDb(deps);
+    // @ts-expect-error — accessing private method for test coverage
     db._evictIfNotMemory('alert', { id: 1 });
 
     assert.ok(modelStore.has(1), 'record untouched without resolver');
