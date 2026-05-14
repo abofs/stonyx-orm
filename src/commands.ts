@@ -28,6 +28,13 @@ const commands: Record<string, Command> = {
     description: 'Generate a MySQL migration from current model schemas',
     bootstrap: true,
     run: async (args) => {
+      const config = (await import('stonyx/config')).default;
+
+      if (config.orm.dynamodb) {
+        console.log('DynamoDB does not use file-based migrations. Use db:sync to provision tables.');
+        return;
+      }
+
       const description = args?.join(' ') || 'migration';
       const { generateMigration } = await import('./mysql/migration-generator.js');
       const result = await generateMigration(description);
@@ -39,12 +46,36 @@ const commands: Record<string, Command> = {
       }
     }
   },
+  'db:sync': {
+    description: 'Provision DynamoDB tables and GSIs from current model schemas',
+    bootstrap: true,
+    run: async () => {
+      const config = (await import('stonyx/config')).default;
+
+      if (!config.orm.dynamodb) {
+        console.error('DynamoDB is not configured. Set DYNAMODB_REGION (and optionally DYNAMODB_ENDPOINT) to enable DynamoDB mode.');
+        process.exit(1);
+      }
+
+      const { default: DynamoDBDB } = await import('./dynamodb/dynamodb-db.js');
+      const db = new DynamoDBDB();
+      await db.init();
+      await db.startup();
+      await db.shutdown();
+      console.log('DynamoDB tables synced successfully.');
+    }
+  },
   'db:migrate': {
     description: 'Apply pending MySQL migrations',
     bootstrap: true,
     run: async () => {
       const config = (await import('stonyx/config')).default;
       const mysqlConfig = config.orm.mysql;
+
+      if (config.orm.dynamodb) {
+        console.log('DynamoDB does not use file-based migrations. Use db:sync to provision tables.');
+        return;
+      }
 
       if (!mysqlConfig) {
         console.error('MySQL is not configured. Set MYSQL_HOST to enable MySQL mode.');
@@ -92,6 +123,12 @@ const commands: Record<string, Command> = {
     bootstrap: true,
     run: async () => {
       const config = (await import('stonyx/config')).default;
+
+      if (config.orm.dynamodb) {
+        console.log('DynamoDB does not support migration rollback. Manage table changes via the AWS console or db:sync.');
+        return;
+      }
+
       const mysqlConfig = config.orm.mysql;
 
       if (!mysqlConfig) {
@@ -138,6 +175,12 @@ const commands: Record<string, Command> = {
     bootstrap: true,
     run: async () => {
       const config = (await import('stonyx/config')).default;
+
+      if (config.orm.dynamodb) {
+        console.log('DynamoDB does not use file-based migrations. Use db:sync to provision tables.');
+        return;
+      }
+
       const mysqlConfig = config.orm.mysql;
 
       if (!mysqlConfig) {
