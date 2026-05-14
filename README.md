@@ -100,7 +100,7 @@ export default {
       migrationsTable: '__migrations',
     } : undefined,
     dynamodb: DYNAMODB_REGION ? {
-      region: DYNAMODB_REGION ?? 'us-east-1',
+      region: DYNAMODB_REGION,
       endpoint: DYNAMODB_ENDPOINT,          // optional, for DynamoDB Local
       tablePrefix: DYNAMODB_TABLE_PREFIX,   // optional table name prefix
     } : undefined,
