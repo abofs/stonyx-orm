@@ -13,7 +13,7 @@ A lightweight ORM for Stonyx projects, featuring model definitions, serializers,
 - **Models**: Define attributes with type-safe proxies (`attr`) and relationships (`hasMany`, `belongsTo`).
 - **Serializers**: Map raw data into model-friendly structures, including nested properties.
 - **Transforms**: Apply custom transformations on data values automatically.
-- **DB Integration**: Optional file-based persistence with auto-save support, or MySQL for production workloads.
+- **DB Integration**: Optional file-based persistence with auto-save support, or MySQL/PostgreSQL/TimescaleDB/DynamoDB for production workloads.
 - **REST Server Integration**: Automatic route setup with customizable access control.
 - **Lifecycle Hooks**: Middleware-based before/after hooks for validation, authorization, side effects, and auditing.
 
@@ -65,13 +65,16 @@ const {
   MYSQL_DATABASE,
   MYSQL_CONNECTION_LIMIT,
   MYSQL_MIGRATIONS_DIR,
+  DYNAMODB_REGION,
+  DYNAMODB_ENDPOINT,
+  DYNAMODB_TABLE_PREFIX,
 } = process.env;
 
 export default {
   orm: {
     logColor: 'white',
     logMethod: 'db',
-    
+
     db: {
       autosave: DB_AUTO_SAVE ?? 'false',
       file: DB_FILE ?? 'db.json',
@@ -95,6 +98,11 @@ export default {
       connectionLimit: parseInt(MYSQL_CONNECTION_LIMIT ?? '10'),
       migrationsDir: MYSQL_MIGRATIONS_DIR ?? 'migrations',
       migrationsTable: '__migrations',
+    } : undefined,
+    dynamodb: DYNAMODB_REGION ? {
+      region: DYNAMODB_REGION ?? 'us-east-1',
+      endpoint: DYNAMODB_ENDPOINT,          // optional, for DynamoDB Local
+      tablePrefix: DYNAMODB_TABLE_PREFIX,   // optional table name prefix
     } : undefined,
     restServer: {
       enabled: ORM_USE_REST_SERVER ?? 'true',
@@ -243,6 +251,31 @@ Set the `MYSQL_HOST` environment variable to enable MySQL persistence. The ORM l
 | `stonyx db:migrate` | Apply pending migrations |
 | `stonyx db:migrate:rollback` | Rollback the most recent migration |
 | `stonyx db:migrate:status` | Show migration status |
+| `stonyx db:sync` | Sync DynamoDB table definitions to match current model schemas |
+
+### DynamoDB Mode
+
+Set the `DYNAMODB_REGION` environment variable to enable DynamoDB persistence. Tables are created with PAY_PER_REQUEST (on-demand) billing. Global Secondary Indexes (GSIs) are auto-provisioned at startup based on model `belongsTo` relationships — each FK column gets a GSI. `findAll()` with conditions routes to a GSI Query when the condition key matches a GSI partition key; non-indexed attribute conditions fall back to Scan + FilterExpression (expensive for large tables). ULID generation replaces auto-increment for numeric-ID models.
+
+```javascript
+dynamodb: {
+  region: 'us-east-1',
+  endpoint: 'http://localhost:8000', // optional, for DynamoDB Local
+  tablePrefix: 'myapp-',            // optional table name prefix
+}
+```
+
+Environment variables:
+
+* `DYNAMODB_REGION`: AWS region for DynamoDB (e.g., `'us-east-1'`).
+* `DYNAMODB_ENDPOINT`: Optional custom endpoint URL, useful for DynamoDB Local during development.
+* `DYNAMODB_TABLE_PREFIX`: Optional prefix prepended to all table names (e.g., `'myapp-'` yields `'myapp-animals'`).
+
+**Peer dependencies:** `@aws-sdk/client-dynamodb` and `@aws-sdk/lib-dynamodb` must be installed when using the DynamoDB driver. The AWS SDK is dynamically imported and only loaded when the DynamoDB driver is selected.
+
+```bash
+npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb
+```
 
 ### Running MySQL Tests
 

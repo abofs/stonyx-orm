@@ -7,7 +7,7 @@
 
 **Repo:** `abofs/stonyx-orm`
 **Framework:** Data persistence layer for the Stonyx ecosystem
-**Domain:** ORM with model definitions, relationships, serializers, hooks, aggregate helpers, views, and multi-backend persistence
+**Domain:** ORM with model definitions, relationships, serializers, hooks, aggregate helpers, views, and multi-backend persistence (JSON file, MySQL, PostgreSQL, TimescaleDB, DynamoDB)
 
 ## Tech Stack
 
@@ -37,3 +37,8 @@
 - The proxy-based record access means `record.age` and `record.__data.age` can diverge if transforms are involved — test assertions should always use the proxy interface
 - View resolver tests need both source models populated in the store and view definitions registered — views are read-only, so `store.remove()` on a view model name should throw
 - Auto-save tests (`DB_AUTO_SAVE: 'onUpdate'`) need to verify that file writes happen after each mutation and that `DB_AUTO_SAVE: 'true'` uses the cron interval instead
+- DynamoDB unit tests live under `test/unit/dynamodb/` (4 files: `dynamodb-db-test`, `gsi-routing-test`, `operation-builder-test`, `type-map-test`)
+- Shared DynamoDB test helper is at `test/helpers/dynamodb-test-helper.ts`; exports `makeCommandStub`, `makeDocClientCommands`, `createMockDeps`, `resetInstance`, and `buildDb`
+- The `DynamoDBDeps` mock-injection pattern makes all AWS SDK commands injectable via the `deps` argument — tests never import the real AWS SDK, keeping them fully offline
+- Must call `DynamoDBDB.instance = undefined` in `afterEach` to reset the singleton between tests; skipping this causes state bleed identical to the `Orm.instance` / `Store.instance` issue
+- Integration tests against DynamoDB Local are not yet implemented — the unit test suite (with mocked deps) is the only current coverage for the DynamoDB driver
