@@ -7,7 +7,7 @@
 
 **Repo:** `abofs/stonyx-orm`
 **Framework:** Data persistence layer for the Stonyx ecosystem
-**Domain:** ORM with model definitions, relationships (hasMany/belongsTo), serializers, transforms, lifecycle hooks, aggregate helpers, views, and multi-backend persistence (JSON file, MySQL, PostgreSQL, TimescaleDB)
+**Domain:** ORM with model definitions, relationships (hasMany/belongsTo), serializers, transforms, lifecycle hooks, aggregate helpers, views, and multi-backend persistence (JSON file, MySQL, PostgreSQL, TimescaleDB, DynamoDB)
 
 ## Tech Stack
 
@@ -16,7 +16,7 @@
 | Language | TypeScript (ES Modules) |
 | Runtime | Node.js |
 | Framework | Stonyx (auto-discovered as `@stonyx/orm` module) |
-| Database Adapters | JSON file (single/directory mode), MySQL (`mysql2`), PostgreSQL (`pg`), TimescaleDB |
+| Database Adapters | JSON file (single/directory mode), MySQL (`mysql2`), PostgreSQL (`pg`), TimescaleDB, DynamoDB (`@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb`) |
 | Events | `@stonyx/events` (pub/sub for hook system) |
 | Scheduling | `@stonyx/cron` (auto-save intervals) |
 | REST Integration | `@stonyx/rest-server` (optional peer dependency for auto-route registration) |
@@ -41,3 +41,8 @@
 - `oldState` in hooks is captured via `JSON.parse(JSON.stringify())` deep copy before the operation — this means non-serializable values (functions, circular refs) are silently dropped
 - The module waits for `@stonyx/rest-server` via `waitForModule('rest-server')` before mounting routes — if rest-server is not in `devDependencies`, the ORM still works but REST integration is silently skipped
 - PostgreSQL and TimescaleDB adapters share connection and migration infrastructure but TimescaleDB adds hypertable creation and time-partitioned query building
+- DynamoDB driver uses PAY_PER_REQUEST (on-demand) billing mode for all table creation — no capacity planning required
+- GSIs are auto-provisioned at `startup()` based on model `belongsTo` relationships — each FK column gets a dedicated GSI on the owning table
+- `findAll()` with conditions routes to a GSI Query when the condition key matches a GSI partition key; falls back to Scan + FilterExpression for non-indexed attributes (expensive for large tables)
+- ULID generation replaces auto-increment for numeric-ID models when using the DynamoDB driver
+- AWS SDK (`@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb`) is dynamically imported — only loaded when the DynamoDB driver is selected; no overhead for other backends
