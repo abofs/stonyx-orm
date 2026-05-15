@@ -17,27 +17,27 @@ export type DocumentClient = {
   send(command: unknown): Promise<unknown>;
 };
 
-export type DocumentClientConstructor = new (options: { client: unknown }) => DocumentClient;
-export type DynamoDBClientConstructor = new (options: unknown) => unknown;
+export type DynamoDBClientConstructor = new (options: unknown) => { config: unknown };
+export type DocumentClientFromFn = { from(client: unknown): DocumentClient };
 
 /**
  * Create a DynamoDBDocumentClient from the given config.
  * Uses dynamic import so @aws-sdk/* are optional peer deps.
  */
 export async function createDocumentClient(dbConfig: DynamoDBConfig): Promise<DocumentClient> {
-  const { DynamoDB } = await import('@aws-sdk/client-dynamodb' as string) as {
-    DynamoDB: DynamoDBClientConstructor;
+  const { DynamoDBClient } = await import('@aws-sdk/client-dynamodb' as string) as {
+    DynamoDBClient: DynamoDBClientConstructor;
   };
-  const { DynamoDBDocument } = await import('@aws-sdk/lib-dynamodb' as string) as {
-    DynamoDBDocument: DocumentClientConstructor;
+  const { DynamoDBDocumentClient } = await import('@aws-sdk/lib-dynamodb' as string) as {
+    DynamoDBDocumentClient: DocumentClientFromFn;
   };
 
   const clientOptions: Record<string, unknown> = {};
   if (dbConfig.region) clientOptions.region = dbConfig.region;
   if (dbConfig.endpoint) clientOptions.endpoint = dbConfig.endpoint;
 
-  const rawClient = new DynamoDB(clientOptions);
-  return new DynamoDBDocument({ client: rawClient });
+  const rawClient = new DynamoDBClient(clientOptions);
+  return DynamoDBDocumentClient.from(rawClient);
 }
 
 /**
