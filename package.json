@@ -41,7 +41,7 @@
     "build": "tsc",
     "build:test": "tsc -p tsconfig.test.json",
     "test": "pnpm build && NODE_ENV=test node --import tsx/esm --import ./test/setup.ts node_modules/qunit/bin/qunit.js 'test/**/*-test.ts'",
-    "test:dynamodb": "pnpm build && NODE_ENV=test node --import tsx/esm --import ./test/setup.ts node_modules/qunit/bin/qunit.js 'test/integration/dynamodb/**/*-test.ts'",
+    "test:dynamodb": "pnpm build && node --import tsx/esm --import ./test/integration/dynamodb/setup.ts node_modules/qunit/bin/qunit.js 'test/integration/dynamodb/**/*-test.ts'",
     "prepublishOnly": "npm test"
   },
   "repository": {
