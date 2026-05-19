@@ -8,6 +8,7 @@ interface PgConfig {
   password: string;
   database: string;
   connectionLimit: number;
+  [key: string]: unknown;
 }
 
 let pool: PgPool | null = null;
@@ -20,15 +21,18 @@ export async function getPool(pgConfig: PgConfig, extensions: string[] = ['vecto
 
   const { default: pg } = await import('pg');
 
+  const { host, port, user, password, database, connectionLimit, migrationsDir, migrationsTable, ...poolOpts } = pgConfig;
+
   pool = new pg.Pool({
-    host: pgConfig.host,
-    port: pgConfig.port,
-    user: pgConfig.user,
-    password: pgConfig.password,
-    database: pgConfig.database,
-    max: pgConfig.connectionLimit,
+    host,
+    port,
+    user,
+    password,
+    database,
+    max: connectionLimit,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
+    ...poolOpts,
   });
 
   // Enable requested PostgreSQL extensions
