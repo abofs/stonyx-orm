@@ -94,8 +94,33 @@ export default class Serializer {
         const handlerOptions = { ...options, _relationshipKey: key };
         const childRecord = handler(record, data, handlerOptions);
 
-        rec[key] = childRecord;
-        relatedRecords[key] = childRecord;
+        // hasMany relationships use a getter so format()/toJSON() always read
+        // the live registry array instead of a stale snapshot captured at
+        // serialization time.  This is critical when child records are created
+        // in a later async frame — the belongsTo inverse wiring pushes into
+        // the shared registry array, and the getter ensures the parent sees it.
+        const isHasMany = (handler as { __relationshipType?: string }).__relationshipType === 'hasMany';
+
+        if (isHasMany) {
+          // `childRecord` IS the shared registry array — define a getter that
+          // always dereferences through the same array reference.
+          const registryArray = childRecord as unknown[];
+          Object.defineProperty(rec, key, {
+            enumerable: true,
+            configurable: true,
+            get: () => registryArray,
+            set(v: unknown) { relatedRecords[key] = v; }
+          });
+          Object.defineProperty(relatedRecords, key, {
+            enumerable: true,
+            configurable: true,
+            get: () => registryArray,
+            set(v: unknown) { Object.defineProperty(relatedRecords, key, { value: v, writable: true, enumerable: true, configurable: true }); }
+          });
+        } else {
+          rec[key] = childRecord;
+          relatedRecords[key] = childRecord;
+        }
 
         continue;
       }
