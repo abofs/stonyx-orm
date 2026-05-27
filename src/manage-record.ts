@@ -79,6 +79,28 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
     pendingHasMany.splice(0);
   }
 
+  // FK-based inverse hasMany wiring — when a child record is created with a
+  // foreign-key field (e.g. `owner: 'owner-1'` on an animal), find any parent
+  // whose hasMany registry targets this model and push the child into the
+  // parent's shared array.  This covers edge cases where the child is created
+  // in a separate async frame without a belongsTo handler firing.
+  const hasManyReg = getHasManyRegistry();
+  if (hasManyReg) {
+    for (const [parentModelName, targetMap] of hasManyReg) {
+      const childArrayMap = targetMap.get(modelName);
+      if (!childArrayMap) continue;
+
+      // Check if rawData contains a FK field matching the parent model name
+      const fkValue = rawData[parentModelName];
+      if (fkValue === undefined || fkValue === null) continue;
+
+      const parentArray = childArrayMap.get(fkValue);
+      if (parentArray && !parentArray.includes(record)) {
+        parentArray.push(record);
+      }
+    }
+  }
+
   // Fulfill pending belongsTo relationships
   const pendingBelongsToQueue = getPendingBelongsToRegistry();
   const pendingBelongsToRaw = pendingBelongsToQueue.get(modelName)?.get(record.id);
@@ -86,7 +108,7 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
 
   if (pendingBelongsTo) {
     const belongsToReg = getBelongsToRegistry();
-    const hasManyReg = getHasManyRegistry();
+    const pendingHasManyReg = getHasManyRegistry();
 
     for (const { sourceRecord, sourceModelName, relationshipKey, relationshipId } of pendingBelongsTo) {
       // Update the belongsTo relationship on the source record
@@ -103,7 +125,7 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
       }
 
       // Wire inverse hasMany if it exists
-      const inverseHasMany = hasManyReg.get(modelName)?.get(sourceModelName)?.get(record.id);
+      const inverseHasMany = pendingHasManyReg.get(modelName)?.get(sourceModelName)?.get(record.id);
 
       if (inverseHasMany && !inverseHasMany.includes(sourceRecord)) {
         inverseHasMany.push(sourceRecord);
