@@ -118,14 +118,22 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   const shouldPersist = orm?.sqlDb && !options.isDbRecord && !userOptions._relationshipKey && !options._skipAutoPersist;
   if (shouldPersist) {
     const response = { data: { id: record.id } };
-    orm!.sqlDb!.persist('create', modelName, { rawData }, response).catch((err: unknown) => {
-      orm!.emitPersistError({
-        operation: 'create',
-        modelName,
-        recordId: record.id,
-        error: err instanceof Error ? err : new Error(String(err)),
+    orm!.sqlDb!.persist('create', modelName, { rawData }, response)
+      .catch((err: unknown) => {
+        orm!.emitPersistError({
+          operation: 'create',
+          modelName,
+          recordId: record.id,
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
+      })
+      .finally(() => {
+        // Evict non-memory records after persist to prevent unbounded heap growth (stonyx#81)
+        if (store._memoryResolver && !store._memoryResolver(modelName)) {
+          const ms = store.get(modelName);
+          if (ms) ms.delete(record.id as number | string);
+        }
       });
-    });
   }
 
   return record;
