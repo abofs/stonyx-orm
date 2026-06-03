@@ -120,7 +120,7 @@ module('[Unit] DynamoDBDB.persist — create', function(hooks) {
     assert.ok(mockClient.send.calledOnce, 'send called once (PutCommand)');
   });
 
-  test('generates ULID for numeric-ID model with __pendingSqlId', async function(assert) {
+  test('generates numeric ID for numeric-ID model with __pendingSqlId', async function(assert) {
     const recordId = 99;
     const record = {
       id: recordId,
@@ -133,6 +133,7 @@ module('[Unit] DynamoDBDB.persist — create', function(hooks) {
         'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'number' }
       }),
       getPluralName: sinon.stub().returns('users'),
+      getDynamoKeyType: sinon.stub().returns('N'),
       store: {
         get: sinon.stub().returns(record),
         _memoryResolver: null,
@@ -154,9 +155,99 @@ module('[Unit] DynamoDBDB.persist — create', function(hooks) {
 
     assert.ok(deps.buildPutItem.calledOnce, 'buildPutItem called');
     const item = deps.buildPutItem.firstCall.args[1];
-    // ULID is a 26-char Crockford base32 string
-    assert.ok(typeof item.id === 'string' && item.id.length === 26, 'id replaced with ULID string');
-    assert.ok(typeof response.data.id === 'string', 'response.data.id updated to ULID');
+    assert.strictEqual(typeof item.id, 'number', 'id replaced with numeric value');
+    assert.ok(item.id > 0, 'numeric id is positive');
+    assert.strictEqual(typeof response.data.id, 'number', 'response.data.id updated to numeric');
+  });
+
+  test('generates ULID for string-ID model with __pendingSqlId', async function(assert) {
+    const recordId = 'temp-abc';
+    const record = {
+      id: recordId,
+      __data: { id: recordId, name: 'Alice', __pendingSqlId: true },
+      __relationships: {},
+    };
+
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+      getDynamoKeyType: sinon.stub().returns('S'),
+      store: {
+        get: sinon.stub().returns(record),
+        _memoryResolver: null,
+      } as unknown as typeof deps.store,
+    });
+
+    const modelStoreMap = new Map<unknown, unknown>();
+    modelStoreMap.set(recordId, record);
+    (deps.store as unknown as { get: sinon.SinonStub }).get
+      .withArgs('user', recordId).returns(record)
+      .withArgs('user').returns(modelStoreMap);
+
+    const response = { data: { id: recordId } };
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({});
+
+    await db.persist('create', 'user', { rawData: { __pendingSqlId: true } }, response);
+
+    assert.ok(deps.buildPutItem.calledOnce, 'buildPutItem called');
+    const item = deps.buildPutItem.firstCall.args[1];
+    assert.strictEqual(typeof item.id, 'string', 'id is a string');
+    assert.strictEqual(item.id.length, 26, 'ULID is 26-char Crockford base32 string');
+    assert.strictEqual(typeof response.data.id, 'string', 'response.data.id updated to ULID string');
+  });
+
+  test('numeric IDs are positive and unique across multiple calls', async function(assert) {
+    const ids: number[] = [];
+
+    for (let i = 0; i < 5; i++) {
+      const recordId = i + 100;
+      const record = {
+        id: recordId,
+        __data: { id: recordId, name: `User${i}`, __pendingSqlId: true },
+        __relationships: {},
+      };
+
+      const deps = createMockDeps({
+        introspectModels: sinon.stub().returns({
+          'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'number' }
+        }),
+        getPluralName: sinon.stub().returns('users'),
+        getDynamoKeyType: sinon.stub().returns('N'),
+        store: {
+          get: sinon.stub().returns(record),
+          _memoryResolver: null,
+        } as unknown as typeof deps.store,
+      });
+
+      const modelStoreMap = new Map<unknown, unknown>();
+      modelStoreMap.set(recordId, record);
+      (deps.store as unknown as { get: sinon.SinonStub }).get
+        .withArgs('user', recordId).returns(record)
+        .withArgs('user').returns(modelStoreMap);
+
+      const response = { data: { id: recordId } };
+      const { db, mockClient } = buildDb(deps);
+      mockClient.send.resolves({});
+
+      await db.persist('create', 'user', { rawData: { __pendingSqlId: true } }, response);
+
+      const item = deps.buildPutItem.firstCall.args[1];
+      ids.push(item.id as number);
+      resetInstance();
+    }
+
+    // All IDs should be positive numbers
+    for (const id of ids) {
+      assert.ok(id > 0, `id ${id} is positive`);
+      assert.strictEqual(typeof id, 'number', `id ${id} is type number`);
+    }
+
+    // All IDs should be unique
+    const uniqueIds = new Set(ids);
+    assert.strictEqual(uniqueIds.size, ids.length, 'all generated IDs are unique');
   });
 });
 

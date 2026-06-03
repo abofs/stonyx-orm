@@ -50,6 +50,24 @@ function generateUlid(): string {
   return id;
 }
 
+/**
+ * Generates a monotonically unique numeric ID for DynamoDB tables with numeric keys.
+ * Uses timestamp-based generation with a sub-millisecond counter to ensure uniqueness.
+ */
+let _numericIdCounter = 0;
+let _numericIdLastMs = 0;
+
+function generateNumericId(): number {
+  const now = Date.now();
+  if (now === _numericIdLastMs) {
+    _numericIdCounter++;
+  } else {
+    _numericIdLastMs = now;
+    _numericIdCounter = 0;
+  }
+  return now * 1000 + _numericIdCounter;
+}
+
 // ---------------------------------------------------------------------------
 // SDK Command factories (injectable for testing without real AWS SDK)
 // ---------------------------------------------------------------------------
@@ -459,10 +477,11 @@ export default class DynamoDBDB {
     const isPendingId = context.rawData?.__pendingSqlId === true;
     const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
 
-    // For numeric-ID models with a pending ID, generate a ULID
+    // For models with a pending ID, generate a unique replacement ID
     let finalId: unknown = record.id;
     if (isPendingId) {
-      finalId = generateUlid();
+      const keyType = this.deps.getDynamoKeyType(schema.idType);
+      finalId = keyType === 'N' ? generateNumericId() : generateUlid();
     }
 
     const item = this._recordToItem(record, schema, context.rawData);
