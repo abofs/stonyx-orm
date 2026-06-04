@@ -1,5 +1,5 @@
 import Orm, { relationships } from '@stonyx/orm';
-import { TYPES, getHasManyRegistry, getBelongsToRegistry, getPendingRegistry } from './relationships.js';
+import { TYPES, getHasManyRegistry, getBelongsToRegistry, getPendingRegistry, getPendingBelongsToRegistry } from './relationships.js';
 import ViewResolver from './view-resolver.js';
 
 interface UnloadOptions {
@@ -346,6 +346,30 @@ export default class Store {
 
     const pendingMap = getPendingRegistry().get(modelName);
     if (pendingMap) pendingMap.delete(recordId);
+
+    // Clean pendingBelongsTo entries in both directions
+    const pendingBelongsToMap = getPendingBelongsToRegistry();
+    if (pendingBelongsToMap) {
+      // Direction 1: evicted record was the TARGET others were waiting for
+      const targetEntries = pendingBelongsToMap.get(modelName);
+      if (targetEntries) targetEntries.delete(recordId);
+
+      // Direction 2: evicted record was the SOURCE with unresolved forward-references
+      for (const [, targetIdMap] of pendingBelongsToMap) {
+        for (const [targetId, entries] of targetIdMap) {
+          if (!Array.isArray(entries)) continue;
+          const filtered = entries.filter((e: unknown) => {
+            const entry = e as { sourceModelName?: string; relationshipId?: unknown };
+            return !(entry.sourceModelName === modelName && entry.relationshipId === recordId);
+          });
+          if (filtered.length === 0) {
+            targetIdMap.delete(targetId);
+          } else if (filtered.length < entries.length) {
+            targetIdMap.set(targetId, filtered);
+          }
+        }
+      }
+    }
   }
 
   /**
