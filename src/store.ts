@@ -1,5 +1,5 @@
 import Orm, { relationships } from '@stonyx/orm';
-import { TYPES, getHasManyRegistry, getBelongsToRegistry, getPendingRegistry } from './relationships.js';
+import { TYPES, getHasManyRegistry, getBelongsToRegistry, getPendingRegistry, getPendingBelongsToRegistry } from './relationships.js';
 import ViewResolver from './view-resolver.js';
 
 interface UnloadOptions {
@@ -346,6 +346,13 @@ export default class Store {
 
     const pendingMap = getPendingRegistry().get(modelName);
     if (pendingMap) pendingMap.delete(recordId);
+
+    const pendingBelongsToMap = getPendingBelongsToRegistry();
+    if (pendingBelongsToMap) {
+      // Clean entries where this model is the TARGET of a pending belongsTo
+      const targetEntries = pendingBelongsToMap.get(modelName);
+      if (targetEntries) targetEntries.delete(recordId);
+    }
   }
 
   /**

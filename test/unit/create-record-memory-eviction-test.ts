@@ -226,6 +226,32 @@ module('[Unit] createRecord | memory:false eviction (stonyx#81)', function(hooks
     if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
   });
 
+  test('pendingBelongsTo registry cleaned after eviction (stonyx#83)', async function(assert) {
+    store._memoryResolver = () => false;
+
+    const persistStub = sinon.stub().resolves();
+    const origSqlDb = Orm.instance?.sqlDb;
+    if (Orm.instance) Orm.instance.sqlDb = { persist: persistStub };
+
+    // Create animal with forward-reference to non-existent owner
+    // This creates a pendingBelongsTo entry for owner
+    const animal = createRecord('animal', { id: 904, age: 3, size: 'medium', owner: 'pending-owner-1' }, { serialize: false });
+
+    // Verify pendingBelongsTo entry exists before eviction
+    const pendingBT = relationships.get('pendingBelongsTo');
+    const ownerPending = pendingBT?.get('owner');
+    assert.ok(ownerPending?.has('pending-owner-1'), 'pendingBelongsTo entry exists before eviction');
+
+    // Wait for persist + eviction
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // After eviction, the animal is gone from store
+    assert.notOk(store.get('animal')?.has(904), 'animal evicted from store');
+
+    store._memoryResolver = null;
+    if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
+  });
+
   test('persist error still evicts record and emits error', async function(assert) {
     store._memoryResolver = () => false;
 

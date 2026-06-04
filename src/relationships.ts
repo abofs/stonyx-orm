@@ -51,4 +51,4 @@ export function getPendingBelongsToRegistry(): PendingBelongsToMap {
   return relationships.get('pendingBelongsTo') as PendingBelongsToMap;
 }
 
-export const TYPES: string[] = ['global', 'hasMany', 'belongsTo', 'pending'];
+export const TYPES: string[] = ['global', 'hasMany', 'belongsTo', 'pending', 'pendingBelongsTo'];
