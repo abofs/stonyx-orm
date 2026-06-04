@@ -193,6 +193,27 @@ export default class Store {
     this.unloadAllRecords(key);
   }
 
+  /**
+   * Evict a record from the store with full relationship registry cleanup,
+   * WITHOUT calling record.clean(). This preserves the caller's reference
+   * to the returned record (used by memory:false post-persist eviction).
+   */
+  evictRecord(modelName: string, id: unknown): void {
+    const modelStore = this.data.get(modelName);
+    if (!modelStore) return;
+
+    if (typeof id !== 'string' && typeof id !== 'number') return;
+    const raw = modelStore.get(id);
+    if (!raw || !isStoreRecord(raw)) return;
+
+    const visited = new Set([`${modelName}:${id}`]);
+    this._removeFromHasManyArrays(modelName, id, visited);
+    this._nullifyBelongsToReferences(modelName, id, visited);
+    this._cleanupRelationshipRegistries(modelName, id);
+
+    modelStore.delete(id);
+  }
+
   unloadRecord(model: string, id: unknown, options: UnloadOptions = {}): void {
     const modelStore = this.data.get(model);
 
