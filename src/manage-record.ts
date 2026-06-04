@@ -139,6 +139,9 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
   // Auto-persist to SQL — skip for DB loads (isDbRecord) and relationship resolution (_relationshipKey)
   const shouldPersist = orm?.sqlDb && !options.isDbRecord && !userOptions._relationshipKey && !options._skipAutoPersist;
   if (shouldPersist) {
+    // Capture ID before persist — SQL adapters re-key pending IDs to real DB IDs,
+    // but relationship registries were keyed with this original ID
+    const registryId = record.id;
     const response = { data: { id: record.id } };
     orm!.sqlDb!.persist('create', modelName, { rawData }, response)
       .catch((err: unknown) => {
@@ -152,7 +155,7 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
       .finally(() => {
         // Evict non-memory records after persist to prevent unbounded heap growth (stonyx#81)
         if (store._memoryResolver && !store._memoryResolver(modelName)) {
-          store.evictRecord(modelName, record.id);
+          store.evictRecord(modelName, record.id, registryId);
         }
       });
   }

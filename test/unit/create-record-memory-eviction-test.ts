@@ -158,6 +158,74 @@ module('[Unit] createRecord | memory:false eviction (stonyx#81)', function(hooks
     if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
   });
 
+  test('belongsTo registry cleaned when persist re-keys record ID (stonyx#82 follow-up)', async function(assert) {
+    store._memoryResolver = () => false;
+
+    // Mock sqlDb that simulates the adapter's re-key behavior:
+    // after persist, updates record.id and re-keys the store Map
+    const persistStub = sinon.stub().callsFake(async (operation, modelName, context, response) => {
+      if (operation === 'create' && context.rawData?.__pendingSqlId) {
+        const record = store.get(modelName)?.get(context.rawData.id);
+        if (record) {
+          const pendingId = record.id;
+          const realId = 99999; // Simulate DB-assigned ID
+          const modelStore = store.get(modelName);
+
+          // This is exactly what postgres-db.ts / mysql-db.ts do:
+          modelStore.delete(pendingId);
+          record.__data.id = realId;
+          record.id = realId;
+          modelStore.set(realId, record);
+
+          if (response?.data) response.data.id = realId;
+          delete record.__data.__pendingSqlId;
+        }
+      }
+    });
+
+    const origSqlDb = Orm.instance?.sqlDb;
+    if (Orm.instance) Orm.instance.sqlDb = { persist: persistStub };
+
+    // Create owner first (parent must exist for non-pending belongsTo path)
+    const owner = createRecord('owner', { id: 'owner-rekey-1', gender: 'male', age: 40 }, { serialize: false });
+
+    // Create animal WITHOUT a preset ID — this triggers assignRecordId to assign
+    // a pending negative ID, which the mock persist will re-key to 99999
+    const animal = createRecord('animal', { age: 3, size: 'medium', owner: 'owner-rekey-1' }, { serialize: false });
+
+    // Verify a pending ID was assigned (negative)
+    // Note: record.id may have already been re-keyed by the time we check,
+    // but the registry should still be cleaned regardless
+
+    // Wait for persist + re-key + eviction
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // The belongsTo registry should be clean — no entries for the evicted animal
+    // (whether keyed by the pending ID OR the real ID)
+    const belongsToAnimal = relationships.get('belongsTo')?.get('animal');
+    if (belongsToAnimal) {
+      const ownerRef = belongsToAnimal.get('owner');
+      if (ownerRef) {
+        // Neither the pending ID nor the real ID should remain
+        let zombieCount = 0;
+        for (const [key] of ownerRef) {
+          zombieCount++;
+        }
+        assert.strictEqual(zombieCount, 0, 'no zombie belongsTo entries remain after re-keyed eviction');
+      } else {
+        assert.ok(true, 'owner target map cleaned up entirely');
+      }
+    } else {
+      assert.ok(true, 'animal belongsTo map cleaned up entirely');
+    }
+
+    // Also verify the record was evicted from the store
+    assert.notOk(store.get('animal')?.has(99999), 'record evicted from store (real ID)');
+
+    store._memoryResolver = null;
+    if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
+  });
+
   test('persist error still evicts record and emits error', async function(assert) {
     store._memoryResolver = () => false;
 

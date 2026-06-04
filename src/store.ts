@@ -197,8 +197,12 @@ export default class Store {
    * Evict a record from the store with full relationship registry cleanup,
    * WITHOUT calling record.clean(). This preserves the caller's reference
    * to the returned record (used by memory:false post-persist eviction).
+   *
+   * @param registryId - The ID used when the record's relationships were
+   *   registered. For SQL models with pending IDs, this is the original
+   *   negative pending ID (before the adapter re-keyed to the real DB ID).
    */
-  evictRecord(modelName: string, id: unknown): void {
+  evictRecord(modelName: string, id: unknown, registryId?: unknown): void {
     const modelStore = this.data.get(modelName);
     if (!modelStore) return;
 
@@ -207,9 +211,22 @@ export default class Store {
     if (!raw || !isStoreRecord(raw)) return;
 
     const visited = new Set([`${modelName}:${id}`]);
+
+    // Remove from hasMany arrays and nullify belongsTo references using current ID
+    // (the adapter updates record.id, so value-based matches need the current ID)
     this._removeFromHasManyArrays(modelName, id, visited);
     this._nullifyBelongsToReferences(modelName, id, visited);
-    this._cleanupRelationshipRegistries(modelName, id);
+
+    // Clean up relationship registry entries using the registry key
+    // (belongsTo/hasMany registries were keyed by the ID at registration time,
+    // which may differ from the current ID if SQL persist re-keyed the record)
+    const cleanupId = registryId ?? id;
+    this._cleanupRelationshipRegistries(modelName, cleanupId);
+
+    // If registryId differs from id, also clean with current id as safety net
+    if (registryId !== undefined && registryId !== id) {
+      this._cleanupRelationshipRegistries(modelName, id);
+    }
 
     modelStore.delete(id);
   }
