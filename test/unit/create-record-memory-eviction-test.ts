@@ -256,4 +256,67 @@ module('[Unit] createRecord | memory:false eviction (stonyx#81)', function(hooks
       Orm.instance.emitPersistError = origEmit;
     }
   });
+
+  test('pendingBelongsTo cleaned when source record is evicted (stonyx#83)', async function(assert) {
+    store._memoryResolver = () => false;
+
+    const persistStub = sinon.stub().resolves();
+    const origSqlDb = Orm.instance?.sqlDb;
+    if (Orm.instance) Orm.instance.sqlDb = { persist: persistStub };
+
+    // Create animal with forward-reference to non-existent owner
+    const animal = createRecord('animal', { id: 904, age: 3, size: 'medium', owner: 'pending-owner-1' }, { serialize: false });
+
+    // Verify pendingBelongsTo entry exists before eviction
+    const pendingBT = relationships.get('pendingBelongsTo');
+    assert.ok(pendingBT?.get('owner')?.has('pending-owner-1'), 'pendingBelongsTo entry exists before eviction');
+
+    // Wait for persist + eviction
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // After eviction, the pendingBelongsTo entry for this animal should be cleaned
+    const ownerPending = pendingBT?.get('owner')?.get('pending-owner-1');
+    const hasAnimalEntry = Array.isArray(ownerPending) && ownerPending.some(
+      (e) => e.sourceModelName === 'animal' && e.relationshipId === 904
+    );
+    assert.notOk(hasAnimalEntry, 'pendingBelongsTo source entry cleaned after eviction');
+
+    // Animal evicted from store
+    assert.notOk(store.get('animal')?.has(904), 'animal evicted from store');
+
+    store._memoryResolver = null;
+    if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
+  });
+
+  test('pendingBelongsTo cleaned when target record is evicted (stonyx#83)', async function(assert) {
+    store._memoryResolver = () => false;
+
+    const persistStub = sinon.stub().resolves();
+    const origSqlDb = Orm.instance?.sqlDb;
+    if (Orm.instance) Orm.instance.sqlDb = { persist: persistStub };
+
+    // Create owner, then create a second animal with forward-ref to a different owner ID
+    const owner = createRecord('owner', { id: 'target-owner-1', gender: 'male', age: 45 }, { serialize: false });
+
+    // Create a pending entry by referencing a non-existent owner from a memory:true context
+    // Actually, let's test the target cleanup directly by manipulating the registry
+    const pendingBT = relationships.get('pendingBelongsTo') || new Map();
+    if (!relationships.has('pendingBelongsTo')) relationships.set('pendingBelongsTo', pendingBT);
+
+    const ownerMap = new Map();
+    ownerMap.set('target-owner-1', [{ sourceRecord: {}, sourceModelName: 'animal', relationshipKey: 'owner', relationshipId: 999 }]);
+    pendingBT.set('owner', ownerMap);
+
+    // Verify entry exists
+    assert.ok(pendingBT.get('owner')?.has('target-owner-1'), 'target entry exists before eviction');
+
+    // Wait for persist + eviction of owner
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // After owner eviction, the pendingBelongsTo entry keyed by target-owner-1 should be cleaned
+    assert.notOk(pendingBT.get('owner')?.has('target-owner-1'), 'pendingBelongsTo target entry cleaned after eviction');
+
+    store._memoryResolver = null;
+    if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
+  });
 });
