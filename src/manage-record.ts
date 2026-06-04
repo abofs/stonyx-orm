@@ -152,8 +152,7 @@ export function createRecord(modelName: string, rawData: { [key: string]: unknow
       .finally(() => {
         // Evict non-memory records after persist to prevent unbounded heap growth (stonyx#81)
         if (store._memoryResolver && !store._memoryResolver(modelName)) {
-          const ms = store.get(modelName);
-          if (ms) ms.delete(record.id as number | string);
+          store.evictRecord(modelName, record.id);
         }
       });
   }

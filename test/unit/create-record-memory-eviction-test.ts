@@ -1,13 +1,18 @@
 // @ts-nocheck
 import QUnit from 'qunit';
 import sinon from 'sinon';
-import Orm, { createRecord, store } from '@stonyx/orm';
+import Orm, { createRecord, store, relationships } from '@stonyx/orm';
 
 const { module, test } = QUnit;
 
 module('[Unit] createRecord | memory:false eviction (stonyx#81)', function(hooks) {
   hooks.afterEach(function() {
     store.get('owner')?.clear();
+    store.get('animal')?.clear();
+    relationships.get('hasMany')?.clear();
+    relationships.get('belongsTo')?.clear();
+    relationships.get('pending')?.clear();
+    relationships.get('pendingBelongsTo')?.clear();
     sinon.restore();
   });
 
@@ -69,6 +74,85 @@ module('[Unit] createRecord | memory:false eviction (stonyx#81)', function(hooks
     assert.notOk(store.get('owner')?.has('ref-test'), 'record evicted from store');
     assert.strictEqual(record.gender, 'female', 'caller reference still has correct data');
     assert.strictEqual(record.id, 'ref-test', 'caller reference still has correct id');
+
+    store._memoryResolver = null;
+    if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
+  });
+
+  test('belongsTo registry cleaned after eviction (stonyx#82)', async function(assert) {
+    store._memoryResolver = () => false;
+
+    const persistStub = sinon.stub().resolves();
+    const origSqlDb = Orm.instance?.sqlDb;
+    if (Orm.instance) Orm.instance.sqlDb = { persist: persistStub };
+
+    // Create owner first, then animal that belongsTo owner
+    // Animal model uses id = attr('number'), so use numeric IDs
+    const owner = createRecord('owner', { id: 'owner-bt-1', gender: 'male', age: 40 }, { serialize: false });
+    const animal = createRecord('animal', { id: 901, age: 3, size: 'medium', owner: 'owner-bt-1' }, { serialize: false });
+
+    // Wait for persist + eviction
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // The belongsTo registry entry for the evicted animal should be cleaned up
+    const belongsToAnimal = relationships.get('belongsTo').get('animal');
+    const ownerRef = belongsToAnimal?.get('owner');
+    assert.notOk(ownerRef?.has(901), 'belongsTo registry entry for evicted animal is deleted');
+
+    store._memoryResolver = null;
+    if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
+  });
+
+  test('hasMany array cleaned after eviction (stonyx#82)', async function(assert) {
+    store._memoryResolver = () => false;
+
+    const persistStub = sinon.stub().resolves();
+    const origSqlDb = Orm.instance?.sqlDb;
+    if (Orm.instance) Orm.instance.sqlDb = { persist: persistStub };
+
+    // Create owner first, then animal belonging to owner
+    const owner = createRecord('owner', { id: 'owner-hm-1', gender: 'female', age: 35 }, { serialize: false });
+    const animal = createRecord('animal', { id: 902, age: 5, size: 'large', owner: 'owner-hm-1' }, { serialize: false });
+
+    // Wait for persist + eviction
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // The hasMany array for the owner should NOT contain the evicted animal
+    const hasManyOwner = relationships.get('hasMany').get('owner');
+    const animalArray = hasManyOwner?.get('animal')?.get('owner-hm-1');
+    if (animalArray) {
+      const containsEvicted = animalArray.some(r => r && r.id === 902);
+      assert.notOk(containsEvicted, 'evicted animal removed from owner hasMany array');
+    } else {
+      assert.ok(true, 'hasMany array does not exist (cleaned up)');
+    }
+
+    store._memoryResolver = null;
+    if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
+  });
+
+  test('memory:true records NOT evicted from registry (control) (stonyx#82)', async function(assert) {
+    store._memoryResolver = () => true;
+
+    const persistStub = sinon.stub().resolves();
+    const origSqlDb = Orm.instance?.sqlDb;
+    if (Orm.instance) Orm.instance.sqlDb = { persist: persistStub };
+
+    // Create owner first, then animal that belongsTo owner
+    // Animal model uses id = attr('number'), so use numeric IDs
+    const owner = createRecord('owner', { id: 'owner-mem-1', gender: 'male', age: 50 }, { serialize: false });
+    const animal = createRecord('animal', { id: 903, age: 2, size: 'small', owner: 'owner-mem-1' }, { serialize: false });
+
+    // Wait for persist
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // For memory:true, the belongsTo registry entry should STILL exist
+    const belongsToAnimal = relationships.get('belongsTo').get('animal');
+    const ownerRef = belongsToAnimal?.get('owner');
+    assert.ok(ownerRef?.has(903), 'belongsTo registry entry retained for memory:true model');
+
+    // Record should still be in store
+    assert.ok(store.get('animal')?.has(903), 'animal record retained in store for memory:true');
 
     store._memoryResolver = null;
     if (Orm.instance) Orm.instance.sqlDb = origSqlDb;
