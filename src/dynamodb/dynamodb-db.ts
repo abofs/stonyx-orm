@@ -523,7 +523,11 @@ export default class DynamoDBDB {
 
     for (const col of Object.keys(schema.columns)) {
       if (currentData[col] !== oldState[col]) {
-        changedData[col] = currentData[col] ?? null;
+        const value = currentData[col] ?? null;
+        // Date objects must be serialized to ISO-8601 strings for DynamoDB 'S' storage
+        changedData[col] = (schema.columns[col] === 'date' && value instanceof Date)
+          ? value.toISOString()
+          : value;
       }
     }
 
@@ -739,7 +743,13 @@ export default class DynamoDBDB {
     if (data.id !== undefined) item.id = data.id;
 
     for (const col of Object.keys(schema.columns)) {
-      if (data[col] !== undefined) item[col] = data[col];
+      if (data[col] !== undefined) {
+        const value = data[col];
+        // Date objects must be serialized to ISO-8601 strings for DynamoDB 'S' storage
+        item[col] = (schema.columns[col] === 'date' && value instanceof Date)
+          ? value.toISOString()
+          : value;
+      }
     }
 
     for (const fkCol of Object.keys(schema.foreignKeys)) {
