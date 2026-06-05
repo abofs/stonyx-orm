@@ -120,6 +120,18 @@ export default class Serializer {
         } else {
           rec[key] = childRecord;
           relatedRecords[key] = childRecord;
+
+          // Preserve the raw FK value in __data when the belongsTo handler
+          // couldn't resolve the target (e.g., memory:false model not loaded).
+          // This allows adapters to read the FK from __data as a fallback
+          // when __relationships[key] is null.  Only store when `data` is a
+          // truthy non-object — i.e., a raw FK string/number that the handler
+          // attempted but failed to resolve.  When `data` is null/undefined
+          // (optional empty relationship) we intentionally skip to preserve
+          // the existing behavior of not populating __data for empty FKs.
+          if (childRecord === null && data && typeof data !== 'object') {
+            parsedData[key] = data;
+          }
         }
 
         continue;
