@@ -525,7 +525,7 @@ export default class DynamoDBDB {
       if (currentData[col] !== oldState[col]) {
         const value = currentData[col] ?? null;
         // Date objects must be serialized to ISO-8601 strings for DynamoDB 'S' storage
-        changedData[col] = (schema.columns[col] === 'date' && value instanceof Date)
+        changedData[col] = (value instanceof Date)
           ? value.toISOString()
           : value;
       }
@@ -746,7 +746,7 @@ export default class DynamoDBDB {
       if (data[col] !== undefined) {
         const value = data[col];
         // Date objects must be serialized to ISO-8601 strings for DynamoDB 'S' storage
-        item[col] = (schema.columns[col] === 'date' && value instanceof Date)
+        item[col] = (value instanceof Date)
           ? value.toISOString()
           : value;
       }
