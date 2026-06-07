@@ -217,6 +217,10 @@ export default class DynamoDBDB {
     return this.client;
   }
 
+  private _resolveTableName(modelName: string): string {
+    return (this.dbConfig.tablePrefix ?? '') + sanitizeTableName(this.deps.getPluralName(modelName));
+  }
+
   /** Resolve Orm singleton — falls back to real import in production. */
   private async _getOrm(): Promise<OrmModule> {
     if (this.deps._importOrm) return this.deps._importOrm();
@@ -253,7 +257,7 @@ export default class DynamoDBDB {
     const rawClient = new DynamoDBClient(clientOptions);
 
     for (const [modelName, schema] of Object.entries(schemas)) {
-      const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+      const tableName = this._resolveTableName(modelName);
       const gsis = this._buildGsiDefinitions(modelName, schema);
 
       try {
@@ -338,7 +342,7 @@ export default class DynamoDBDB {
     const schema = schemas[modelName];
     if (!schema) return undefined;
 
-    const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+    const tableName = this._resolveTableName(modelName);
     const { GetCommand } = await this.deps.loadDocClientCommands();
 
     const params = this.deps.buildGetItem(tableName, { id });
@@ -372,7 +376,7 @@ export default class DynamoDBDB {
     const schema = schemas[modelName];
     if (!schema) return [];
 
-    const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+    const tableName = this._resolveTableName(modelName);
 
     try {
       let items: Record<string, unknown>[];
@@ -439,7 +443,7 @@ export default class DynamoDBDB {
       }
 
       const schema = schemas[modelName];
-      const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+      const tableName = this._resolveTableName(modelName);
 
       try {
         const items = await this._paginatedScan(tableName);
@@ -475,7 +479,7 @@ export default class DynamoDBDB {
     if (!record) return;
 
     const isPendingId = context.rawData?.__pendingSqlId === true;
-    const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+    const tableName = this._resolveTableName(modelName);
 
     // For models with a pending ID, generate a unique replacement ID
     let finalId: unknown = record.id;
@@ -513,7 +517,7 @@ export default class DynamoDBDB {
     const record = context.record;
     if (!record) return;
 
-    const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+    const tableName = this._resolveTableName(modelName);
     const id = record.id;
     const oldState = context.oldState || {};
     const currentData = record.__data;
@@ -558,7 +562,7 @@ export default class DynamoDBDB {
     const id = context.recordId;
     if (id == null) return;
 
-    const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+    const tableName = this._resolveTableName(modelName);
     const { DeleteCommand } = await this.deps.loadDocClientCommands();
     const params = this.deps.buildDeleteItem(tableName, { id });
     await this.requireClient().send(new DeleteCommand(params));
@@ -620,7 +624,7 @@ export default class DynamoDBDB {
     const schemas = this.deps.introspectModels();
 
     for (const [modelName, schema] of Object.entries(schemas)) {
-      const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+      const tableName = this._resolveTableName(modelName);
       const modelGsis = new Map<string, string>();
 
       for (const fkCol of Object.keys(schema.foreignKeys)) {
@@ -682,7 +686,7 @@ export default class DynamoDBDB {
   }
 
   private _buildGsiDefinitions(modelName: string, schema: ModelSchema): unknown[] {
-    const tableName = sanitizeTableName(this.deps.getPluralName(modelName));
+    const tableName = this._resolveTableName(modelName);
     const gsis: unknown[] = [];
 
     for (const fkCol of Object.keys(schema.foreignKeys)) {

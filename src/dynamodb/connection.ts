@@ -8,6 +8,7 @@
 export interface DynamoDBConfig {
   region?: string;
   endpoint?: string;
+  tablePrefix?: string;
   [key: string]: unknown;
 }
 
