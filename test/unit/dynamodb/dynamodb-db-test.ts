@@ -748,3 +748,273 @@ module('[Unit] DynamoDBDB._evictIfNotMemory', function(hooks) {
     assert.ok(modelStore.has(1), 'record untouched without resolver');
   });
 });
+
+module('[Unit] DynamoDBDB — table prefix', function(hooks) {
+  hooks.beforeEach(resetInstance);
+  hooks.afterEach(() => { resetInstance(); sinon.restore(); });
+
+  test('prefixed table name in persist (create)', async function(assert) {
+    const recordId = 'r1';
+    const record = { id: recordId, __data: { id: recordId, name: 'Alice' }, __relationships: {} };
+
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+      store: {
+        get: sinon.stub().returns(record),
+        _memoryResolver: null,
+      } as unknown as typeof deps.store,
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({});
+
+    await db.persist('create', 'user', { rawData: {} }, { data: { id: recordId } });
+
+    assert.ok(deps.buildPutItem.calledOnce, 'buildPutItem called');
+    assert.strictEqual(deps.buildPutItem.firstCall.args[0], 'staging-users', 'table name prefixed');
+  });
+
+  test('prefixed table name in persist (update)', async function(assert) {
+    const record = {
+      id: 'r1',
+      __data: { id: 'r1', name: 'Alice Updated' },
+      __relationships: {},
+    };
+
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({});
+
+    await db.persist('update', 'user', {
+      record: record as unknown as import('../../../src/types/orm-types.js').OrmRecord,
+      oldState: { name: 'Alice' },
+    }, {});
+
+    assert.ok(deps.buildUpdateItem.calledOnce, 'buildUpdateItem called');
+    assert.strictEqual(deps.buildUpdateItem.firstCall.args[0], 'staging-users', 'table name prefixed');
+  });
+
+  test('prefixed table name in persist (delete)', async function(assert) {
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: {}, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({});
+
+    await db.persist('delete', 'user', { recordId: 'r1' }, {});
+
+    assert.ok(deps.buildDeleteItem.calledOnce, 'buildDeleteItem called');
+    assert.strictEqual(deps.buildDeleteItem.firstCall.args[0], 'staging-users', 'table name prefixed');
+  });
+
+  test('prefixed table name in findRecord', async function(assert) {
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({ Item: { id: 'r1', name: 'Alice' } });
+
+    await db.findRecord('user', 'r1');
+
+    assert.ok(deps.buildGetItem.calledOnce, 'buildGetItem called');
+    assert.strictEqual(deps.buildGetItem.firstCall.args[0], 'staging-users', 'table name prefixed');
+  });
+
+  test('prefixed table name in findAll (scan)', async function(assert) {
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({ Items: [{ id: '1', name: 'A' }], LastEvaluatedKey: undefined });
+
+    await db.findAll('user');
+
+    assert.ok(deps.buildScan.calledOnce, 'buildScan called');
+    assert.strictEqual(deps.buildScan.firstCall.args[0], 'staging-users', 'table name prefixed');
+  });
+
+  test('prefixed table name in findAll (query via GSI)', async function(assert) {
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'comment': {
+          table: 'comments',
+          columns: { body: 'S' },
+          foreignKeys: { post_id: { references: 'posts', column: 'id' } },
+          idType: 'string',
+        }
+      }),
+      getPluralName: sinon.stub().callsFake((name: string) => `${name}s`),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    // Re-init to build GSI registry with the prefixed table name
+    await db.init();
+
+    // Replace the client with our mock after init
+    db.client = mockClient;
+    mockClient.send.resolves({ Items: [{ id: 'c1', body: 'Hello', post_id: 'p1' }], LastEvaluatedKey: undefined });
+
+    await db.findAll('comment', { post_id: 'p1' });
+
+    assert.ok(deps.buildQuery.calledOnce, 'buildQuery called');
+    assert.strictEqual(deps.buildQuery.firstCall.args[0], 'staging-comments', 'table name prefixed');
+    assert.strictEqual(deps.buildQuery.firstCall.args[1], 'staging-comments-post_id-index', 'GSI name prefixed');
+  });
+
+  test('prefixed table name in loadMemoryRecords', async function(assert) {
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getTopologicalOrder: sinon.stub().returns(['user']),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({ Items: [{ id: 'u1', name: 'Alice' }], LastEvaluatedKey: undefined });
+
+    await db.loadMemoryRecords();
+
+    assert.ok(deps.buildScan.calledOnce, 'buildScan called');
+    assert.strictEqual(deps.buildScan.firstCall.args[0], 'staging-users', 'table name prefixed');
+  });
+
+  test('no prefix when tablePrefix omitted', async function(assert) {
+    const deps = createMockDeps({
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    mockClient.send.resolves({ Item: { id: 'r1', name: 'Alice' } });
+
+    await db.findRecord('user', 'r1');
+
+    assert.ok(deps.buildGetItem.calledOnce, 'buildGetItem called');
+    assert.strictEqual(deps.buildGetItem.firstCall.args[0], 'users', 'table name without prefix');
+  });
+
+  test('prefixed table name in startup', async function(assert) {
+    const rawClientSend = sinon.stub();
+    // Call 0: DescribeTable → ResourceNotFoundException (table missing)
+    // Call 1: CreateTable → resolves
+    // Call 2: _waitForTableActive polls DescribeTable → ACTIVE
+    rawClientSend.onCall(0).rejects(Object.assign(new Error('No such table'), { name: 'ResourceNotFoundException' }));
+    rawClientSend.onCall(1).resolves({});
+    rawClientSend.onCall(2).resolves({ Table: { TableStatus: 'ACTIVE' } });
+
+    const DescribeTableCommand = makeCommandStub('DescribeTableCommand');
+    const CreateTableCommand = makeCommandStub('CreateTableCommand');
+    const UpdateTableCommand = makeCommandStub('UpdateTableCommand');
+
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'user': { table: 'users', columns: { name: 'S' }, foreignKeys: {}, idType: 'string' }
+      }),
+      getPluralName: sinon.stub().returns('users'),
+      loadTableCommands: sinon.stub().resolves({
+        DynamoDBClient: function(this: { send: sinon.SinonStub }) { this.send = rawClientSend; },
+        DescribeTableCommand,
+        CreateTableCommand,
+        UpdateTableCommand,
+      }),
+    });
+
+    const { db } = buildDb(deps);
+    await db.startup();
+
+    // DescribeTable (call 0) should receive prefixed table name
+    const describeParams = (rawClientSend.firstCall.args[0] as { params: { TableName: string } }).params;
+    assert.strictEqual(describeParams.TableName, 'staging-users', 'DescribeTableCommand receives prefixed table name');
+
+    // CreateTable (call 1) should receive prefixed table name
+    const createParams = (rawClientSend.secondCall.args[0] as { params: { TableName: string } }).params;
+    assert.strictEqual(createParams.TableName, 'staging-users', 'CreateTableCommand receives prefixed table name');
+  });
+
+  test('prefixed GSI names in registry', async function(assert) {
+    const deps = createMockDeps({
+      config: {
+        rootPath: '/app',
+        orm: { dynamodb: { region: 'us-east-1', tablePrefix: 'staging-' } }
+      } as typeof deps.config,
+      introspectModels: sinon.stub().returns({
+        'comment': {
+          table: 'comments',
+          columns: { body: 'S' },
+          foreignKeys: { post_id: { references: 'posts', column: 'id' } },
+          idType: 'string',
+        }
+      }),
+      getPluralName: sinon.stub().callsFake((name: string) => `${name}s`),
+    });
+
+    const { db, mockClient } = buildDb(deps);
+    // init() triggers _buildGsiRegistry
+    await db.init();
+
+    // Replace the client with our mock after init
+    db.client = mockClient;
+    mockClient.send.resolves({ Items: [{ id: 'c1', body: 'Hi', post_id: 'p1' }], LastEvaluatedKey: undefined });
+
+    await db.findAll('comment', { post_id: 'p1' });
+
+    assert.ok(deps.buildQuery.calledOnce, 'buildQuery called');
+    assert.strictEqual(deps.buildQuery.firstCall.args[1], 'staging-comments-post_id-index', 'GSI name includes prefix');
+  });
+});
