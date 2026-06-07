@@ -51,6 +51,7 @@ export interface OrmRestServerConfig {
 export interface OrmDynamoDBConfig {
   region?: string;
   endpoint?: string;
+  tablePrefix?: string;
   [key: string]: unknown;
 }
 
