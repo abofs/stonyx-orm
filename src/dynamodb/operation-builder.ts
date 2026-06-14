@@ -131,21 +131,27 @@ export function buildScan(
   if (exclusiveStartKey) params.ExclusiveStartKey = exclusiveStartKey;
 
   if (conditions && Object.keys(conditions).length > 0) {
-    const names: Record<string, string> = {};
-    const values: Record<string, unknown> = {};
-    const clauses: string[] = [];
+    const validEntries = Object.entries(conditions).filter(
+      ([, val]) => val !== undefined && val !== null,
+    );
 
-    for (const [attr, val] of Object.entries(conditions)) {
-      const nameAlias = `#${attr}`;
-      const valAlias = `:${attr}`;
-      names[nameAlias] = attr;
-      values[valAlias] = val;
-      clauses.push(`${nameAlias} = ${valAlias}`);
+    if (validEntries.length > 0) {
+      const names: Record<string, string> = {};
+      const values: Record<string, unknown> = {};
+      const clauses: string[] = [];
+
+      for (const [attr, val] of validEntries) {
+        const nameAlias = `#${attr}`;
+        const valAlias = `:${attr}`;
+        names[nameAlias] = attr;
+        values[valAlias] = val;
+        clauses.push(`${nameAlias} = ${valAlias}`);
+      }
+
+      params.FilterExpression = clauses.join(' AND ');
+      params.ExpressionAttributeNames = names;
+      params.ExpressionAttributeValues = values;
     }
-
-    params.FilterExpression = clauses.join(' AND ');
-    params.ExpressionAttributeNames = names;
-    params.ExpressionAttributeValues = values;
   }
 
   return params;
@@ -162,11 +168,19 @@ export function buildQuery(
   keyConditions: Record<string, unknown>,
   exclusiveStartKey?: Record<string, unknown>,
 ): QueryParams {
+  const validEntries = Object.entries(keyConditions).filter(
+    ([, val]) => val !== undefined && val !== null,
+  );
+
+  if (validEntries.length === 0) {
+    throw new Error('buildQuery: all keyCondition values are undefined/null');
+  }
+
   const names: Record<string, string> = {};
   const values: Record<string, unknown> = {};
   const clauses: string[] = [];
 
-  for (const [attr, val] of Object.entries(keyConditions)) {
+  for (const [attr, val] of validEntries) {
     const nameAlias = `#${attr}`;
     const valAlias = `:${attr}`;
     names[nameAlias] = attr;
