@@ -114,6 +114,35 @@ module('[Unit] DynamoDB operation-builder — buildScan', function() {
   });
 });
 
+module('[Unit] DynamoDB operation-builder — buildScan (undefined/null stripping)', function() {
+  test('scan with all-undefined conditions behaves like unfiltered scan', function(assert) {
+    const params = buildScan('alerts', { email: undefined });
+
+    assert.strictEqual(params.TableName, 'alerts');
+    assert.strictEqual(params.FilterExpression, undefined, 'no FilterExpression');
+    assert.strictEqual(params.ExpressionAttributeNames, undefined, 'no ExpressionAttributeNames');
+    assert.strictEqual(params.ExpressionAttributeValues, undefined, 'no ExpressionAttributeValues');
+  });
+
+  test('scan strips undefined values from mixed conditions', function(assert) {
+    const params = buildScan('alerts', { status: 'active', email: undefined });
+
+    assert.ok(params.FilterExpression, 'FilterExpression set');
+    assert.ok(params.FilterExpression!.includes('#status = :status'), 'status in expression');
+    assert.notOk(params.FilterExpression!.includes('email'), 'email not in expression');
+    assert.deepEqual(params.ExpressionAttributeNames, { '#status': 'status' });
+    assert.deepEqual(params.ExpressionAttributeValues, { ':status': 'active' });
+  });
+
+  test('scan strips null values from conditions', function(assert) {
+    const params = buildScan('alerts', { status: null });
+
+    assert.strictEqual(params.FilterExpression, undefined, 'no FilterExpression');
+    assert.strictEqual(params.ExpressionAttributeNames, undefined, 'no ExpressionAttributeNames');
+    assert.strictEqual(params.ExpressionAttributeValues, undefined, 'no ExpressionAttributeValues');
+  });
+});
+
 module('[Unit] DynamoDB operation-builder — buildQuery', function() {
   test('builds query for single GSI key condition', function(assert) {
     const params = buildQuery('sessions', 'user-index', { userId: 'u1' });
@@ -138,5 +167,24 @@ module('[Unit] DynamoDB operation-builder — buildQuery', function() {
     const params = buildQuery('sessions', 'user-index', { userId: 'u1' }, startKey);
 
     assert.deepEqual(params.ExclusiveStartKey, startKey);
+  });
+});
+
+module('[Unit] DynamoDB operation-builder — buildQuery (undefined/null stripping)', function() {
+  test('query throws when all keyCondition values are undefined/null', function(assert) {
+    assert.throws(
+      () => buildQuery('sessions', 'user-index', { userId: undefined }),
+      /buildQuery: all keyCondition values are undefined\/null/,
+      'throws descriptive error',
+    );
+  });
+
+  test('query strips undefined values from mixed keyConditions', function(assert) {
+    const params = buildQuery('orders', 'user-status-index', { userId: 'u1', status: undefined });
+
+    assert.ok(params.KeyConditionExpression.includes('#userId = :userId'), 'userId in expression');
+    assert.notOk(params.KeyConditionExpression.includes('status'), 'status not in expression');
+    assert.deepEqual(params.ExpressionAttributeNames, { '#userId': 'userId' });
+    assert.deepEqual(params.ExpressionAttributeValues, { ':userId': 'u1' });
   });
 });
