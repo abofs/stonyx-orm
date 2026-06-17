@@ -319,6 +319,16 @@ export default class DynamoDBDB {
   // SqlDb contract — persist
   // -------------------------------------------------------------------------
 
+  /**
+   * DynamoDB does NOT use write serialization (#156).
+   *
+   * Unlike MySQL/PostgreSQL, DynamoDB has no server-side foreign key
+   * constraints and no multi-row transactions in standard single-item
+   * operations (PutItem, UpdateItem, DeleteItem). Each operation is
+   * atomic at the item level and cannot deadlock against other items.
+   * Concurrent fire-and-forget writes therefore cannot produce the
+   * cross-row lock contention that causes InnoDB/PG deadlocks.
+   */
   async persist(operation: string, modelName: string, context: PersistContext, response: PersistResponse): Promise<void> {
     const OrmModule = await this._getOrm();
     if (OrmModule.default?.instance?.isView?.(modelName)) return;

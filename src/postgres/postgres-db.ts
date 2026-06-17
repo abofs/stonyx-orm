@@ -90,6 +90,15 @@ export default class PostgresDB {
   pool!: Pool | null;
   pgConfig!: Record<string, unknown>;
 
+  /**
+   * Promise-chain mutex for write serialization (#156).
+   * All persist() calls chain through this single queue so concurrent
+   * fire-and-forget writes never produce parallel transactions
+   * on FK-linked rows (which cause deadlocks).
+   * Reads are NOT affected — only persist() serializes.
+   */
+  private _writeQueue: Promise<void> = Promise.resolve();
+
   constructor(deps: Partial<PostgresDeps> = {}) {
     const Ctor = this.constructor as typeof PostgresDB;
     if (Ctor.instance) return Ctor.instance;
@@ -468,14 +477,21 @@ export default class PostgresDB {
     const Orm = (await import('@stonyx/orm')).default;
     if ((Orm.instance as { isView?: (name: string) => boolean })?.isView?.(modelName)) return;
 
-    switch (operation) {
-      case 'create':
-        return this._persistCreate(modelName, context, response);
-      case 'update':
-        return this._persistUpdate(modelName, context, response);
-      case 'delete':
-        return this._persistDelete(modelName, context);
-    }
+    const work = async () => {
+      switch (operation) {
+        case 'create':
+          return this._persistCreate(modelName, context, response);
+        case 'update':
+          return this._persistUpdate(modelName, context, response);
+        case 'delete':
+          return this._persistDelete(modelName, context);
+      }
+    };
+
+    // Chain through the write queue — .then(work, work) ensures the queue
+    // advances even when a previous persist rejects (#156).
+    this._writeQueue = this._writeQueue.then(work, work);
+    return this._writeQueue;
   }
 
   private async _persistCreate(modelName: string, context: PersistContext, response: PersistResponse): Promise<void> {
