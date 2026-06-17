@@ -170,14 +170,15 @@ export default class Store {
     this.data.set(key, value);
   }
 
-  remove(key: string, id?: number | string): void {
+  remove(key: string, id?: number | string, options?: { _skipAutoPersist?: boolean }): void {
     // Guard: read-only views cannot have records removed
     if (Orm.instance?.isView?.(key)) {
       throw new Error(`Cannot remove records from read-only view '${key}'`);
     }
 
-    // Auto-persist delete to SQL
-    if (id && Orm.instance?.sqlDb) {
+    // Auto-persist delete to SQL (fire-and-forget) — skipped when the
+    // request path handles persist itself to avoid double-delete.
+    if (id && Orm.instance?.sqlDb && !options?._skipAutoPersist) {
       Orm.instance.sqlDb.persist('delete', key, { recordId: id }, {}).catch((err: unknown) => {
         Orm.instance.emitPersistError({
           operation: 'delete',
