@@ -70,6 +70,7 @@
   "dependencies": {
     "@stonyx/cron": "0.2.1-beta.70",
     "@stonyx/events": "0.1.1-beta.51",
+    "@stonyx/utils": "0.2.3-beta.25",
     "stonyx": "0.2.3-beta.68"
   },
   "peerDependencies": {
@@ -105,7 +106,6 @@
   },
   "devDependencies": {
     "@stonyx/rest-server": "0.2.1-beta.71",
-    "@stonyx/utils": "0.2.3-beta.25",
     "@types/node": "^25.6.0",
     "mysql2": "^3.20.0",
     "pg": "^8.20.0",
