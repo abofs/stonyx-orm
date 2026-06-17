@@ -376,7 +376,7 @@ export default class OrmRequest extends Request {
     };
 
     const deleteHandler: HandlerFn = ({ params }) => {
-      store.remove(model, getId(params));
+      store.remove(model, getId(params), { _skipAutoPersist: true });
       return 204;
     };
 
@@ -448,9 +448,9 @@ export default class OrmRequest extends Request {
         context.record = store.get(this.model, getId(request.params));
       }
 
-      // Persist to SQL database for create/update (delete is handled by store.remove auto-persist)
+      // Persist to SQL database for all write operations (create/update/delete)
       const sqlDb = Orm.instance.sqlDb;
-      if (sqlDb && (operation === 'create' || operation === 'update')) {
+      if (sqlDb && WRITE_OPERATIONS.has(operation)) {
         await sqlDb.persist(operation, this.model, context, response);
       }
 
