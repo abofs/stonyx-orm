@@ -25,9 +25,9 @@ import mysql from 'mysql2/promise';
 // ---------------------------------------------------------------------------
 const MYSQL_CONFIG = {
   host: '127.0.0.1',
-  port: 3307,
-  user: 'root',
-  password: 'spiketest',
+  port: parseInt(process.env.MYSQL_PORT || '3306'),
+  user: process.env.MYSQL_USER || 'root',
+  password: process.env.MYSQL_PASSWORD || '',
   database: 'deadlock_spike',
 };
 
