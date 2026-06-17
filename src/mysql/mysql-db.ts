@@ -84,6 +84,15 @@ export default class MysqlDB {
   pool!: Pool | null;
   mysqlConfig!: MysqlConfig;
 
+  /**
+   * Promise-chain mutex for write serialization (#156).
+   * All persist() calls chain through this single queue so concurrent
+   * fire-and-forget writes never produce parallel InnoDB transactions
+   * on FK-linked rows (which cause deadlocks).
+   * Reads are NOT affected — only persist() serializes.
+   */
+  private _writeQueue: Promise<void> = Promise.resolve();
+
   constructor(deps: Partial<MysqlDBDeps> = {}) {
     if (MysqlDB.instance) return MysqlDB.instance;
     MysqlDB.instance = this;
@@ -398,14 +407,21 @@ export default class MysqlDB {
     const Orm = (await import('@stonyx/orm')).default;
     if ((Orm as unknown as { instance?: { isView?: (name: string) => boolean } }).instance?.isView?.(modelName)) return;
 
-    switch (operation) {
-      case 'create':
-        return this._persistCreate(modelName, context, response);
-      case 'update':
-        return this._persistUpdate(modelName, context, response);
-      case 'delete':
-        return this._persistDelete(modelName, context);
-    }
+    const work = async () => {
+      switch (operation) {
+        case 'create':
+          return this._persistCreate(modelName, context, response);
+        case 'update':
+          return this._persistUpdate(modelName, context, response);
+        case 'delete':
+          return this._persistDelete(modelName, context);
+      }
+    };
+
+    // Chain through the write queue — .then(work, work) ensures the queue
+    // advances even when a previous persist rejects (#156).
+    this._writeQueue = this._writeQueue.then(work, work);
+    return this._writeQueue;
   }
 
   private async _persistCreate(modelName: string, context: PersistContext, response: PersistResponse): Promise<void> {
