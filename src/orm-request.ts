@@ -443,6 +443,11 @@ export default class OrmRequest extends Request {
       // Execute main handler
       const response = await handler(request, state);
 
+      // Set context.record for update BEFORE persist so SQL drivers can read it
+      if (operation === 'update' && (response as JsonApiResponse)?.data) {
+        context.record = store.get(this.model, getId(request.params));
+      }
+
       // Persist to SQL database for create/update (delete is handled by store.remove auto-persist)
       const sqlDb = Orm.instance.sqlDb;
       if (sqlDb && (operation === 'create' || operation === 'update')) {
@@ -461,8 +466,6 @@ export default class OrmRequest extends Request {
         const responseData = (response as { data: { id: string | number } }).data;
         const recordId = isNaN(responseData.id as unknown as number) ? responseData.id : parseInt(responseData.id as string);
         context.record = store.get(this.model, recordId);
-      } else if (operation === 'update' && (response as JsonApiResponse)?.data) {
-        context.record = store.get(this.model, getId(request.params));
       } else if (operation === 'delete') {
         // For delete, the record may no longer exist, but we have oldState
         context.recordId = getId(request.params);
