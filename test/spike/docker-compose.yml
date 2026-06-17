@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  mysql-deadlock-spike:
+    image: mysql:8
+    container_name: stonyx-orm-deadlock-spike
+    environment:
+      MYSQL_ROOT_PASSWORD: spiketest
+      MYSQL_DATABASE: deadlock_spike
+    ports:
+      - "3307:3306"
+    command: >
+      --innodb-lock-wait-timeout=5
+      --innodb-deadlock-detect=ON
+      --innodb-print-all-deadlocks=ON
+    tmpfs:
+      - /var/lib/mysql
