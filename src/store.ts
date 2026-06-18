@@ -64,7 +64,7 @@ export default class Store {
   get(key: string): Map<number | string, unknown> | undefined;
   get(key: string, id: number | string): unknown;
   get(key: string, id?: number | string): Map<number | string, unknown> | unknown | undefined {
-    if (!id) return this.data.get(key);
+    if (id === undefined) return this.data.get(key);
 
     return this.data.get(key)?.get(id);
   }
