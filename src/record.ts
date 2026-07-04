@@ -87,12 +87,15 @@ export default class Record {
 
     for (const [key, childRecord] of Object.entries(this.__relationships)) {
       if (Array.isArray(childRecord)) {
+        // Filter out cleaned records (those with no __model)
+        const live = childRecord.filter((r: Record) => r?.__model);
+
         // Deduplicate by record ID — keep last occurrence (latest data wins)
         const seen = new Set<unknown>();
         const unique: Record[] = [];
 
-        for (let i = childRecord.length - 1; i >= 0; i--) {
-          const r = childRecord[i] as Record;
+        for (let i = live.length - 1; i >= 0; i--) {
+          const r = live[i] as Record;
           if (!seen.has(r.id)) {
             seen.add(r.id);
             unique.push(r);
@@ -102,7 +105,7 @@ export default class Record {
         unique.reverse();
         records[key] = unique.map((r: Record) => r.serialize());
       } else {
-        records[key] = (childRecord as Record)?.serialize() ?? null;
+        records[key] = (childRecord as Record)?.__model ? (childRecord as Record).serialize() : null;
       }
     }
 
@@ -136,8 +139,8 @@ export default class Record {
       if (fields && !fields.has(key)) continue;
 
       const relationshipData = Array.isArray(childRecord)
-        ? childRecord.map((r: Record) => ({ type: r.__model.__name, id: r.id }))
-        : childRecord ? { type: (childRecord as Record).__model.__name, id: (childRecord as Record).id } : null;
+        ? childRecord.filter((r: Record) => r?.__model).map((r: Record) => ({ type: r.__model.__name, id: r.id }))
+        : (childRecord && (childRecord as Record).__model) ? { type: (childRecord as Record).__model.__name, id: (childRecord as Record).id } : null;
 
       // Dasherize the key for URL paths (e.g., accessLinks -> access-links)
       const dasherizedKey = camelCaseToKebabCase(key);
