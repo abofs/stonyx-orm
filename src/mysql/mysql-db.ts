@@ -127,7 +127,15 @@ export default class MysqlDB {
     if (pending.length > 0) {
       this.deps.log.db?.(`${pending.length} pending migration(s) found.`);
 
-      const shouldApply = await this.deps.confirm(`${pending.length} pending migration(s) found. Apply now?`);
+      let shouldApply: boolean;
+      if (this.mysqlConfig.autoMigrate === true) {
+        shouldApply = true;
+      } else if (this.mysqlConfig.autoMigrate === false) {
+        shouldApply = false;
+        this.deps.log.warn?.(`autoMigrate is false — skipping ${pending.length} pending migration(s).`);
+      } else {
+        shouldApply = await this.deps.confirm(`${pending.length} pending migration(s) found. Apply now?`);
+      }
 
       if (shouldApply) {
         for (const filename of pending) {
@@ -148,9 +156,17 @@ export default class MysqlDB {
       const modelCount = Object.keys(schemas).length;
 
       if (modelCount > 0) {
-        const shouldGenerate = await this.deps.confirm(
-          `No migrations found but ${modelCount} model(s) detected. Generate and apply initial migration?`
-        );
+        let shouldGenerate: boolean;
+        if (this.mysqlConfig.autoMigrate === true) {
+          shouldGenerate = true;
+        } else if (this.mysqlConfig.autoMigrate === false) {
+          shouldGenerate = false;
+          this.deps.log.warn?.(`autoMigrate is false — skipping initial migration generation for ${modelCount} model(s).`);
+        } else {
+          shouldGenerate = await this.deps.confirm(
+            `No migrations found but ${modelCount} model(s) detected. Generate and apply initial migration?`
+          );
+        }
 
         if (shouldGenerate) {
           const { generateMigration } = await import('./migration-generator.js');

@@ -9,6 +9,7 @@ interface MysqlConfig {
   connectionLimit?: number;
   migrationsTable?: string;
   migrationsDir?: string;
+  autoMigrate?: boolean;
 }
 
 let pool: Pool | null = null;

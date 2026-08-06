@@ -18,6 +18,7 @@ export interface OrmMysqlConfig {
   connectionLimit?: number;
   migrationsDir?: string;
   migrationsTable?: string;
+  autoMigrate?: boolean;
   [key: string]: unknown;
 }
 
@@ -30,6 +31,7 @@ export interface OrmPostgresConfig {
   connectionLimit?: number;
   migrationsDir?: string;
   migrationsTable?: string;
+  autoMigrate?: boolean;
   [key: string]: unknown;
 }
 

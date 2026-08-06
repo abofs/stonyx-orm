@@ -280,6 +280,7 @@ Located in `config/environment.js`. All values overridable via environment varia
 | `MYSQL_DATABASE` | `'stonyx'` | MySQL database name |
 | `MYSQL_CONNECTION_LIMIT` | `10` | Connection pool size |
 | `MYSQL_MIGRATIONS_DIR` | `'migrations'` | Migration files directory |
+| `AUTO_MIGRATE` | undefined | `'true'` auto-applies migrations, `'false'` skips with warning, unset prompts interactively (requires TTY) |
 
 ## Development Guide
 
