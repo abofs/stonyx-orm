@@ -6,7 +6,7 @@ settings:
 
 overrides:
   stonyx: 0.2.3-beta.61
-  '@stonyx/utils': 0.2.3-beta.23
+  '@stonyx/utils': 0.2.3-beta.25
   '@stonyx/logs': 1.0.1-beta.16
 
 importers:
@@ -26,8 +26,8 @@ importers:
         specifier: 0.1.1-beta.51
         version: 0.1.1-beta.51
       '@stonyx/utils':
-        specifier: 0.2.3-beta.23
-        version: 0.2.3-beta.23
+        specifier: 0.2.3-beta.25
+        version: 0.2.3-beta.25
       stonyx:
         specifier: 0.2.3-beta.61
         version: 0.2.3-beta.61
@@ -420,8 +420,8 @@ packages:
   '@stonyx/rest-server@0.2.1-beta.71':
     resolution: {integrity: sha512-d8cRiDt3vXPmAV59YfZxT/ocGgBSZsqjQbhbBmBHAykdQ8xh/9J5DaT8yOOrLIUowG7ZXduWUuCFyNcQCTTMpA==}
 
-  '@stonyx/utils@0.2.3-beta.23':
-    resolution: {integrity: sha512-6LRYN4FA/bYFp3r3/1dUuByC76o3QOMm1n+tot09oi0SRmYyGwgPigAZC0JX2wqkw4Fc9rYyhTLqY8o1g2QOMA==}
+  '@stonyx/utils@0.2.3-beta.25':
+    resolution: {integrity: sha512-g2TvjJIfCfBRbpKWOZDwotAwpkXQ2c4xkRMEao4DZttgt1wYP9nfOEp0V/MkEwjRfq/hSZTQFncG5I36nr6Eng==}
 
   '@types/node@25.6.0':
     resolution: {integrity: sha512-+qIYRKdNYJwY3vRCZMdJbPLJAtGjQBudzZzdzwQYkEPQd+PJGixUL5QfvCLDaULoLv+RhT3LDkwEfKaAkgSmNQ==}
@@ -1367,7 +1367,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@stonyx/utils@0.2.3-beta.23': {}
+  '@stonyx/utils@0.2.3-beta.25': {}
 
   '@types/node@25.6.0':
     dependencies:
@@ -1828,7 +1828,7 @@ snapshots:
   stonyx@0.2.3-beta.61:
     dependencies:
       '@stonyx/logs': 1.0.1-beta.16
-      '@stonyx/utils': 0.2.3-beta.23
+      '@stonyx/utils': 0.2.3-beta.25
 
   strnum@2.3.0: {}
 
