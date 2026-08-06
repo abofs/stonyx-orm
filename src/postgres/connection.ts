@@ -21,7 +21,7 @@ export async function getPool(pgConfig: PgConfig, extensions: string[] = ['vecto
 
   const { default: pg } = await import('pg');
 
-  const { host, port, user, password, database, connectionLimit, migrationsDir, migrationsTable, ...poolOpts } = pgConfig;
+  const { host, port, user, password, database, connectionLimit, migrationsDir, migrationsTable, autoMigrate, ...poolOpts } = pgConfig;
 
   pool = new pg.Pool({
     host,

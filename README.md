@@ -98,6 +98,7 @@ export default {
       connectionLimit: parseInt(MYSQL_CONNECTION_LIMIT ?? '10'),
       migrationsDir: MYSQL_MIGRATIONS_DIR ?? 'migrations',
       migrationsTable: '__migrations',
+      autoMigrate: AUTO_MIGRATE === 'true' ? true : AUTO_MIGRATE === 'false' ? false : undefined,
     } : undefined,
     dynamodb: DYNAMODB_REGION ? {
       region: DYNAMODB_REGION,
