@@ -195,9 +195,9 @@ export default class Store {
   }
 
   /**
-   * Evict a record from the store with full relationship registry cleanup,
-   * WITHOUT calling record.clean(). This preserves the caller's reference
-   * to the returned record (used by memory:false post-persist eviction).
+   * Evict a record from the store with full relationship registry cleanup.
+   * The caller retains its reference to the returned record, which is the
+   * contract memory:false post-persist eviction relies on.
    *
    * @param registryId - The ID used when the record's relationships were
    *   registered. For SQL models with pending IDs, this is the original
