@@ -258,7 +258,6 @@ export default class Store {
       this._removeFromHasManyArrays(modelName, recordId, visited);
       this._nullifyBelongsToReferences(modelName, recordId, visited);
       this._cleanupRelationshipRegistries(modelName, recordId);
-      recordToUnload.clean();
 
       this.data.get(modelName)?.delete(recordId as string | number);
     }
