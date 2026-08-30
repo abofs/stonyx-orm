@@ -100,13 +100,76 @@ function reserveFreePort() {
   });
 }
 
-function listFiles(dir) {
-  if (!fs.existsSync(dir)) return [];
+function listEntries(dir) {
+  if (!fs.existsSync(dir)) return { files: [], dirs: [] };
 
-  return fs.readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter(entry => entry.isFile())
-    .map(entry => path.relative(dir, path.join(entry.parentPath ?? entry.path, entry.name)))
-    .sort();
+  const entries = fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+    .map(entry => ({
+      rel: path.relative(dir, path.join(entry.parentPath ?? entry.path, entry.name)),
+      isDir: entry.isDirectory(),
+    }));
+
+  return {
+    files: entries.filter(e => !e.isDir).map(e => e.rel).sort(),
+    dirs: entries.filter(e => e.isDir).map(e => e.rel).sort(),
+  };
+}
+
+function listFiles(dir) {
+  return listEntries(dir).files;
+}
+
+/**
+ * Delete everything under `dir` that was not in `baseline`.
+ *
+ * Every test in this module boots a child that may write to test/sample/, and
+ * a child that writes there is precisely the defect under test. Without this,
+ * one assertion's leak becomes the next assertion's baseline: with `mode`
+ * removed from the pinned set, assertion 1 correctly goes red AND writes
+ * test/sample/db/ with five collection files, after which assertion 3 -- whose
+ * `before` snapshot was taken after assertion 1 had already run, and which
+ * only looks for the `sentinel-db-dir` name -- reports PASS. Run 2 in the same
+ * checkout then aborts at boot with a DB mode mismatch. A guard whose failure
+ * mode wedges the checkout is worse than no guard.
+ *
+ * Directories first: removing a stray directory takes its files with it.
+ */
+/**
+ * The ONE artifact a correctly-isolated boot is allowed to create under
+ * test/sample/, because test/config/environment.js pins `db.file` to it. It is
+ * named here rather than filtered by a pattern so that the exclusion is a
+ * single reviewable line: everything else appearing under test/sample/ after a
+ * boot is, by definition, a variable that escaped the pinned set.
+ */
+const PINNED_DB_ARTIFACT = 'db.json';
+
+/** Files under `dir` that are neither in `baseline` nor the pinned DB target. */
+function leakedFiles(dir, baseline) {
+  const known = new Set([...baseline.files, PINNED_DB_ARTIFACT]);
+
+  return listFiles(dir).filter(rel => !known.has(rel));
+}
+
+function restoreDir(dir, baseline) {
+  const removed = [];
+  const baselineDirs = new Set(baseline.dirs);
+  const baselineFiles = new Set(baseline.files);
+
+  for (const rel of listEntries(dir).dirs) {
+    if (baselineDirs.has(rel) || !fs.existsSync(path.join(dir, rel))) continue;
+
+    fs.rmSync(path.join(dir, rel), { recursive: true, force: true });
+    removed.push(`${rel}/`);
+  }
+
+  for (const rel of listEntries(dir).files) {
+    if (baselineFiles.has(rel)) continue;
+
+    fs.rmSync(path.join(dir, rel), { force: true });
+    removed.push(rel);
+  }
+
+  return removed;
 }
 
 /**
@@ -174,9 +237,26 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
   let cleanupRoot;
   let restPort;
 
+  // Snapshotted ONCE, before any test in this module has booted a child, so it
+  // records the state of test/sample/ that this module inherited rather than
+  // the state a previous assertion in this module left behind. Assertion 3
+  // used to take its own `before` inside the test body, which meant that when
+  // assertion 1 leaked, assertion 3 compared the leak against itself.
+  let sampleBaseline;
+  let migrationsExistedBefore;
+
   hooks.before(async function() {
     ({ link: root, cleanup: cleanupRoot } = makeNormalizedRoot());
     restPort = await reserveFreePort();
+    sampleBaseline = listEntries(sampleDir);
+    migrationsExistedBefore = fs.existsSync(migrationsArtifact);
+  });
+
+  // Every test here boots a child that may write to disk, and each one has to
+  // hand the next a clean checkout. Runs even when the test threw.
+  hooks.afterEach(function() {
+    restoreDir(sampleDir, sampleBaseline);
+    if (!migrationsExistedBefore) fs.rmSync(migrationsArtifact, { recursive: true, force: true });
   });
 
   hooks.after(function() {
@@ -241,6 +321,13 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
 
     assert.deepEqual(polluted, clean,
       'config.orm + config.restServer resolve identically whether or not ambient database variables are exported');
+
+    // Assertion 1 boots two real children. When the pinned set regresses, the
+    // polluted child does not merely resolve a wrong config -- it writes one.
+    // Fail on the leak here rather than letting it silently become the next
+    // assertion's baseline. hooks.afterEach still cleans up either way.
+    assert.deepEqual(leakedFiles(sampleDir, sampleBaseline), [],
+      'neither boot child wrote anything into test/sample/ beyond the pinned db.json');
   });
 
   // Assertion 2 — the connection itself. A decoy listener accepts the socket
@@ -303,34 +390,34 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
   // directory" against unfixed code and proves nothing. The DB_MODE artifact
   // only appears when no connection block shadows the file DB.
   test('a boot with DB_MODE/DB_DIRECTORY exported writes no collection directory and leaves test/sample/ byte-identical', async function(assert) {
-    const before = listFiles(sampleDir);
+    // `sampleBaseline`, not a locally re-snapshotted listing: taking the
+    // baseline inside this test body is what let an earlier assertion's leak
+    // be compared against itself. Cleanup is hooks.afterEach's job, which also
+    // covers artifacts written under a name this test does not know about.
+    const result = await bootChild({
+      root,
+      restPort,
+      pollute: {
+        DB_MODE: POLLUTION.DB_MODE,
+        DB_DIRECTORY: POLLUTION.DB_DIRECTORY,
+        DB_AUTO_SAVE: POLLUTION.DB_AUTO_SAVE,
+      },
+      exitAfterConfig: false,
+      watchdogMs: 60000,
+    });
 
-    let result;
+    assert.ok(result.stdout.includes('PHASE:booting'),
+      'precondition: the spawned child booted');
 
-    try {
-      result = await bootChild({
-        root,
-        restPort,
-        pollute: {
-          DB_MODE: POLLUTION.DB_MODE,
-          DB_DIRECTORY: POLLUTION.DB_DIRECTORY,
-          DB_AUTO_SAVE: POLLUTION.DB_AUTO_SAVE,
-        },
-        exitAfterConfig: false,
-        watchdogMs: 60000,
-      });
+    assert.notOk(fs.existsSync(dbDirArtifact),
+      `no collection directory is written at ${path.relative(repoRoot, dbDirArtifact)}`);
 
-      assert.ok(result.stdout.includes('PHASE:booting'),
-        'precondition: the spawned child booted');
-
-      assert.notOk(fs.existsSync(dbDirArtifact),
-        `no collection directory is written at ${path.relative(repoRoot, dbDirArtifact)}`);
-
-      assert.deepEqual(listFiles(sampleDir), before,
-        'test/sample/ file listing is unchanged by a boot with ambient DB_MODE exported');
-    } finally {
-      fs.rmSync(dbDirArtifact, { recursive: true, force: true });
-    }
+    // Not just the sentinel name: DB_MODE leaking produces a directory named
+    // by DB_DIRECTORY, but a partial regression in the pinned set produces one
+    // named by the OVERRIDE's db.directory ('db'). Comparing the whole listing
+    // catches both; checking for `sentinel-db-dir` alone catches only the first.
+    assert.deepEqual(leakedFiles(sampleDir, sampleBaseline), [],
+      'test/sample/ gains nothing beyond the pinned db.json from a boot with ambient DB_MODE exported');
   });
 
   // REGRESSION GUARD — not a defect test, and labelled as one deliberately.
@@ -345,21 +432,12 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
   // because assertion 1 is what actually forecloses the artifact: with
   // config.orm.mysql pinned to null there is no migrationsDir to resolve.
   test('regression guard: a boot with the full polluting set exported creates no migrations/ directory at the repo root', async function(assert) {
-    const existedBefore = fs.existsSync(migrationsArtifact);
+    const result = await bootChild({ root, restPort, pollute: POLLUTION, exitAfterConfig: false, watchdogMs: 60000 });
 
-    let result;
+    assert.ok(result.stdout.includes('PHASE:booting'),
+      'precondition: the spawned child booted');
 
-    try {
-      result = await bootChild({ root, restPort, pollute: POLLUTION, exitAfterConfig: false, watchdogMs: 60000 });
-
-      assert.ok(result.stdout.includes('PHASE:booting'),
-        'precondition: the spawned child booted');
-
-      assert.strictEqual(fs.existsSync(migrationsArtifact), existedBefore,
-        'no migrations/ directory is created at the repo root');
-    } finally {
-      fs.rmSync(dbDirArtifact, { recursive: true, force: true });
-      if (!existedBefore) fs.rmSync(migrationsArtifact, { recursive: true, force: true });
-    }
+    assert.strictEqual(fs.existsSync(migrationsArtifact), migrationsExistedBefore,
+      'no migrations/ directory is created at the repo root');
   });
 });
