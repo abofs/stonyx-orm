@@ -33,14 +33,26 @@ process.env.NODE_ENV = 'test';
 // child on that unhandled rejection before the config snapshot is printed,
 // which would look to the parent like "the child never booted" rather than
 // like the defect it is. Keep the process alive and let the parent decide.
-process.on('unhandledRejection', err => {
+process.on('unhandledRejection', (err: any) => {
   console.log(`PHASE:unhandled-rejection ${err?.message ?? err}`);
 });
-process.on('uncaughtException', err => {
+process.on('uncaughtException', (err: any) => {
   console.log(`PHASE:uncaught-exception ${err?.message ?? err}`);
 });
 
-const { default: Stonyx } = await import('stonyx');
+// stonyx's published types do not survive a dynamic `import('stonyx')` under
+// moduleResolution NodeNext: the default export resolves to the module
+// namespace, so `new Stonyx(...)`, `Stonyx.config` and `Stonyx.ready` all fail
+// to typecheck. test/setup.ts and test/integration/dynamodb/setup.ts hit the
+// same thing. Narrowed here rather than suppressed with @ts-nocheck, so the
+// rest of this file is genuinely checked.
+type StonyxStatic = (new (config: unknown, rootPath: string) => unknown) & {
+  config: Record<string, any>;
+  ready: Promise<unknown>;
+};
+
+const { default: StonyxModule } = await import('stonyx');
+const Stonyx = StonyxModule as unknown as StonyxStatic;
 const { default: config } = await import(pathToFileURL(`${ROOT}/config/environment.js`).href);
 
 new Stonyx(config, ROOT);
@@ -71,7 +83,7 @@ if (process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG === '1') process.exit(0);
 try {
   await Stonyx.ready;
   console.log('PHASE:ready');
-} catch (err) {
+} catch (err: any) {
   console.log(`PHASE:ready-error ${err.message}`);
 }
 

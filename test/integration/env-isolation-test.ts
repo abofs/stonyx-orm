@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Regression coverage for abofs/stonyx-orm#184 — ambient database environment
 // variables leak into the test suite because test/config/environment.ts pins
 // only part of the set that config/environment.js reads.
@@ -11,6 +10,7 @@
 // loopback port, never at a real host.
 import QUnit from 'qunit';
 import net from 'net';
+import type { AddressInfo } from 'net';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -23,7 +23,7 @@ const { module, test } = QUnit;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
-const childScript = path.join(repoRoot, 'test/helpers/env-isolation-child.mjs');
+const childScript = path.join(repoRoot, 'test/helpers/env-isolation-child.ts');
 
 // A closed loopback port. Connections are refused immediately, so a boot that
 // wrongly builds a connection block fails fast instead of reaching a real host.
@@ -153,13 +153,13 @@ function makeNormalizedRoot() {
 }
 
 /** An unused port, so children never collide with the suite's own REST server. */
-function reserveFreePort() {
-  return new Promise((resolve, reject) => {
+function reserveFreePort(): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const probe = net.createServer();
 
     probe.once('error', reject);
     probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
+      const { port } = probe.address() as AddressInfo;
       probe.close(() => resolve(String(port)));
     });
   });
@@ -170,7 +170,7 @@ function listEntries(dir) {
 
   const entries = fs.readdirSync(dir, { recursive: true, withFileTypes: true })
     .map(entry => ({
-      rel: path.relative(dir, path.join(entry.parentPath ?? entry.path, entry.name)),
+      rel: path.relative(dir, path.join(entry.parentPath, entry.name)),
       isDir: entry.isDirectory(),
     }));
 
@@ -237,6 +237,13 @@ function restoreDir(dir, baseline) {
   return removed;
 }
 
+interface ChildResult {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  timedOut: boolean;
+}
+
 /**
  * Spawn a boot child. `pollute` keys are SET in the child's environment;
  * every other POLLUTION key is deliberately REMOVED, so the "clean" baseline
@@ -261,7 +268,7 @@ function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watch
   env.ORM_TEST_REST_PORT = restPort;
   if (exitAfterConfig) env.ISOLATION_CHILD_EXIT_AFTER_CONFIG = '1';
 
-  return new Promise(resolve => {
+  return new Promise<ChildResult>(resolve => {
     const child = spawn(process.execPath, ['--import', 'tsx/esm', childScript], {
       cwd: repoRoot,
       env,
@@ -287,7 +294,7 @@ function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watch
   });
 }
 
-function parseSnapshot({ stdout, stderr, code }) {
+function parseSnapshot({ stdout, stderr, code }: ChildResult) {
   const match = stdout.match(/---CONFIG-START---\n([\s\S]*?)\n---CONFIG-END---/);
 
   if (!match) {
@@ -486,7 +493,7 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
     });
 
     const decoyPort = await new Promise(resolve => {
-      decoy.listen(0, '127.0.0.1', () => resolve(String(decoy.address().port)));
+      decoy.listen(0, '127.0.0.1', () => resolve(String((decoy.address() as AddressInfo).port)));
     });
 
     let result;
