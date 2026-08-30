@@ -47,6 +47,17 @@ const RUN_SUITE = process.env.ISOLATION_CHILD_TEST_SUITE === '1';
 delete process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG;
 delete process.env.ISOLATION_CHILD_TEST_SUITE;
 
+// The witness for the scrub two lines above. Printed from the ENVIRONMENT
+// rather than from a list of names, so it reports what actually survived
+// rather than what this file believes it deleted.
+//
+// Without it the child half of the scrub is claim-only: the parent's own
+// scrub in bootChild means an armed value never reaches this process in the
+// first place, so deleting these two lines leaves the whole module green (it
+// did -- mutation M2 on the final verification round). The parent asserts
+// against this line with the controls forced past its scrub.
+console.log(`PHASE:controls-retained ${Object.keys(process.env).filter(key => key.startsWith('ISOLATION_CHILD_')).sort().join(',')}`);
+
 // Against unfixed code the boot dials a database and the driver rejects
 // asynchronously (ECONNREFUSED from a dead sentinel port). Node would kill the
 // child on that unhandled rejection before the config snapshot is printed,
@@ -134,13 +145,32 @@ if (EXIT_AFTER_CONFIG) process.exit(0);
 if (RUN_SUITE) {
   const SELF_MARKER = path.basename(fileURLToPath(import.meta.url)).replace(/\.[^.]+$/, '');
 
-  const allTestFiles = fs.readdirSync(path.join(ROOT, 'test'), { recursive: true, encoding: 'utf8' })
-    .filter(rel => rel.endsWith('-test.ts'))
-    .map(rel => `test/${rel.split(path.sep).join('/')}`)
-    .sort();
+  // Derivation errors exit 3 on the same path as a stale derivation, and for
+  // the same reason. The scan hands every `*-test.ts` NAME to readFileSync,
+  // including directory entries: a directory named `test/zz-fake-test.ts`
+  // throws EISDIR, the file-scoped uncaughtException handler above swallows
+  // it, and the child's REST listener then holds the event loop open forever
+  // -- observed as a five-minute hang to the parent's watchdog rather than a
+  // failure. A guard whose error path hangs is worse than one that refuses.
+  let allTestFiles: string[];
+  let excluded: string[];
 
-  const excluded = allTestFiles
-    .filter(rel => fs.readFileSync(path.join(ROOT, rel), 'utf8').includes(SELF_MARKER));
+  try {
+    allTestFiles = fs.readdirSync(path.join(ROOT, 'test'), { recursive: true, encoding: 'utf8' })
+      .filter(rel => rel.endsWith('-test.ts'))
+      .map(rel => `test/${rel.split(path.sep).join('/')}`)
+      .sort();
+
+    excluded = allTestFiles
+      .filter(rel => fs.readFileSync(path.join(ROOT, rel), 'utf8').includes(SELF_MARKER));
+  } catch (err: any) {
+    console.error(
+      `env-isolation-child: RECURSION GUARD DERIVATION FAILED -- ${err?.message ?? err}. ` +
+      `The file that spawns this child cannot be identified, so running the suite here would ` +
+      `re-enter it and fork without bound. Refusing.`
+    );
+    process.exit(3);
+  }
 
   // Startup assertion: the guard's target must actually exist. Zero matches
   // means the derivation has gone stale (this script renamed, the spawner

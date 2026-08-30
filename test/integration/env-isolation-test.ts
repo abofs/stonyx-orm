@@ -76,9 +76,9 @@ const POLLUTION = {
   DYNAMODB_TABLE_PREFIX: 'sentinel_',
   // Pinned at the dead port too: DYNAMODB_REGION without an endpoint resolves
   // to real AWS, and no test may depend on branch ordering to stay offline.
-  // The no-connection property for this branch is no longer established only
-  // by construction -- see the DynamoDB decoy assertion below, which counts
-  // real sockets the way assertion 2 does for mysql.
+  // The no-connection property for this branch is established by CONFIG, not
+  // by a counted socket -- see the guard below the per-branch test, which
+  // explains, with the measurement, why the decoy cannot count one here.
   DYNAMODB_ENDPOINT: `http://127.0.0.1:${DEAD_PORT}`,
   DB_MODE: 'directory',
   DB_DIRECTORY: 'sentinel-db-dir',
@@ -314,7 +314,7 @@ interface ChildResult {
  * every other POLLUTION key is deliberately REMOVED, so the "clean" baseline
  * is genuinely unpolluted even on a developer machine that exports them.
  */
-function bootChild({ root, restPort, pollute = {}, scrub = [], exitAfterConfig = true, watchdogMs = 60000, runSuite = false }) {
+function bootChild({ root, restPort, pollute = {}, scrub = [], exitAfterConfig = true, watchdogMs = 60000, runSuite = false, forceControls = {} }) {
   const env = { ...process.env };
 
   // READ_LIST, not POLLUTION_KEYS: a variable config/environment.js reads but
@@ -358,6 +358,12 @@ function bootChild({ root, restPort, pollute = {}, scrub = [], exitAfterConfig =
   env.ORM_TEST_REST_PORT = restPort;
   if (exitAfterConfig) env.ISOLATION_CHILD_EXIT_AFTER_CONFIG = '1';
   if (runSuite) env.ISOLATION_CHILD_TEST_SUITE = '1';
+
+  // Applied LAST, past the control scrub above. Exactly one caller uses it:
+  // the test that pins the child's own scrub, which needs the controls to
+  // arrive armed in the child -- the thing every other path here exists to
+  // prevent. Anything else that reaches for this is doing so by mistake.
+  Object.assign(env, forceControls);
 
   return new Promise<ChildResult>(resolve => {
     const child = spawn(process.execPath, ['--import', 'tsx/esm', childScript], {
@@ -666,10 +672,13 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
   // constructed. That is a config-level proof, weaker than assertion 2's
   // socket-level one.
   //
-  // DynamoDB now ALSO has an executed socket-level proof (see the decoy test
-  // below), so the remaining config-only branches are postgres and timescale.
-  // For those two it is still the strongest proof available without standing
-  // up real servers, and that limit is stated rather than papered over.
+  // The config-only branches are postgres, timescale AND dynamodb. An earlier
+  // revision of this file claimed DynamoDB had been promoted to an executed
+  // socket-level proof by the decoy test below; measurement disproved that
+  // (see its comment), so the claim is withdrawn rather than left standing.
+  // For all three, config-level is still the strongest proof available
+  // without standing up real servers, and that limit is stated rather than
+  // papered over.
   test('a boot polluted with only one driver\'s variables resolves that driver\'s connection block to null', async function(assert) {
     const branches = {
       mysql: ['MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE'],
@@ -687,23 +696,40 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
     }
   });
 
-  // DynamoDB — the one branch whose no-connection property this file used to
-  // only DISCLOSE as unproven. Now executed, at assertion 2's strength.
+  // GUARD (cannot currently go red) — belt and braces on the DynamoDB branch,
+  // and an explicit retraction of the claim this comment used to make.
   //
-  // The objection to proving it was that constructing a DynamoDB client makes
-  // the AWS SDK's credential chain reach for IMDS at 169.254.169.254, and no
-  // test may put a packet on that path. That objection is removed by
-  // construction, not argued away: AWS_EC2_METADATA_DISABLED=true takes IMDS
-  // out of the chain, static dummy credentials satisfy it without any lookup,
-  // and every ambient AWS_* pointer at a real profile or credentials file is
-  // scrubbed from the child. The only endpoint left reachable is the decoy on
-  // loopback.
+  // It used to say the assertion was non-vacuous because src/main.ts's chain
+  // constructs the driver and awaits init(), and DynamoDB's init() calls
+  // loadMemoryRecords(), which issues a paginated Scan per model. Every step
+  // of that is true and it still connects to nothing, because
+  // loadMemoryRecords opens with `if (modelClass?.memory === false) continue;`
+  // and ALL FIVE models under test/sample/models resolve `memory === false`.
+  // Every model is skipped, _paginatedScan is never called, no command is ever
+  // dispatched, no socket is ever opened. The chain terminates one line before
+  // the part that would connect.
   //
-  // Non-vacuous: src/main.ts's chain constructs the driver and awaits init(),
-  // and DynamoDB's init() calls loadMemoryRecords(), which issues a paginated
-  // Scan per model. A leaked config here is a real socket to the decoy, which
-  // is exactly what the counter would record.
-  test('a decoy TCP listener pointed at by DYNAMODB_ENDPOINT records exactly 0 accepted connections', async function(assert) {
+  // Measured, not reasoned: with `dynamodb: null` deleted from
+  // test/config/environment.js so the ambient block wins -- and the child's own
+  // snapshot showing `dynamodb: {region, endpoint: the decoy, tablePrefix}` --
+  // the decoy records 0 connections and this test still passes. The identical
+  // mutation applied to mysql (`mysql: null` deleted, MYSQL_HOST/PORT at a
+  // decoy) records 1. Assertion 2 is socket-level; this is not.
+  //
+  // Kept anyway, because it costs one child and it is the only thing in the
+  // file that would notice if the DynamoDB boot path ever GAINED a network
+  // call -- a memory-enabled model, a startup() DescribeTable. Removing the
+  // `dynamodb` pin is caught regardless, by three other assertions (the
+  // whole-object deepEqual, the mysql decoy's precondition and the per-branch
+  // null test): under that mutation the module reports 9 pass / 3 fail, with
+  // THIS test among the nine that pass.
+  //
+  // What is NOT retracted is the IMDS containment, which is by construction:
+  // AWS_EC2_METADATA_DISABLED=true takes IMDS out of the credential chain,
+  // static dummy credentials satisfy it without any lookup, and every ambient
+  // AWS_* pointer at a real profile or credentials file is scrubbed from the
+  // child. The only endpoint left reachable is the decoy on loopback.
+  test('guard (cannot go red at boot scope, see comment): a decoy TCP listener pointed at by DYNAMODB_ENDPOINT records 0 accepted connections', async function(assert) {
     let connections = 0;
 
     const decoy = net.createServer(socket => {
@@ -755,7 +781,8 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
       'precondition: no earlier branch of the driver chain was populated, so this run targets dynamodb');
 
     assert.strictEqual(connections, 0,
-      'no outbound connection is attempted against the endpoint named by ambient DYNAMODB_ENDPOINT');
+      'no outbound connection is attempted against the endpoint named by ambient DYNAMODB_ENDPOINT ' +
+      '(guard: this counter cannot rise while every sample model is memory:false -- see comment above)');
   });
 
   // GUARD (pass-by-construction) — pins the driver-chain ordering that several
@@ -873,6 +900,57 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
     }
   });
 
+  // The OTHER half of the fork-bomb guard, and the half that had no test.
+  //
+  // The scrub exists twice on purpose: bootChild stops an armed control
+  // variable crossing the boundary at all, and the child deletes the pair from
+  // its own process.env so that anything it goes on to spawn cannot inherit
+  // them either. The test above covers the parent half only -- it arms the
+  // PARENT's environment, bootChild scrubs it, and the child therefore never
+  // sees an armed value, so the child's own `delete` lines are never
+  // exercised. Deleting them left the module at 11 pass / 0 fail.
+  //
+  // That is the half guarding the case the child's comment calls out by name:
+  // "some other caller spawns this script directly". Such a caller is by
+  // definition not bootChild, so bootChild's scrub cannot cover it.
+  //
+  // `forceControls` reaches past bootChild's scrub to deliver both variables
+  // armed, which is the only way to reach the code under test. Non-vacuity is
+  // pinned by the exit-after-config assertion below: the child is asked for
+  // exitAfterConfig:false and must stop at the snapshot anyway, which it can
+  // only do if the forced controls genuinely arrived.
+  test('the boot child scrubs its own control variables from process.env, so nothing it spawns can inherit an armed suite mode', async function(assert) {
+    const result = await bootChild({
+      root,
+      restPort,
+      exitAfterConfig: false,
+      forceControls: {
+        ISOLATION_CHILD_EXIT_AFTER_CONFIG: '1',
+        ISOLATION_CHILD_TEST_SUITE: '1',
+      },
+      watchdogMs: 60000,
+    });
+
+    assert.ok(result.stdout.includes('PHASE:booting'),
+      `precondition: the spawned child booted (stdout: ${result.stdout.slice(0, 300)})`);
+
+    assert.notOk(/PHASE:ready(-error)?\b/.test(result.stdout),
+      'precondition: the forced controls really did arrive in the child -- it stopped at the ' +
+      'config snapshot despite being spawned with exitAfterConfig:false, which only an armed ' +
+      'ISOLATION_CHILD_EXIT_AFTER_CONFIG in its OWN environment can cause');
+
+    const witness = result.stdout.match(/PHASE:controls-retained ([^\n]*)/);
+
+    assert.ok(witness,
+      `precondition: the child emitted its post-scrub control witness (stdout: ${result.stdout.slice(0, 300)})`);
+
+    const retained = (witness?.[1] ?? '').split(',').filter(Boolean);
+
+    assert.deepEqual(retained.filter(key => ISOLATION_CONTROL_VARS.includes(key)), [],
+      'the child removed both control variables from its own process.env, so a grandchild ' +
+      'inherits neither -- depth is bounded even when this script is spawned armed');
+  });
+
   // Refined AC3, at the scope the criterion actually names: no migrations/
   // directory at the repo root after a full test run with the ambient database
   // variables exported.
@@ -939,6 +1017,24 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
     assert.ok(excluded ? excluded[2].split(',').includes(selfRelPath) : false,
       `precondition: the derived exclusion names this very file, ${selfRelPath} ` +
       `(excluded: ${excluded?.[2] ?? 'nothing'})`);
+
+    // OVER-MATCH. The two assertions above bound the derivation from below --
+    // at least one file, and this file among them -- and neither bounds it
+    // from above. The child excludes every `-test.ts` whose CONTENTS contain
+    // the marker, so any mention counts: a comment, a doc line, a `see also`.
+    //
+    // Measured, not hypothetical: one appended comment line naming
+    // env-isolation-child in test/unit/postgres/postgres-db-startup-test.ts --
+    // one of the two migration emitters this test exists to catch -- drops
+    // that file from the run and the module still reports 11 pass / 0 fail.
+    // Add the same line to mysql-db-startup-test.ts and this guard has nothing
+    // left that can emit, and still reports green. That is the same species of
+    // defect as the hardcoded path this commit replaced, arriving from the
+    // other direction: the hardcoded version could go stale, the derived one
+    // can over-match.
+    assert.strictEqual(excluded ? Number(excluded[1]) : -1, 1,
+      `precondition: the derived exclusion names EXACTLY ONE file -- a second match means a real ` +
+      `test file was silently dropped from this run (excluded: ${excluded?.[2] ?? 'nothing'})`);
 
     const loaded = result.stdout.match(/PHASE:suite-loading (\d+)/);
 

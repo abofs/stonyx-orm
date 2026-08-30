@@ -80,6 +80,11 @@ export const TEST_OVERRIDE_SENTINEL = 'orm-184-test-override-loaded';
  * `config.restServer.port`. Every one of its fetches would go to
  * `http://localhost:0`. Closing this needs @stonyx/rest-server to publish the
  * bound port; out of scope for #184, which is an ORM test-isolation fix.
+ *
+ * Tracked upstream as abofs/stonyx-rest-server#44 -- "no ephemeral port
+ * support: listen() never reports the bound port back, so every consumer
+ * suite must hardcode one". Cited so the next reader can see this is filed
+ * against the module that owns the fix, not merely accepted here.
  */
 const TEST_REST_PORT = Number(process.env.ORM_TEST_REST_PORT ?? 42666);
 
