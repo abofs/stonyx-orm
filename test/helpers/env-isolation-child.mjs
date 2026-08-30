@@ -3,9 +3,15 @@
 // Spawned by test/integration/env-isolation-test.ts with the polluting
 // database variables deliberately SET in its environment. Reproduces the
 // real boot path -- config/environment.js is read, Stonyx applies the
-// standalone-module transform, then merges test/config/environment.ts
+// standalone-module transform, then merges test/config/environment.js
 // because NODE_ENV=test -- and prints the resolved config so the parent
 // can compare a polluted boot against a clean one.
+//
+// The snapshot carries `testOverrideSentinel` verbatim from the merged
+// config. Stonyx.start() swallows `Config not found:` when the test override
+// cannot be resolved, so a boot that never merged the override is otherwise
+// indistinguishable from a boot that did: both print a plausible config and
+// both exit 0. The sentinel is the only thing that separates them.
 //
 // Config resolves once, at boot. That is why this has to be a subprocess:
 // mutating process.env inside a QUnit hook happens long after the values
@@ -53,7 +59,11 @@ await delay(Number(process.env.ISOLATION_CHILD_MERGE_WAIT_MS ?? 800));
 
 console.log('PHASE:config-merged');
 console.log('---CONFIG-START---');
-console.log(JSON.stringify({ orm: Stonyx.config.orm, restServer: Stonyx.config.restServer }));
+console.log(JSON.stringify({
+  orm: Stonyx.config.orm,
+  restServer: Stonyx.config.restServer,
+  testOverrideSentinel: Stonyx.config.testOverrideSentinel ?? null,
+}));
 console.log('---CONFIG-END---');
 
 if (process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG === '1') process.exit(0);

@@ -16,6 +16,7 @@ import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { TEST_OVERRIDE_SENTINEL } from '../config/environment.js';
 
 const { module, test } = QUnit;
 
@@ -121,7 +122,10 @@ function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watch
 
   env.ISOLATION_CHILD_ROOT = root;
   env.NODE_ENV = 'test';
-  env.REST_PORT = restPort;
+  // Deliberately NOT REST_PORT: that is @stonyx/rest-server's production
+  // variable and the suite must never be steerable by it. See the pin in
+  // test/config/environment.js.
+  env.ORM_TEST_REST_PORT = restPort;
   if (exitAfterConfig) env.ISOLATION_CHILD_EXIT_AFTER_CONFIG = '1';
 
   return new Promise(resolve => {
@@ -150,7 +154,7 @@ function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watch
   });
 }
 
-function parseConfig({ stdout, stderr, code }) {
+function parseSnapshot({ stdout, stderr, code }) {
   const match = stdout.match(/---CONFIG-START---\n([\s\S]*?)\n---CONFIG-END---/);
 
   if (!match) {
@@ -158,6 +162,11 @@ function parseConfig({ stdout, stderr, code }) {
   }
 
   return JSON.parse(match[1]);
+}
+
+/** The comparable half of a child snapshot: the resolved configuration only. */
+function configOf(snapshot) {
+  return { orm: snapshot.orm, restServer: snapshot.restServer };
 }
 
 module('[Integration] Ambient environment isolation (#184)', function(hooks) {
@@ -174,11 +183,61 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
     cleanupRoot();
   });
 
+  // Assertion 0 — the precondition every other assertion in this file rests on.
+  //
+  // The whole fix for #184 lives in test/config/environment.js. If that file
+  // is not merged, nothing below it is testing anything: the ambient
+  // environment wins and the suite still passes, because Stonyx.start()
+  // catches `Config not found:` and treats a missing test override as
+  // non-fatal. That is not hypothetical — stonyx 4c80c87 (shipped in
+  // v0.2.3-beta.63, one commit after the beta.62 tag) made importConfig
+  // resolve `.js` ONLY, and this file was `test/config/environment.ts` until
+  // this PR. It resolved solely because a `pnpm.overrides` pin holds stonyx at
+  // beta.61 while package.json#dependencies declares beta.76.
+  //
+  // Two independent proofs, because either alone is weak:
+  //   1. the sentinel — a key that exists ONLY in the override, so a non-zero
+  //      value cannot come from anywhere else;
+  //   2. an overridden value — `paths.model`, where the override and the
+  //      primary config/environment.js disagree, so this fails if the file is
+  //      resolved but loses the merge rather than being skipped outright.
+  test('the NODE_ENV=test override at test/config/environment.js is actually merged into a real boot', async function(assert) {
+    const snapshot = parseSnapshot(await bootChild({ root, restPort }));
+
+    assert.strictEqual(snapshot.testOverrideSentinel, TEST_OVERRIDE_SENTINEL,
+      'the sentinel exported by test/config/environment.js reaches the booted config ' +
+      '(null here means importConfig threw Config not found: and Stonyx.start() swallowed it)');
+
+    assert.strictEqual(snapshot.orm.paths.model, './test/sample/models',
+      'the override wins over config/environment.js\'s default of ./models');
+
+    assert.notStrictEqual(snapshot.orm.paths.model, './models',
+      'the primary config default did not survive the merge');
+  });
+
+  // GUARD (pass-by-construction) — the override must stay `.js`.
+  //
+  // Cannot be shown failing against current head in the same run, because it
+  // asserts the state this PR creates. It is a guard, not a defect test, and
+  // is labelled one. Assertion 0 above is the executable proof; this exists so
+  // that a rename back to `.ts` fails on the filename rather than only in a
+  // boot, where the failure mode is silence.
+  test('regression guard: the test override is test/config/environment.js, never .ts', function(assert) {
+    assert.ok(fs.existsSync(path.join(repoRoot, 'test/config/environment.js')),
+      'test/config/environment.js exists (stonyx >= 0.2.3-beta.63 resolves .js only)');
+
+    assert.notOk(fs.existsSync(path.join(repoRoot, 'test/config/environment.ts')),
+      'test/config/environment.ts does not exist (it would be silently ignored, not rejected)');
+  });
+
   // Assertion 1 — the load-bearing one. A whole-object deep-equal, not a
   // key-by-key check, so the pinned set cannot drift from the read set.
   test('resolved config with the full polluting set exported deep-equals the config resolved with it unset', async function(assert) {
-    const polluted = parseConfig(await bootChild({ root, restPort, pollute: POLLUTION }));
-    const clean = parseConfig(await bootChild({ root, restPort }));
+    const pollutedSnapshot = await bootChild({ root, restPort, pollute: POLLUTION });
+    const cleanSnapshot = await bootChild({ root, restPort });
+
+    const polluted = configOf(parseSnapshot(pollutedSnapshot));
+    const clean = configOf(parseSnapshot(cleanSnapshot));
 
     assert.deepEqual(polluted, clean,
       'config.orm + config.restServer resolve identically whether or not ambient database variables are exported');
