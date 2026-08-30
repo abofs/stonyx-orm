@@ -131,6 +131,16 @@ const READ_LIST = deriveReadList();
 
 // Artifact locations a polluted boot writes to, resolved against the repo root.
 const migrationsArtifact = path.join(repoRoot, 'migrations');
+
+// Every directory a polluted run could emit migrations into. The default name
+// is `migrations`, but the polluting set also exports *_MIGRATIONS_DIR, so the
+// artifact lands under whichever sentinel name the selected driver carries.
+// Checking only `migrations/` would miss exactly the run that proves the point.
+const migrationArtifactDirs = [
+  migrationsArtifact,
+  ...['MYSQL_MIGRATIONS_DIR', 'PG_MIGRATIONS_DIR', 'TIMESCALE_MIGRATIONS_DIR']
+    .map(key => path.join(repoRoot, POLLUTION[key])),
+];
 const sampleDir = path.join(repoRoot, 'test/sample');
 const dbDirArtifact = path.join(sampleDir, POLLUTION.DB_DIRECTORY);
 
@@ -182,6 +192,31 @@ function listEntries(dir) {
 
 function listFiles(dir) {
   return listEntries(dir).files;
+}
+
+/** rel path -> sha256 of contents, for every file under `dir`. */
+function hashDir(dir) {
+  return new Map(listFiles(dir).map(rel => [
+    rel,
+    createHash('sha256').update(fs.readFileSync(path.join(dir, rel))).digest('hex'),
+  ]));
+}
+
+/**
+ * Files under `dir` whose CONTENTS changed against `baseline`.
+ *
+ * Assertion 3's title claims test/sample/ is left byte-identical; a listing
+ * comparison only ever checked the names. A regression that rewrites an
+ * existing collection file in place -- which is exactly what a leaked DB_MODE
+ * does once the directory already exists -- produces an identical listing.
+ */
+function modifiedFiles(dir, baselineHashes) {
+  const now = hashDir(dir);
+
+  return [...baselineHashes.keys()]
+    .filter(rel => now.has(rel) && now.get(rel) !== baselineHashes.get(rel))
+    .filter(rel => rel !== PINNED_DB_ARTIFACT)
+    .sort();
 }
 
 /**
@@ -249,7 +284,7 @@ interface ChildResult {
  * every other POLLUTION key is deliberately REMOVED, so the "clean" baseline
  * is genuinely unpolluted even on a developer machine that exports them.
  */
-function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watchdogMs = 60000 }) {
+function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watchdogMs = 60000, runSuite = false }) {
   const env = { ...process.env };
 
   // READ_LIST, not POLLUTION_KEYS: a variable config/environment.js reads but
@@ -267,6 +302,7 @@ function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watch
   // test/config/environment.js.
   env.ORM_TEST_REST_PORT = restPort;
   if (exitAfterConfig) env.ISOLATION_CHILD_EXIT_AFTER_CONFIG = '1';
+  if (runSuite) env.ISOLATION_CHILD_TEST_SUITE = '1';
 
   return new Promise<ChildResult>(resolve => {
     const child = spawn(process.execPath, ['--import', 'tsx/esm', childScript], {
@@ -370,24 +406,47 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
   // used to take its own `before` inside the test body, which meant that when
   // assertion 1 leaked, assertion 3 compared the leak against itself.
   let sampleBaseline;
+  let sampleHashes;
+  let sampleBackup;
   let migrationsExistedBefore;
 
   hooks.before(async function() {
     ({ link: root, cleanup: cleanupRoot } = makeNormalizedRoot());
     restPort = await reserveFreePort();
     sampleBaseline = listEntries(sampleDir);
+    sampleHashes = hashDir(sampleDir);
     migrationsExistedBefore = fs.existsSync(migrationsArtifact);
+
+    // A byte copy, not just a listing. The suite-scoped child runs the repo's
+    // own integration tests, which create and delete records in
+    // test/sample/db.json; test/integration/orm-test.ts runs after this module
+    // and reads that file. Without restoring CONTENTS, this module silently
+    // reshapes state that 27 later assertions depend on.
+    sampleBackup = fs.mkdtempSync(path.join(os.tmpdir(), 'orm-184-sample-'));
+    fs.cpSync(sampleDir, path.join(sampleBackup, 'sample'), { recursive: true });
   });
 
   // Every test here boots a child that may write to disk, and each one has to
   // hand the next a clean checkout. Runs even when the test threw.
   hooks.afterEach(function() {
+    // Contents, not just the file list: restore test/sample/ to exactly the
+    // bytes this module inherited, so the tests that run after it see the
+    // state they would have seen had this module not run at all.
+    fs.rmSync(sampleDir, { recursive: true, force: true });
+    fs.cpSync(path.join(sampleBackup, 'sample'), sampleDir, { recursive: true });
+
     restoreDir(sampleDir, sampleBaseline);
-    if (!migrationsExistedBefore) fs.rmSync(migrationsArtifact, { recursive: true, force: true });
+
+    for (const dir of migrationArtifactDirs) {
+      if (dir === migrationsArtifact && migrationsExistedBefore) continue;
+
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   hooks.after(function() {
     cleanupRoot();
+    fs.rmSync(sampleBackup, { recursive: true, force: true });
   });
 
   // Assertion 0 — the precondition every other assertion in this file rests on.
@@ -567,26 +626,64 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
     // catches both; checking for `sentinel-db-dir` alone catches only the first.
     assert.deepEqual(leakedFiles(sampleDir, sampleBaseline), [],
       'test/sample/ gains nothing beyond the pinned db.json from a boot with ambient DB_MODE exported');
+
+    assert.deepEqual(modifiedFiles(sampleDir, sampleHashes), [],
+      'test/sample/ is left byte-identical, not merely name-identical');
   });
 
-  // REGRESSION GUARD — not a defect test, and labelled as one deliberately.
+  // Refined AC3, at the scope the criterion actually names: no migrations/
+  // directory at the repo root after a full test run with the ambient database
+  // variables exported.
   //
-  // The migrations artifact recorded on #184 is emitted by the suite's
-  // command-level tests (src/commands.ts resolves config.orm.<driver>
-  // .migrationsDir against config.rootPath), not by boot: a boot against a
-  // refusing port rejects in the driver handshake before any migration is
-  // generated. This assertion therefore holds both before and after the fix at
-  // boot scope, and cannot be shown failing here. It is kept because it pins a
-  // real filesystem postcondition that a future change could break, and
-  // because assertion 1 is what actually forecloses the artifact: with
-  // config.orm.mysql pinned to null there is no migrationsDir to resolve.
-  test('regression guard: a boot with the full polluting set exported creates no migrations/ directory at the repo root', async function(assert) {
-    const result = await bootChild({ root, restPort, pollute: POLLUTION, exitAfterConfig: false, watchdogMs: 60000 });
+  // This was previously filed as structurally untestable. It is not. The
+  // earlier harness was boot-scoped, and a boot cannot reach the emitter: it
+  // rejects in the driver handshake against a refusing port before any
+  // migration is generated. That is a limit of the chosen scope, not a
+  // property of the system, and the two are not the same claim.
+  //
+  // The emitter is test/unit/mysql/mysql-db-startup-test.ts, which drives
+  // MysqlDB.init() directly. Bisected against this PR's base commit in a
+  // normally-named checkout with the full polluting set exported:
+  //   whole suite                          -> migrations/<ts>_initial_setup.sql
+  //   commands-test.ts + cli-test.ts       -> nothing
+  //   postgres-db-startup-test.ts          -> nothing
+  //   mysql/mysql-db-startup-test.ts       -> migrations/<ts>_initial_setup.sql
+  // (The earlier diagnosis naming src/commands.ts as the source is wrong;
+  // src/commands.ts resolves migrationsDir the same way, but no test in this
+  // suite reaches its write path.)
+  //
+  // Recursion is broken inside the child, which excludes this file from the
+  // set it loads by name -- not by a --filter argument the parent passes,
+  // because that is a runtime argument a future caller can drop and the
+  // failure mode is an unbounded fork bomb.
+  test('a full suite run with the full polluting set exported creates no migrations directory at the repo root', async function(assert) {
+    const result = await bootChild({
+      root,
+      restPort,
+      pollute: POLLUTION,
+      exitAfterConfig: false,
+      runSuite: true,
+      watchdogMs: 300000,
+    });
 
-    assert.ok(result.stdout.includes('PHASE:booting'),
-      'precondition: the spawned child booted');
+    // Preconditions. Without them "no migrations directory" is also satisfied
+    // by a child that loaded nothing and by one the watchdog killed on entry.
+    assert.notOk(result.timedOut, 'precondition: the suite child was not killed by the watchdog');
 
-    assert.strictEqual(fs.existsSync(migrationsArtifact), migrationsExistedBefore,
-      'no migrations/ directory is created at the repo root');
+    const loaded = result.stdout.match(/PHASE:suite-loading (\d+)/);
+
+    assert.ok(loaded && Number(loaded[1]) > 50,
+      `precondition: the child loaded the real test suite (${loaded?.[1] ?? 'no'} files)`);
+
+    const done = result.stdout.match(/PHASE:suite-done files=\d+ pass=(\d+) fail=\d+/);
+
+    assert.ok(done && Number(done[1]) > 500,
+      `precondition: the suite actually ran (${done?.[1] ?? 'no'} assertions passed) ` +
+      `-- a suite that died on entry writes no artifacts either`);
+
+    const emitted = migrationArtifactDirs.filter(dir => fs.existsSync(dir));
+
+    assert.deepEqual(emitted.map(dir => path.relative(repoRoot, dir)), [],
+      'no migration directory is written at the repo root by a full suite run under ambient database variables');
   });
 });

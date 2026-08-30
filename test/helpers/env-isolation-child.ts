@@ -17,6 +17,8 @@
 // mutating process.env inside a QUnit hook happens long after the values
 // that matter have already been read.
 import { pathToFileURL } from 'url';
+import fs from 'fs';
+import path from 'path';
 import { setTimeout as delay } from 'timers/promises';
 
 const ROOT = process.env.ISOLATION_CHILD_ROOT;
@@ -80,11 +82,61 @@ console.log('---CONFIG-END---');
 
 if (process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG === '1') process.exit(0);
 
-try {
-  await Stonyx.ready;
-  console.log('PHASE:ready');
-} catch (err: any) {
-  console.log(`PHASE:ready-error ${err.message}`);
-}
+// SUITE MODE.
+//
+// The migrations/ artifact recorded on #184 is not emitted by boot. A boot
+// against a refusing port rejects in the driver handshake before any migration
+// is generated, so a boot-scoped child can never reach it -- which is a
+// property of that harness scope, not of the system. The emitter is a
+// suite-level test that drives MysqlDB.init() directly
+// (test/unit/mysql/mysql-db-startup-test.ts, verified by bisection), and
+// src/mysql/mysql-db.ts's "no migrations found, N models detected" branch then
+// resolves config.orm.mysql.migrationsDir against config.rootPath and writes
+// <root>/<migrationsDir>/<ts>_initial_setup.sql.
+//
+// So the postcondition has to be checked at suite scope, and this mode does
+// that: boot against the normalized ROOT exactly as above, then load and run
+// the repo's test files in-process.
+//
+// RECURSION is the real hazard, and is broken by construction: the file that
+// spawns this child is excluded from the list below by name. It is excluded
+// here, in the child, rather than by a QUnit --filter the parent passes,
+// because a filter is a runtime argument that a future caller can forget and
+// the failure mode is an unbounded fork bomb.
+if (process.env.ISOLATION_CHILD_TEST_SUITE === '1') {
+  const EXCLUDED = ['test/integration/env-isolation-test.ts'];
 
-process.exit(0);
+  const testFiles = fs.readdirSync(path.join(ROOT, 'test'), { recursive: true, encoding: 'utf8' })
+    .filter(rel => rel.endsWith('-test.ts'))
+    .map(rel => `test/${rel.split(path.sep).join('/')}`)
+    .filter(rel => !EXCLUDED.includes(rel))
+    .sort();
+
+  const { default: QUnit } = await import('qunit');
+
+  QUnit.config.autostart = false;
+
+  // Registered BEFORE the test files are imported, so it runs ahead of
+  // test/zz-exit-test.ts's own runEnd hook, which force-exits the process.
+  QUnit.on('runEnd', (details: any) => {
+    console.log(`PHASE:suite-done files=${testFiles.length} pass=${details.testCounts.passed} fail=${details.testCounts.failed}`);
+  });
+
+  console.log(`PHASE:suite-loading ${testFiles.length}`);
+
+  for (const rel of testFiles) {
+    await import(pathToFileURL(path.join(ROOT, rel)).href);
+  }
+
+  QUnit.start();
+} else {
+
+  try {
+    await Stonyx.ready;
+    console.log('PHASE:ready');
+  } catch (err: any) {
+    console.log(`PHASE:ready-error ${err.message}`);
+  }
+
+  process.exit(0);
+}
