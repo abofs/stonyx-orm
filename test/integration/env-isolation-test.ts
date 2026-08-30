@@ -583,8 +583,62 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
     assert.ok(result.stdout.includes('PHASE:booting'),
       `precondition: the spawned child booted (stdout: ${result.stdout.slice(0, 400)})`);
 
+    // Precondition: this assertion's non-vacuity rested on undocumented driver
+    // chain ordering -- it aims at the mysql branch, and the chain checks
+    // timescale and postgres first, so a run in which either of those resolved
+    // would never reach mysql and "0 connections" would mean nothing. Pinned
+    // rather than assumed: assert from the child's own snapshot that no other
+    // connection block existed to shadow it.
+    const snapshot = parseSnapshot(result);
+
+    assert.deepEqual(
+      { timescale: snapshot.orm.timescale, postgres: snapshot.orm.postgres, dynamodb: snapshot.orm.dynamodb },
+      { timescale: null, postgres: null, dynamodb: null },
+      'precondition: no earlier branch of the driver chain was populated, so this run targets mysql');
+
     assert.strictEqual(connections, 0,
       'no outbound connection is attempted against the host named by ambient MYSQL_HOST');
+  });
+
+  // Per-branch coverage, and an honest statement of what it is worth.
+  //
+  // Assertion 2 gives mysql an EXECUTED no-connection proof: a real listener
+  // counts real sockets. The other three branches have no equivalent, and
+  // until now only DynamoDB's gap was disclosed. This closes the disclosure
+  // and the cheap half of the gap: each branch gets its own child, polluted
+  // with ONLY that driver's variables, and the resolved connection block must
+  // be null -- so src/main.ts's chain never selects it and the driver is never
+  // constructed. That is a config-level proof, weaker than assertion 2's
+  // socket-level one, and it is the strongest proof available for postgres,
+  // timescale and dynamodb without standing up real servers or an AWS client.
+  test('a boot polluted with only one driver\'s variables resolves that driver\'s connection block to null', async function(assert) {
+    const branches = {
+      mysql: ['MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE'],
+      postgres: ['PG_HOST', 'PG_PORT', 'PG_USER', 'PG_PASSWORD', 'PG_DATABASE'],
+      timescale: ['TIMESCALE_HOST', 'TIMESCALE_PORT', 'TIMESCALE_USER', 'TIMESCALE_PASSWORD', 'TIMESCALE_DATABASE'],
+      dynamodb: ['DYNAMODB_REGION', 'DYNAMODB_ENDPOINT', 'DYNAMODB_TABLE_PREFIX'],
+    };
+
+    for (const [branch, keys] of Object.entries(branches)) {
+      const pollute = Object.fromEntries(keys.map(key => [key, POLLUTION[key]]));
+      const snapshot = parseSnapshot(await bootChild({ root, restPort, pollute }));
+
+      assert.strictEqual(snapshot.orm[branch], null,
+        `config.orm.${branch} is null with only ${keys.join('/')} exported, so the driver chain never selects it`);
+    }
+  });
+
+  // GUARD (pass-by-construction) — pins the driver-chain ordering that several
+  // comments in this file rely on. It asserts today's source, so it cannot be
+  // shown failing here; it is a guard, and labelled one. It exists because the
+  // ordering is load-bearing for assertion 2's non-vacuity and is documented
+  // nowhere in src/.
+  test('regression guard: src/main.ts selects drivers in the order timescale, postgres, mysql, dynamodb', function(assert) {
+    const source = fs.readFileSync(path.join(repoRoot, 'src/main.ts'), 'utf8');
+    const order = [...source.matchAll(/(?:if|else if)\s*\(\s*config\.orm\.(\w+)\s*\)/g)].map(m => m[1]);
+
+    assert.deepEqual(order, ['timescale', 'postgres', 'mysql', 'dynamodb'],
+      'the else-if driver chain order is unchanged; assertion 2 aims at the mysql branch and relies on it');
   });
 
   // Assertion 3 — the on-disk artifacts. Filesystem comparison, not git:
