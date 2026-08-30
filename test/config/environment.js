@@ -78,7 +78,7 @@ const TEST_REST_PORT = Number(process.env.ORM_TEST_REST_PORT ?? 42666);
 // undetected. DB_MODE is included deliberately: the refinement named it the
 // most dangerous of the set (it silently redirects the write target rather
 // than failing), and the previous version of this warning omitted it.
-const ambientVars = [
+export const AMBIENT_VARS = [
   'ORM_ACCESS_PATH', 'ORM_MODEL_PATH', 'ORM_REST_ROUTE', 'ORM_SERIALIZER_PATH',
   'ORM_TRANSFORM_PATH', 'ORM_VIEW_PATH', 'ORM_USE_REST_SERVER',
   'DB_AUTO_SAVE', 'DB_FILE', 'DB_MODE', 'DB_DIRECTORY', 'DB_SCHEMA_PATH',
@@ -92,7 +92,10 @@ const ambientVars = [
   'DYNAMODB_REGION', 'DYNAMODB_ENDPOINT', 'DYNAMODB_TABLE_PREFIX',
 ];
 
-const ignored = ambientVars.filter(name => process.env[name]);
+// env-isolation-test.ts asserts this list is exactly the set
+// config/environment.js destructures from process.env -- it is derived from
+// that file's source and compared, so this literal cannot go stale silently.
+const ignored = AMBIENT_VARS.filter(name => process.env[name]);
 
 if (ignored.length) {
   // Not an acceptance criterion — silence is not the defect, the connection

@@ -16,7 +16,7 @@ import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { TEST_OVERRIDE_SENTINEL } from '../config/environment.js';
+import { TEST_OVERRIDE_SENTINEL, AMBIENT_VARS } from '../config/environment.js';
 
 const { module, test } = QUnit;
 
@@ -28,22 +28,40 @@ const childScript = path.join(repoRoot, 'test/helpers/env-isolation-child.mjs');
 // wrongly builds a connection block fails fast instead of reaching a real host.
 const DEAD_PORT = '45999';
 
-// Every variable config/environment.js reads that test/config/environment.ts
-// is responsible for neutralising. Declared once so assertion 1's deep-equal
-// and the artifact assertions cannot drift apart.
+// Every variable config/environment.js reads that test/config/environment.js
+// is responsible for neutralising, set to a value that is unmistakably ours.
+// Declared once so assertion 1's deep-equal and the artifact assertions cannot
+// drift apart, and checked against a source-derived read list below so it
+// cannot fall behind config/environment.js.
+//
+// All eleven of the *_CONNECTION_LIMIT / *_MIGRATIONS_DIR / PG_USER /
+// PG_DATABASE / TIMESCALE_USER / TIMESCALE_DATABASE / DYNAMODB_TABLE_PREFIX
+// entries were missing until this commit: the list was 26 names against a read
+// set of 37.
 const POLLUTION = {
   MYSQL_HOST: '127.0.0.1',
   MYSQL_PORT: DEAD_PORT,
   MYSQL_USER: 'sentinel_user',
   MYSQL_PASSWORD: 'sentinel_mysql_password',
   MYSQL_DATABASE: 'sentinel_db',
+  MYSQL_CONNECTION_LIMIT: '3',
+  MYSQL_MIGRATIONS_DIR: 'sentinel-mysql-migrations',
   PG_HOST: '127.0.0.1',
   PG_PORT: DEAD_PORT,
+  PG_USER: 'sentinel_pg_user',
   PG_PASSWORD: 'sentinel_pg_password',
+  PG_DATABASE: 'sentinel_pg_db',
+  PG_CONNECTION_LIMIT: '4',
+  PG_MIGRATIONS_DIR: 'sentinel-pg-migrations',
   TIMESCALE_HOST: '127.0.0.1',
   TIMESCALE_PORT: DEAD_PORT,
+  TIMESCALE_USER: 'sentinel_timescale_user',
   TIMESCALE_PASSWORD: 'sentinel_timescale_password',
+  TIMESCALE_DATABASE: 'sentinel_timescale_db',
+  TIMESCALE_CONNECTION_LIMIT: '5',
+  TIMESCALE_MIGRATIONS_DIR: 'sentinel-timescale-migrations',
   DYNAMODB_REGION: 'us-sentinel-1',
+  DYNAMODB_TABLE_PREFIX: 'sentinel_',
   // Pinned at the dead port too: DYNAMODB_REGION without an endpoint resolves
   // to real AWS, and no test may depend on branch ordering to stay offline.
   DYNAMODB_ENDPOINT: `http://127.0.0.1:${DEAD_PORT}`,
@@ -63,6 +81,44 @@ const POLLUTION = {
 };
 
 const POLLUTION_KEYS = Object.keys(POLLUTION);
+
+/**
+ * The variables config/environment.js actually reads, derived from its source
+ * rather than transcribed.
+ *
+ * The previous version of this file declared POLLUTION as the authority on the
+ * read set. It was a hand-maintained literal of 26 names; the config reads 37.
+ * Eleven were never exercised, and -- proven twice by review -- adding a new
+ * `DB_ENCODING` read to config/environment.js and leaving it unpinned produced
+ * a fully green 859/0 run while the ambient value landed verbatim in the
+ * resolved config as `encoding: "LEAKED_FROM_AMBIENT"`. The whole-object
+ * deepEqual cannot see that: an unlisted variable is inherited identically by
+ * both the polluted child and the clean one, so the two agree and the
+ * comparison passes. Only a derived read-list closes it.
+ *
+ * Deliberately a source parse of the destructuring block, not an import: the
+ * point is to observe the variables the file NAMES, which is exactly what a
+ * runtime import of its default export throws away.
+ */
+function deriveReadList() {
+  const source = fs.readFileSync(path.join(repoRoot, 'config/environment.js'), 'utf8');
+  const block = source.match(/const\s*\{([\s\S]*?)\}\s*=\s*process\.env/);
+
+  if (!block) {
+    throw new Error('config/environment.js: could not locate the `const { ... } = process.env` block');
+  }
+
+  return block[1]
+    .replace(/\/\/[^\n]*/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(',')
+    // `A: B` renames the binding; the ambient name is the key, on the left.
+    .map(part => part.split(':')[0].trim())
+    .filter(name => /^[A-Z][A-Z0-9_]*$/.test(name))
+    .sort();
+}
+
+const READ_LIST = deriveReadList();
 
 // Artifact locations a polluted boot writes to, resolved against the repo root.
 const migrationsArtifact = path.join(repoRoot, 'migrations');
@@ -180,7 +236,12 @@ function restoreDir(dir, baseline) {
 function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watchdogMs = 60000 }) {
   const env = { ...process.env };
 
-  for (const key of POLLUTION_KEYS) delete env[key];
+  // READ_LIST, not POLLUTION_KEYS: a variable config/environment.js reads but
+  // that nobody remembered to pollute would otherwise be inherited IDENTICALLY
+  // by both children, so assertion 1's deepEqual would compare a leak against
+  // the same leak and pass. Deleting the derived set makes the clean baseline
+  // genuinely clean even on a machine that exports the whole lot.
+  for (const key of READ_LIST) delete env[key];
   Object.assign(env, pollute);
 
   env.ISOLATION_CHILD_ROOT = root;
@@ -308,6 +369,28 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
 
     assert.notOk(fs.existsSync(path.join(repoRoot, 'test/config/environment.ts')),
       'test/config/environment.ts does not exist (it would be silently ignored, not rejected)');
+  });
+
+  // The drift guard the file's comments have been claiming all along.
+  //
+  // Three-way, because each list is maintained by hand in a different place
+  // and any one of them going stale re-opens #184:
+  //   READ_LIST      derived from config/environment.js's source (the truth)
+  //   POLLUTION      what this suite actually exports at the children
+  //   AMBIENT_VARS   what test/config/environment.js says it is neutralising
+  //
+  // A new variable added to config/environment.js and left out of either list
+  // turns this red immediately, which is the case the whole-object deepEqual
+  // provably cannot detect: an unpolluted variable reaches both children
+  // identically, so they agree.
+  test('every variable config/environment.js reads is exercised by this suite and declared by the test override', function(assert) {
+    assert.deepEqual(POLLUTION_KEYS.slice().sort(), READ_LIST,
+      `the polluting set covers all ${READ_LIST.length} variables config/environment.js destructures ` +
+      `(polluting set has ${POLLUTION_KEYS.length})`);
+
+    assert.deepEqual(AMBIENT_VARS.slice().sort(), READ_LIST,
+      `test/config/environment.js's AMBIENT_VARS matches the same ${READ_LIST.length} variables ` +
+      `(it declares ${AMBIENT_VARS.length})`);
   });
 
   // Assertion 1 — the load-bearing one. A whole-object deep-equal, not a
