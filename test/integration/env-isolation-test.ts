@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
+import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { TEST_OVERRIDE_SENTINEL, AMBIENT_VARS } from '../config/environment.js';
 
@@ -108,14 +109,22 @@ function deriveReadList() {
     throw new Error('config/environment.js: could not locate the `const { ... } = process.env` block');
   }
 
-  return block[1]
+  const destructured = block[1]
     .replace(/\/\/[^\n]*/g, '')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split(',')
     // `A: B` renames the binding; the ambient name is the key, on the left.
     .map(part => part.split(':')[0].trim())
-    .filter(name => /^[A-Z][A-Z0-9_]*$/.test(name))
-    .sort();
+    .filter(name => /^[A-Z][A-Z0-9_]*$/.test(name));
+
+  // Also catch reads that never enter the destructuring block. Without this,
+  // a later `process.env.FOO` added inline would be invisible to the drift
+  // guard AND to the deep-equal (both children inherit it identically), which
+  // is the same blind spot in a different shape.
+  const inline = [...source.matchAll(/process\.env(?:\.([A-Z][A-Z0-9_]*)|\[\s*['"]([A-Z][A-Z0-9_]*)['"]\s*\])/g)]
+    .map(m => m[1] ?? m[2]);
+
+  return [...new Set([...destructured, ...inline])].sort();
 }
 
 const READ_LIST = deriveReadList();
@@ -288,9 +297,59 @@ function parseSnapshot({ stdout, stderr, code }) {
   return JSON.parse(match[1]);
 }
 
+/**
+ * Keys whose values identify a real system rather than describe a shape.
+ *
+ * Passwords were already safe -- they are in POLLUTION and are sentinel-
+ * substituted, verified with a canary. The adjacent identifiers were not: with
+ * an unpinned read, review reproduced `"user": "CANARY_PGUSER_svcprod"` and
+ * `"database": "CANARY_PGDB_prod"` printed verbatim into the TAP stream, which
+ * is archived by CI and pasted into review threads.
+ */
+const IDENTITY_KEYS = new Set([
+  'host', 'user', 'password', 'database', 'endpoint', 'region', 'tablePrefix', 'migrationsDir',
+]);
+
+/**
+ * Values this suite put there itself, so showing them is useful rather than
+ * dangerous: the sentinels, plus config/environment.js's own literal defaults.
+ */
+const SAFE_IDENTITY_VALUES = new Set([
+  ...Object.values(POLLUTION),
+  'localhost', 'root', 'postgres', 'stonyx', 'migrations', '',
+]);
+
+/**
+ * Rewrite identity-shaped values that this suite did not author into a stable
+ * digest. deepEqual still fails on a mismatch -- two different secrets hash to
+ * two different digests -- but the failure diff carries a fingerprint instead
+ * of the credential.
+ *
+ * Defense in depth, not the primary mitigation. bootChild deletes the derived
+ * READ_LIST from the child environment, which is what stops ambient values
+ * reaching a snapshot in the first place; this is what limits the blast radius
+ * when something is read from outside that list.
+ */
+function redactIdentities(value, key = null) {
+  if (Array.isArray(value)) return value.map(entry => redactIdentities(entry));
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, redactIdentities(v, k)])
+    );
+  }
+
+  if (key === null || !IDENTITY_KEYS.has(key)) return value;
+  if (typeof value !== 'string' || SAFE_IDENTITY_VALUES.has(value)) return value;
+
+  const digest = createHash('sha256').update(value).digest('hex').slice(0, 12);
+
+  return `<redacted ${key} len=${value.length} sha256=${digest}>`;
+}
+
 /** The comparable half of a child snapshot: the resolved configuration only. */
 function configOf(snapshot) {
-  return { orm: snapshot.orm, restServer: snapshot.restServer };
+  return redactIdentities({ orm: snapshot.orm, restServer: snapshot.restServer });
 }
 
 module('[Integration] Ambient environment isolation (#184)', function(hooks) {
