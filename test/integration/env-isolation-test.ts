@@ -25,6 +25,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
 const childScript = path.join(repoRoot, 'test/helpers/env-isolation-child.ts');
 
+/**
+ * The boot child's own control variables — NOT configuration, and never
+ * inheritable. See the scrub in bootChild for why: an inherited
+ * ISOLATION_CHILD_TEST_SUITE arms suite mode in a child the caller asked to
+ * boot only, and suite mode is what makes children spawn children.
+ */
+const ISOLATION_CONTROL_VARS = ['ISOLATION_CHILD_TEST_SUITE', 'ISOLATION_CHILD_EXIT_AFTER_CONFIG'];
+
+/** This file, as the child sees it — derived, so a rename cannot stale it. */
+const selfRelPath = path.relative(repoRoot, fileURLToPath(import.meta.url)).split(path.sep).join('/');
+
 // A closed loopback port. Connections are refused immediately, so a boot that
 // wrongly builds a connection block fails fast instead of reaching a real host.
 const DEAD_PORT = '45999';
@@ -65,6 +76,9 @@ const POLLUTION = {
   DYNAMODB_TABLE_PREFIX: 'sentinel_',
   // Pinned at the dead port too: DYNAMODB_REGION without an endpoint resolves
   // to real AWS, and no test may depend on branch ordering to stay offline.
+  // The no-connection property for this branch is no longer established only
+  // by construction -- see the DynamoDB decoy assertion below, which counts
+  // real sockets the way assertion 2 does for mysql.
   DYNAMODB_ENDPOINT: `http://127.0.0.1:${DEAD_PORT}`,
   DB_MODE: 'directory',
   DB_DIRECTORY: 'sentinel-db-dir',
@@ -82,6 +96,22 @@ const POLLUTION = {
 };
 
 const POLLUTION_KEYS = Object.keys(POLLUTION);
+
+/**
+ * Ambient pointers into the AWS credential chain.
+ *
+ * Outside READ_LIST — config/environment.js never reads them — but they steer
+ * the SDK to a real profile, a real credentials file or IMDS. Scrubbed from
+ * the DynamoDB decoy child so its client, if one were ever constructed, has
+ * nowhere to go but the loopback decoy.
+ */
+const AWS_CHAIN_VARS = [
+  'AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE',
+  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
+  'AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_DYNAMODB',
+  'AWS_ROLE_ARN', 'AWS_WEB_IDENTITY_TOKEN_FILE', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+  'AWS_CONTAINER_CREDENTIALS_FULL_URI', 'AWS_CONTAINER_AUTHORIZATION_TOKEN',
+];
 
 /**
  * The variables config/environment.js actually reads, derived from its source
@@ -284,7 +314,7 @@ interface ChildResult {
  * every other POLLUTION key is deliberately REMOVED, so the "clean" baseline
  * is genuinely unpolluted even on a developer machine that exports them.
  */
-function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watchdogMs = 60000, runSuite = false }) {
+function bootChild({ root, restPort, pollute = {}, scrub = [], exitAfterConfig = true, watchdogMs = 60000, runSuite = false }) {
   const env = { ...process.env };
 
   // READ_LIST, not POLLUTION_KEYS: a variable config/environment.js reads but
@@ -293,7 +323,32 @@ function bootChild({ root, restPort, pollute = {}, exitAfterConfig = true, watch
   // the same leak and pass. Deleting the derived set makes the clean baseline
   // genuinely clean even on a machine that exports the whole lot.
   for (const key of READ_LIST) delete env[key];
+
+  // Variables outside READ_LIST that a particular assertion needs neutralised
+  // — the AWS credential-chain pointers, so far. Scrubbed before `pollute` is
+  // merged, so a caller can scrub a name and then set its own value for it.
+  for (const key of scrub) delete env[key];
+
   Object.assign(env, pollute);
+
+  // The child's control variables are SCRUBBED before they are set, never
+  // merely set-if-true. `env` starts as a copy of process.env, so an
+  // ISOLATION_CHILD_* value already present in the parent's environment would
+  // otherwise survive `if (runSuite)` untouched and arm the child anyway.
+  //
+  // That is the fork bomb, not a hypothetical one. Suite mode makes the child
+  // load and run the repo's own test files, this file among them if the
+  // child's recursion guard ever stops matching -- and every bootChild call in
+  // this file would then inherit the arming and spawn a suite of its own. The
+  // watchdog below cannot contain that: child.kill() kills the direct child,
+  // and the grandchildren it already spawned are reparented, not killed. One
+  // stray child holding a port for the better part of an hour is the observed
+  // consequence of the mild version of this.
+  //
+  // The child scrubs these from its own process.env as well, which bounds
+  // depth at one generation; this stops the arming from crossing the boundary
+  // at all.
+  for (const key of ISOLATION_CONTROL_VARS) delete env[key];
 
   env.ISOLATION_CHILD_ROOT = root;
   env.NODE_ENV = 'test';
@@ -609,8 +664,12 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
   // with ONLY that driver's variables, and the resolved connection block must
   // be null -- so src/main.ts's chain never selects it and the driver is never
   // constructed. That is a config-level proof, weaker than assertion 2's
-  // socket-level one, and it is the strongest proof available for postgres,
-  // timescale and dynamodb without standing up real servers or an AWS client.
+  // socket-level one.
+  //
+  // DynamoDB now ALSO has an executed socket-level proof (see the decoy test
+  // below), so the remaining config-only branches are postgres and timescale.
+  // For those two it is still the strongest proof available without standing
+  // up real servers, and that limit is stated rather than papered over.
   test('a boot polluted with only one driver\'s variables resolves that driver\'s connection block to null', async function(assert) {
     const branches = {
       mysql: ['MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE'],
@@ -626,6 +685,77 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
       assert.strictEqual(snapshot.orm[branch], null,
         `config.orm.${branch} is null with only ${keys.join('/')} exported, so the driver chain never selects it`);
     }
+  });
+
+  // DynamoDB — the one branch whose no-connection property this file used to
+  // only DISCLOSE as unproven. Now executed, at assertion 2's strength.
+  //
+  // The objection to proving it was that constructing a DynamoDB client makes
+  // the AWS SDK's credential chain reach for IMDS at 169.254.169.254, and no
+  // test may put a packet on that path. That objection is removed by
+  // construction, not argued away: AWS_EC2_METADATA_DISABLED=true takes IMDS
+  // out of the chain, static dummy credentials satisfy it without any lookup,
+  // and every ambient AWS_* pointer at a real profile or credentials file is
+  // scrubbed from the child. The only endpoint left reachable is the decoy on
+  // loopback.
+  //
+  // Non-vacuous: src/main.ts's chain constructs the driver and awaits init(),
+  // and DynamoDB's init() calls loadMemoryRecords(), which issues a paginated
+  // Scan per model. A leaked config here is a real socket to the decoy, which
+  // is exactly what the counter would record.
+  test('a decoy TCP listener pointed at by DYNAMODB_ENDPOINT records exactly 0 accepted connections', async function(assert) {
+    let connections = 0;
+
+    const decoy = net.createServer(socket => {
+      connections += 1;
+      // Accept and stay silent. A decoy, not DynamoDB Local.
+      socket.on('error', () => {});
+    });
+
+    const decoyPort = await new Promise(resolve => {
+      decoy.listen(0, '127.0.0.1', () => resolve(String((decoy.address() as AddressInfo).port)));
+    });
+
+    let result;
+
+    try {
+      result = await bootChild({
+        root,
+        restPort,
+        scrub: AWS_CHAIN_VARS,
+        pollute: {
+          DYNAMODB_REGION: POLLUTION.DYNAMODB_REGION,
+          DYNAMODB_TABLE_PREFIX: POLLUTION.DYNAMODB_TABLE_PREFIX,
+          DYNAMODB_ENDPOINT: `http://127.0.0.1:${decoyPort}`,
+          // Not credentials. Syntactically valid placeholders that terminate
+          // the SDK's credential chain at the first step so it never looks
+          // anywhere real.
+          AWS_EC2_METADATA_DISABLED: 'true',
+          AWS_ACCESS_KEY_ID: 'AKIAORM184NOTAREALKEY',
+          AWS_SECRET_ACCESS_KEY: 'orm184-not-a-real-secret-value',
+          AWS_REGION: POLLUTION.DYNAMODB_REGION,
+          AWS_SHARED_CREDENTIALS_FILE: '/dev/null',
+          AWS_CONFIG_FILE: '/dev/null',
+        },
+        exitAfterConfig: false,
+        watchdogMs: 30000,
+      });
+    } finally {
+      await new Promise(resolve => decoy.close(resolve));
+    }
+
+    assert.ok(result.stdout.includes('PHASE:booting'),
+      `precondition: the spawned child booted (stdout: ${result.stdout.slice(0, 400)})`);
+
+    const snapshot = parseSnapshot(result);
+
+    assert.deepEqual(
+      { timescale: snapshot.orm.timescale, postgres: snapshot.orm.postgres, mysql: snapshot.orm.mysql },
+      { timescale: null, postgres: null, mysql: null },
+      'precondition: no earlier branch of the driver chain was populated, so this run targets dynamodb');
+
+    assert.strictEqual(connections, 0,
+      'no outbound connection is attempted against the endpoint named by ambient DYNAMODB_ENDPOINT');
   });
 
   // GUARD (pass-by-construction) — pins the driver-chain ordering that several
@@ -685,6 +815,64 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
       'test/sample/ is left byte-identical, not merely name-identical');
   });
 
+  // The fork-bomb guard, at the boundary it actually crosses.
+  //
+  // bootChild copies process.env and then sets ISOLATION_CHILD_TEST_SUITE only
+  // when the caller asked for suite mode. It never used to REMOVE it, so a
+  // value already in the parent's environment reached every child untouched.
+  // Suite mode is the mode that makes a child load and run the repo's test
+  // files -- this file among them, if the child's recursion guard ever stops
+  // matching -- so an inherited arming turns each of the eight bootChild calls
+  // in this file into another full suite, recursively. The watchdog does not
+  // contain it: child.kill() reaches the direct child and nothing below it.
+  //
+  // Both variables are covered, because inheriting either one silently changes
+  // what the caller asked for. They are asserted with SEPARATE children on
+  // purpose: an inherited EXIT_AFTER_CONFIG makes the child exit before the
+  // suite-mode branch is even reached, so a single child carrying both would
+  // report "did not enter suite mode" for the wrong reason and pass vacuously
+  // against exactly the code this is meant to catch.
+  test('a boot child cannot inherit suite mode or exit-after-config from the parent environment', async function(assert) {
+    const saved = ISOLATION_CONTROL_VARS.map(key => [key, process.env[key]] as const);
+
+    try {
+      for (const key of ISOLATION_CONTROL_VARS) delete process.env[key];
+
+      // (a) EXIT_AFTER_CONFIG. The caller asked for a child that runs past the
+      //     config snapshot; an inherited '1' truncates it there instead.
+      process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG = '1';
+
+      const truncated = await bootChild({ root, restPort, exitAfterConfig: false, watchdogMs: 60000 });
+
+      assert.ok(/PHASE:ready(-error)?\b/.test(truncated.stdout),
+        'a child spawned with exitAfterConfig:false runs past the config snapshot even when the ' +
+        `parent exports ISOLATION_CHILD_EXIT_AFTER_CONFIG=1 (stdout: ${truncated.stdout.slice(0, 300)})`);
+
+      // (b) TEST_SUITE. The one that forks.
+      delete process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG;
+      process.env.ISOLATION_CHILD_TEST_SUITE = '1';
+
+      const armed = await bootChild({ root, restPort, exitAfterConfig: false, watchdogMs: 120000 });
+
+      assert.notOk(armed.stdout.includes('PHASE:suite-loading'),
+        'a child spawned with runSuite:false does not enter suite mode even when the parent ' +
+        'exports ISOLATION_CHILD_TEST_SUITE=1');
+
+      assert.notOk(armed.timedOut,
+        'that child terminated on its own rather than being killed by the watchdog');
+
+      // Non-vacuity: without this, both assertions above are also satisfied by
+      // a child that failed to boot and printed nothing at all.
+      assert.ok(armed.stdout.includes('PHASE:booting'),
+        'precondition: the child that must not enter suite mode did boot');
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   // Refined AC3, at the scope the criterion actually names: no migrations/
   // directory at the repo root after a full test run with the ambient database
   // variables exported.
@@ -695,21 +883,36 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
   // migration is generated. That is a limit of the chosen scope, not a
   // property of the system, and the two are not the same claim.
   //
-  // The emitter is test/unit/mysql/mysql-db-startup-test.ts, which drives
-  // MysqlDB.init() directly. Bisected against this PR's base commit in a
-  // normally-named checkout with the full polluting set exported:
-  //   whole suite                          -> migrations/<ts>_initial_setup.sql
-  //   commands-test.ts + cli-test.ts       -> nothing
-  //   postgres-db-startup-test.ts          -> nothing
-  //   mysql/mysql-db-startup-test.ts       -> migrations/<ts>_initial_setup.sql
-  // (The earlier diagnosis naming src/commands.ts as the source is wrong;
-  // src/commands.ts resolves migrationsDir the same way, but no test in this
-  // suite reaches its write path.)
+  // There are TWO emitters, not one. Bisected against this PR's base commit in
+  // a normally-named checkout with the full polluting set exported:
+  //   whole suite                       -> both sentinel dirs below
+  //   commands-test.ts + cli-test.ts    -> nothing
+  //   mysql/mysql-db-startup-test.ts    -> sentinel-mysql-migrations/
+  //   postgres/postgres-db-startup-test.ts -> sentinel-pg-migrations/
   //
-  // Recursion is broken inside the child, which excludes this file from the
-  // set it loads by name -- not by a --filter argument the parent passes,
-  // because that is a runtime argument a future caller can drop and the
-  // failure mode is an unbounded fork bomb.
+  // The postgres one is INTERMITTENT, and a future reader debugging a flaky
+  // guard needs to know the flake is in the emitter and not in the guard. Its
+  // "startup() auto-generates initial migration ..." case races the ambient
+  // boot in test/setup.ts, which rejects asynchronously with ECONNREFUSED
+  // against the sentinel port; depending on when that rejection lands the file
+  // reports `not ok 3 (global failure)` or a clean 5/5 followed by `Bail
+  // out!`, and the artifact does not always survive the run. An earlier
+  // bisection recorded "none" for this file on the strength of a single run.
+  //
+  // (The much earlier diagnosis naming src/commands.ts is wrong on a different
+  // axis: src/commands.ts resolves migrationsDir the same way, but no test in
+  // this suite reaches its write path.)
+  //
+  // The check below enumerates every sentinel directory rather than the
+  // emitters, so it is unaffected by which of the two fires on a given run --
+  // but it does inherit their raciness in the failing direction, i.e. a red
+  // run is trustworthy and a green run at base would not be.
+  //
+  // Recursion is broken inside the child, which derives the file to exclude by
+  // reading which test file references the child script by name -- not from a
+  // hardcoded path, and not from a --filter argument the parent passes. Both
+  // of those are strings that can silently stop matching, and the failure mode
+  // when they do is an unbounded fork bomb.
   test('a full suite run with the full polluting set exported creates no migrations directory at the repo root', async function(assert) {
     const result = await bootChild({
       root,
@@ -723,6 +926,19 @@ module('[Integration] Ambient environment isolation (#184)', function(hooks) {
     // Preconditions. Without them "no migrations directory" is also satisfied
     // by a child that loaded nothing and by one the watchdog killed on entry.
     assert.notOk(result.timedOut, 'precondition: the suite child was not killed by the watchdog');
+
+    // The recursion guard, asserted rather than assumed. The child derives the
+    // file to exclude; if that derivation ever matches nothing the child
+    // refuses to run at all, and if it matches the wrong thing the exclusion
+    // is silently useless. Both are visible here.
+    const excluded = result.stdout.match(/PHASE:suite-excluded (\d+) ([^\n]*)/);
+
+    assert.ok(excluded && Number(excluded[1]) > 0,
+      `precondition: the child's recursion guard excluded at least one file (${excluded?.[1] ?? 'no'})`);
+
+    assert.ok(excluded ? excluded[2].split(',').includes(selfRelPath) : false,
+      `precondition: the derived exclusion names this very file, ${selfRelPath} ` +
+      `(excluded: ${excluded?.[2] ?? 'nothing'})`);
 
     const loaded = result.stdout.match(/PHASE:suite-loading (\d+)/);
 

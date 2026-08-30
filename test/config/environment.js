@@ -66,6 +66,20 @@ export const TEST_OVERRIDE_SENTINEL = 'orm-184-test-override-loaded';
  * cascaded into an EADDRINUSE failure storm for one reviewer. A test-scoped
  * name means an ambient production variable can no longer reach the listener,
  * and CI can still relocate the port when it needs to.
+ *
+ * WHAT THIS DOES NOT DO: it does not make concurrent suite runs safe. The port
+ * is renamed and relocated, not freed. Two `pnpm test` runs in the same
+ * checkout, or anything else already squatting on 42666, still collide — the
+ * symptom is `global failure: Error: listen EADDRINUSE`. Read this as a
+ * test-scoping fix, never as a concurrency fix.
+ *
+ * Freeing it properly is NOT a test-side change. An ephemeral port would mean
+ * `port: 0`, but @stonyx/rest-server does `this.server = this.api.listen(port)`
+ * and never writes `server.address().port` back into config, while
+ * test/integration/orm-test.ts builds its endpoint from
+ * `config.restServer.port`. Every one of its fetches would go to
+ * `http://localhost:0`. Closing this needs @stonyx/rest-server to publish the
+ * bound port; out of scope for #184, which is an ORM test-isolation fix.
  */
 const TEST_REST_PORT = Number(process.env.ORM_TEST_REST_PORT ?? 42666);
 

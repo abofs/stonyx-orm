@@ -16,7 +16,7 @@
 // Config resolves once, at boot. That is why this has to be a subprocess:
 // mutating process.env inside a QUnit hook happens long after the values
 // that matter have already been read.
-import { pathToFileURL } from 'url';
+import { pathToFileURL, fileURLToPath } from 'url';
 import fs from 'fs';
 import path from 'path';
 import { setTimeout as delay } from 'timers/promises';
@@ -29,6 +29,23 @@ if (!ROOT) {
 }
 
 process.env.NODE_ENV = 'test';
+
+// The two control variables are read ONCE here and then removed from
+// process.env, so that nothing descended from this process can inherit an
+// armed suite mode. Suite mode spawns nothing directly, but it loads and runs
+// the repo's own test files in-process, and those files spawn children of
+// their own; without this, depth is unbounded and the failure mode is a fork
+// bomb. With it, an inherited arming can survive at most one generation.
+//
+// The parent scrubs these too (see bootChild in
+// test/integration/env-isolation-test.ts). Both halves are deliberate: the
+// parent's scrub stops an armed value reaching a child at all, and this one
+// bounds the blast radius if some other caller spawns this script directly.
+const EXIT_AFTER_CONFIG = process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG === '1';
+const RUN_SUITE = process.env.ISOLATION_CHILD_TEST_SUITE === '1';
+
+delete process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG;
+delete process.env.ISOLATION_CHILD_TEST_SUITE;
 
 // Against unfixed code the boot dials a database and the driver rejects
 // asynchronously (ECONNREFUSED from a dead sentinel port). Node would kill the
@@ -80,37 +97,70 @@ console.log(JSON.stringify({
 }));
 console.log('---CONFIG-END---');
 
-if (process.env.ISOLATION_CHILD_EXIT_AFTER_CONFIG === '1') process.exit(0);
+if (EXIT_AFTER_CONFIG) process.exit(0);
 
 // SUITE MODE.
 //
 // The migrations/ artifact recorded on #184 is not emitted by boot. A boot
 // against a refusing port rejects in the driver handshake before any migration
 // is generated, so a boot-scoped child can never reach it -- which is a
-// property of that harness scope, not of the system. The emitter is a
-// suite-level test that drives MysqlDB.init() directly
-// (test/unit/mysql/mysql-db-startup-test.ts, verified by bisection), and
-// src/mysql/mysql-db.ts's "no migrations found, N models detected" branch then
-// resolves config.orm.mysql.migrationsDir against config.rootPath and writes
+// property of that harness scope, not of the system. The emitters are
+// suite-level tests: test/unit/mysql/mysql-db-startup-test.ts, which drives
+// MysqlDB.init() directly, and test/unit/postgres/postgres-db-startup-test.ts,
+// whose initial-migration case emits INTERMITTENTLY because it races the
+// ambient boot's asynchronous ECONNREFUSED. Both resolve their driver's
+// migrationsDir against config.rootPath and write
 // <root>/<migrationsDir>/<ts>_initial_setup.sql.
 //
 // So the postcondition has to be checked at suite scope, and this mode does
 // that: boot against the normalized ROOT exactly as above, then load and run
 // the repo's test files in-process.
 //
-// RECURSION is the real hazard, and is broken by construction: the file that
-// spawns this child is excluded from the list below by name. It is excluded
-// here, in the child, rather than by a QUnit --filter the parent passes,
-// because a filter is a runtime argument that a future caller can forget and
-// the failure mode is an unbounded fork bomb.
-if (process.env.ISOLATION_CHILD_TEST_SUITE === '1') {
-  const EXCLUDED = ['test/integration/env-isolation-test.ts'];
+// RECURSION is the real hazard, and the exclusion below is what breaks it. It
+// is excluded here, in the child, rather than by a QUnit --filter the parent
+// passes, because a filter is a runtime argument that a future caller can
+// forget and the failure mode is an unbounded fork bomb.
+//
+// The exclusion is DERIVED, never transcribed. A hardcoded path is exactly the
+// failure mode being guarded against: this file was `env-isolation-child.mjs`
+// one fix round ago, and either side of the relationship can be renamed or
+// moved. A guard keyed on a string that silently stops matching keeps
+// reporting success while it protects nothing -- and the thing it stops
+// protecting against is the fork bomb.
+//
+// So: the spawner is whichever test file references this script by name, found
+// by reading the sources. If that derivation matches NOTHING, the guard is
+// stale by definition and this refuses to run the suite rather than forking.
+if (RUN_SUITE) {
+  const SELF_MARKER = path.basename(fileURLToPath(import.meta.url)).replace(/\.[^.]+$/, '');
 
-  const testFiles = fs.readdirSync(path.join(ROOT, 'test'), { recursive: true, encoding: 'utf8' })
+  const allTestFiles = fs.readdirSync(path.join(ROOT, 'test'), { recursive: true, encoding: 'utf8' })
     .filter(rel => rel.endsWith('-test.ts'))
     .map(rel => `test/${rel.split(path.sep).join('/')}`)
-    .filter(rel => !EXCLUDED.includes(rel))
     .sort();
+
+  const excluded = allTestFiles
+    .filter(rel => fs.readFileSync(path.join(ROOT, rel), 'utf8').includes(SELF_MARKER));
+
+  // Startup assertion: the guard's target must actually exist. Zero matches
+  // means the derivation has gone stale (this script renamed, the spawner
+  // rewritten to build the path dynamically), and running the suite from here
+  // would re-enter the spawner and fork without bound. Fail loudly instead.
+  if (!excluded.length) {
+    console.error(
+      `env-isolation-child: RECURSION GUARD IS STALE -- no test file under ${ROOT}/test ` +
+      `references "${SELF_MARKER}", so the file that spawns this child cannot be identified. ` +
+      `Running the suite here would re-enter it and fork without bound. Refusing.`
+    );
+    process.exit(3);
+  }
+
+  const testFiles = allTestFiles.filter(rel => !excluded.includes(rel));
+
+  // Printed so the parent can assert the guard was non-vacuous: a derivation
+  // that excluded nothing, or excluded the wrong file, is visible here rather
+  // than only in a fork bomb.
+  console.log(`PHASE:suite-excluded ${excluded.length} ${excluded.join(',')}`);
 
   const { default: QUnit } = await import('qunit');
 
