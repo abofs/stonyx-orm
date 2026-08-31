@@ -171,6 +171,16 @@ function getBaseUrl(request: OrmRequest$): string {
  * every input reachable there, which is exactly what the two that DID diverge
  * looked like until someone tried a hex id.
  *
+ * SHARING IT IS NOT THE SAME AS IT BEING RIGHT EVERYWHERE. On a model declaring
+ * `id = attr('string')` a numeric-looking id is filed under the STRING key, so
+ * this coercion resolves `'9107'` to `9107` and the post-create lookup misses:
+ * `context.record` is `undefined` for an after-`create` hook. Inherited -- the
+ * inlined copy computed the same thing -- and NOT fixed here, because picking
+ * the right coercion needs the model's declared id type, which is the same
+ * structural information abofs/stonyx-orm#202 is about. Filed as
+ * abofs/stonyx-orm#209 and pinned by assertion 50, so closing it turns a test
+ * red rather than passing silently.
+ *
  * `parseInt` and not `Number`, deliberately, and the anchor is NOT `getId`.
  * It is `src/transforms.ts:7` -- `number: (value) => parseInt(value as string)`,
  * also radix-less -- because that transform is what actually produces the store

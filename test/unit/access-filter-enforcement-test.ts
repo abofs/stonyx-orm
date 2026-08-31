@@ -1781,17 +1781,26 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
 
       // The hard `return false` deny is reached through the same channel, and
       // it was walked past the same way.
+      // `verdict()` rather than the raw return value, throughout. A failing
+      // `strictEqual` whose ACTUAL is a FUNCTION takes the qunit TAP reporter
+      // down with it: the run exits mid-file with "Process exited before tests
+      // finished running", no diagnostic, and every later test silently
+      // vanishes from the count. A mutation that produces exactly that looks
+      // like a crash rather than a kill, which is the worst possible failure
+      // mode for a mutation sweep to have.
+      const verdict = value => (typeof value === 'function' ? 'a per-record filter' : JSON.stringify(value));
+
       for (const path of ['/archived', '/ARCHIVED', '/Archived/2024']) {
         assert.strictEqual(
-          globalAccess.access(makeRequest({ url: `http://anything.example/owners${path}`, mount: '/owners', path })),
-          false, `the outright deny still fires on an absolute-form target at ${path} (was: a full CRUD grant)`);
+          verdict(globalAccess.access(makeRequest({ url: `http://anything.example/owners${path}`, mount: '/owners', path }))),
+          'false', `the outright deny still fires on an absolute-form target at ${path} (was: a full CRUD grant)`);
       }
 
       // The path half is lower-cased for the same reason the mount half is: the
       // router matched case-insensitively, so a case-SENSITIVE sub-path rule is
       // stricter than the router and can be stepped around.
-      assert.strictEqual(globalAccess.access(makeRequest({ url: '/owners/ARCHIVED', mount: '/owners', path: '/ARCHIVED' })),
-        false, 'and a case-varied sub-path cannot step around it either');
+      assert.strictEqual(verdict(globalAccess.access(makeRequest({ url: '/owners/ARCHIVED', mount: '/owners', path: '/ARCHIVED' }))),
+        'false', 'and a case-varied sub-path cannot step around it either');
 
       // FAIL CLOSED. `?? ''` converted an absent request target into a total
       // grant: the empty string matches no collection, so `access()` fell
@@ -1806,7 +1815,7 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       };
 
       for (const value of [undefined, null, '', 42, {}]) {
-        assert.strictEqual(globalAccess.access(withBaseUrl(value)), false,
+        assert.strictEqual(verdict(globalAccess.access(withBaseUrl(value))), 'false',
           `an absent or non-string baseUrl (${String(value)}) denies (was: full CRUD, no filter)`);
       }
 
@@ -1977,6 +1986,88 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
         if (!keysBefore.includes(key)) store.remove('animal', key, { _skipAutoPersist: true });
       }
       store.remove('animal', EXISTING, { _skipAutoPersist: true });
+    });
+  });
+
+
+  // =========================================================================
+  // Two lines that no mutation reached for four rounds (assertions 50-51)
+  // =========================================================================
+  module('the last unpinned lines', function(lastHooks) {
+    let unsubscribes;
+    let createdOwners;
+
+    lastHooks.beforeEach(function() { unsubscribes = []; createdOwners = []; });
+    lastHooks.afterEach(function() {
+      while (unsubscribes.length) unsubscribes.pop()();
+      while (createdOwners.length) {
+        const id = createdOwners.pop();
+        if (store.get('owner', id)) store.remove('owner', id, { _skipAutoPersist: true });
+      }
+    });
+
+    test('[GUARD] assertion 50 — the post-create `context.record` lookup goes through the ONE coercion, and its residual is stated', async function(assert) {
+      // This line was `isNaN(id) ? id : parseInt(id)` — `coerceId`'s body
+      // inlined verbatim, a THIRD coercion feeding a store lookup, under a
+      // docblock asserting neither surface had a copy. Nothing observed it at
+      // all, in any round. It now calls `normalizeBodyId`, and this is what
+      // makes that call observable.
+      const unfiltered = new OrmRequest({ model: 'owner', access: noFilterAccess });
+      const seen = [];
+      unsubscribes.push(afterHook('create', 'owner', ctx => { seen.push(ctx.record); }));
+
+      const post = id => dispatch(unfiltered, unfiltered.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/owners',
+        body: { data: { type: 'owner', id, attributes: { gender: 'female', age: 30 } } },
+      }));
+
+      createdOwners.push('assertion-50-owner', '9107');
+
+      await post('assertion-50-owner');
+      assert.ok(seen[0], 'an after-`create` hook receives context.record for a non-numeric string id');
+      assert.strictEqual(seen[0]?.id, 'assertion-50-owner', 'and it is the record that was just created');
+
+      // THE RESIDUAL, pinned rather than described. `owner` declares
+      // `id = attr('string')`, so a numeric-LOOKING id is filed under the STRING
+      // key `'9107'` — while every id-bearing surface in orm-request.ts coerces
+      // a numeric-looking string to the NUMBER 9107. So the post-create lookup
+      // misses and `context.record` is undefined, on a create that succeeded.
+      //
+      // INHERITED: `dev` computes the identical value inline, so this is not a
+      // regression and de-duplicating the coercion did not introduce it. NOT
+      // fixed here for the #203/#205 reason — the request layer cannot pick a
+      // coercion without knowing the model's declared id type, and changing
+      // that for every caller inside an authorization patch is how a security
+      // patch acquires an unrelated regression. Filed as abofs/stonyx-orm#209.
+      const response = await post('9107');
+      assert.ok(response?.data, 'precondition: the create itself succeeded');
+      assert.strictEqual(store.get('owner', '9107')?.id, '9107',
+        'precondition: the record is filed under the STRING key, because owner declares id = attr(string)');
+      assert.strictEqual(seen[1], undefined,
+        'RESIDUAL (abofs/stonyx-orm#209): context.record is undefined for a numeric-looking id on a string-id model, ' +
+        'because the shared coercion resolves it to the NUMBER 9107 — pinned so closing #209 turns this red');
+    });
+
+    test('[GUARD] assertion 51 — the animals predicate does NOT accept the unresolved owner shape', function(assert) {
+      // The fixture says, in a comment, that it deliberately has no
+      // `?? record.owner` fallback — because a tolerant predicate would absorb a
+      // record-resolution regression silently and the guarantee two paragraphs
+      // up would stop holding. Nothing enforced that: adding the fallback
+      // survived the whole suite, because with resolution working the two forms
+      // agree on every record the ORM hands the predicate. A design decision
+      // stated in a comment and enforced by nothing is the shape of defect this
+      // change exists to close, so it is enforced here.
+      const predicate = globalAccess.access(makeRequest({ url: '/animals' }));
+      assert.strictEqual(typeof predicate, 'function', 'precondition: /animals yields a per-record filter');
+
+      assert.strictEqual(predicate({ owner: { id: 'restricted' } }), false, 'a resolved hidden owner is rejected');
+      assert.strictEqual(predicate({ owner: { id: 'gina' } }), true, 'a resolved visible owner passes');
+      assert.strictEqual(predicate({}), true, 'and a record with no owner at all passes');
+
+      assert.strictEqual(predicate({ owner: 'restricted' }), true,
+        'an UNRESOLVED owner is NOT rejected — with `?? record.owner` it would be, and a resolution ' +
+        'regression on any surface would then be absorbed silently instead of turning this file red');
     });
   });
 

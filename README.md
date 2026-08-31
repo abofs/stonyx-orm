@@ -568,6 +568,13 @@ sub-paths beneath the mount, as the `/archived` deny above does.
   [#205](https://github.com/abofs/stonyx-orm/issues/205), alongside
   [#203](https://github.com/abofs/stonyx-orm/issues/203), which is the other way
   a create can land on an id nobody named.
+- **`context.record` is `undefined` for an after-`create` hook when a string-id
+  model is given a numeric-looking id.** The post-create lookup uses the same id
+  coercion as every other surface, which resolves `'9107'` to the number `9107`,
+  while a model declaring `id = attr('string')` files the record under the string
+  key. The create itself succeeds and `context.response.data` is correct; only
+  the hook's view of the record is wrong, and it is wrong *silently*. Tracked as
+  [#209](https://github.com/abofs/stonyx-orm/issues/209).
 - **A denied `POST` rolls back only a record it *inserted*.** The rollback
   requires the store to have grown, because removing by id alone is a write
   primitive keyed by a caller-supplied value. When `assignRecordId` lands a
