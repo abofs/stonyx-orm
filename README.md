@@ -316,22 +316,125 @@ export default class GlobalAccess {
   models = ['owner', 'animal'];
 
   access(request) {
-    // false → 403 for the whole request
-    if (request.url.startsWith('/admin')) return false;
+    // Use `originalUrl`, NOT `url`, and strip the query string. See
+    // "Matching the url" below: `url` is mount-relative so a prefix match
+    // against it is always false, and an anchored match against a raw
+    // `originalUrl` misses `/owners?filter[age]=30`. Both fail OPEN.
+    const path = request.originalUrl.split('?')[0];
 
-    // A function is a per-record filter. It is enforced on the collection, on
-    // GET/PATCH/DELETE by id, and on both relationship route families. Match on
-    // the url prefix so record routes get the predicate too. Rejected records
-    // are 404 on record routes and 403 on POST.
-    if (request.url.startsWith('/owners')) return record => record.id !== 'angela';
+    // false → 403 for the whole request
+    if (path.startsWith('/owners/archived')) return false;
+
+    // A function is a per-record filter. Anchored so it cannot also match
+    // `/owners-archive`. Rejected records are 404 on record routes, 403 on POST.
+    if (path === '/owners' || path.startsWith('/owners/')) {
+      return record => record.id !== 'angela';
+    }
 
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
 
-> `include` (sideloading) does not yet apply the included model's own access
-> filter — see [#196](https://github.com/abofs/stonyx-orm/issues/196).
+### Filter functions
+
+A function return value is a **per-record predicate**, and it is enforced on
+every endpoint that is addressed to a record — not only on the collection:
+
+| Endpoint | A record the predicate rejects |
+|---|---|
+| `GET /:models` | omitted from the collection |
+| `GET /:models/:id` | `404` |
+| `GET /:models/:id/{relationship}` | `404` — the **addressed** record is filtered, not the related one |
+| `GET /:models/:id/relationships/{relationship}` | `404` — same |
+| `PATCH /:models/:id` | `404`, no attribute is applied |
+| `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued |
+| `POST /:models` | `403`, and the record is rolled back out of the store |
+
+**Denied record-level requests return 404, not 403.** This is deliberate and it
+is the property most easily "improved" away. 403 would confirm that the record
+exists to a caller who is not allowed to know that, which turns the filter into
+an existence oracle: `404` means "no such record", `403` means "there is one and
+it is not yours". Every status on a record route must therefore be identical for
+"filtered out" and "does not exist" — including `DELETE`, which is why deleting
+a record that never existed also returns 404 rather than 204.
+
+`POST` is the one exception and returns **403**, because 404 on a mounted
+collection route is indistinguishable from "model not mounted" — a genuinely
+different failure a developer needs to diagnose. A `POST` that *collides* with
+an existing id returns `409` only when that record is **visible** to the caller;
+a collision with a filtered record returns `403`, identical to a create against
+an id that does not exist, so the collision check cannot be used to enumerate
+ids either.
+
+### Matching the url
+
+Match on `request.originalUrl`. `RestServer.mountRoute` mounts each model as an
+Express **sub-app**, so by the time `access()` runs the mount path has been
+stripped from `request.url`:
+
+| request | `request.url` | `request.originalUrl` |
+|---|---|---|
+| `GET /owners` | `/` | `/owners` |
+| `GET /owners/angela` | `/angela` | `/owners/angela` |
+| `GET /owners/angela/pets` | `/angela/pets` | `/owners/angela/pets` |
+
+`request.url.startsWith('/owners')` is therefore **always false**: the branch
+never fires, `access()` falls through to whatever it returns last, and a filter
+that looks correct enforces nothing on any surface. This fails **open**.
+
+Two further rules:
+
+- **Match the prefix, not the exact collection url, and strip the query
+  string.** The predicate has to be returned for record routes too, so
+  `url.endsWith('/owners')` leaves `/owners/angela` unguarded — and
+  `originalUrl` carries the query string, so a bare `=== '/owners'` misses
+  `/owners?filter[age]=30` and lets a filtered collection through unfiltered.
+  Anchoring on the path portion covers both without also matching
+  `/owners-archive`.
+- **Account for the configured mount route.** With `ORM_REST_ROUTE=/api` the
+  urls above become `/api/owners/...`, and a sample hard-coded to `/owners`
+  fails open again — environment-specifically, which is harder to notice.
+  Build the prefix from the same value: ``const prefix = `${config.orm.restServer.route}owners` ``.
+
+### Known limitations
+
+- **Related and included records are not filtered.** The predicate is evaluated
+  against the record the route is *addressed to*. `GET /animals/1/owner`,
+  `GET /animals/1/relationships/owner` and `?include=owner` all serialize the
+  related record without resolving that model's own access class, so a filter on
+  `/owners` does not hide an owner reached through `/animals`. Tracked as
+  [#196](https://github.com/abofs/stonyx-orm/issues/196), which covers
+  `include=`, related-resource routes and relationship-linkage routes.
+- **A before-hook that returns a value short-circuits the request.** On write
+  operations addressed to a record the filter is consulted first, so a hook
+  cannot answer for a record the caller may not see. On reads it is not, so a
+  `beforeHook('get', ...)` read-through cache can answer past the filter.
+
+### Breaking changes in 0.4.0
+
+There is no changelog or release-notes channel yet
+([stonyx-workflows#17](https://github.com/abofs/stonyx-workflows/issues/17)), so
+they are recorded here.
+
+1. **`DELETE /{collection}/{id}` on a record that does not exist returns `404`
+   instead of `204`.** This affects **every** consumer issuing a DELETE against
+   any mounted collection, whether or not an access filter is configured, and
+   `models: '*'` mounts every model by default. It is not optional: if a denied
+   delete returned 404 while a missing one returned 204, the pair would be a
+   perfect existence oracle and the filter would be worthless.
+2. **After-hooks no longer fire for a write that failed** — denied, missing,
+   `400` or `409`. Previously `afterHook('delete', ...)` ran with a populated
+   `context.recordId` on a request that deleted nothing, so a consumer cascade
+   destroyed children behind a 404.
+3. **`POST` colliding with a record the caller cannot see returns `403`, not
+   `409`.** Only affects function-style `access` users.
+4. **Function-style `access` is now enforced on all seven surfaces.** Records
+   previously reachable by id despite being filtered from the collection now
+   return 404. Only affects function-style `access` users, for whom the old
+   behaviour was the bypass.
+5. **A predicate that throws is treated as a denial** rather than propagating to
+   Express's default 500 handler.
 
 ### Include Parameter (Sideloading Relationships)
 

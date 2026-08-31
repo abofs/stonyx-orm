@@ -257,37 +257,74 @@ Method mapping: `GET → 'read'`, `POST → 'create'`, `DELETE → 'delete'`, `P
 
 #### Filter functions
 
-A function return value is a **per-record predicate**, and it is enforced on
-every endpoint that can reach a record — not only on the collection:
+> The consumer-facing version of this section, including the 404-vs-403
+> rationale and the breaking changes, is in `README.md`. **`docs/` is not
+> packed** — nothing under it reaches anyone who installs the package — so
+> anything a consumer must know belongs in the README, and this section is the
+> internal companion to it.
 
-| Endpoint | A record the predicate rejects |
-|---|---|
-| `GET /:models` | omitted from the collection |
-| `GET /:models/:id` | `404` |
-| `GET /:models/:id/{relationship}` | `404` |
-| `GET /:models/:id/relationships/{relationship}` | `404` |
-| `PATCH /:models/:id` | `404`, no attribute is applied |
-| `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued |
-| `POST /:models` | `403`, and the record is rolled back out of the store |
+A function return value is a **per-record predicate**, and it is enforced on
+every endpoint that is *addressed to* a record — not only on the collection:
+
+| Endpoint | A record the predicate rejects | Enforced at |
+|---|---|---|
+| `GET /:models` | omitted from the collection | `getCollectionHandler` |
+| `GET /:models/:id` | `404` | `getSingleHandler` |
+| `GET /:models/:id/{relationship}` | `404` — the **addressed** record, not the related one | `_generateRelationshipRoutes` |
+| `GET /:models/:id/relationships/{relationship}` | `404` — same | `_generateRelationshipRoutes` |
+| `PATCH /:models/:id` | `404`, no attribute is applied | `_withHooks` GATE 1 |
+| `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued | `_withHooks` GATE 1 |
+| `POST /:models` | `403`, and the record is rolled back out of the store | `createHandler` |
 
 Denied record-level requests return **404, not 403**, so that "exists but
 filtered out" is indistinguishable from "does not exist". Returning 403 there
 would confirm the record's existence to a caller who is not allowed to see it.
-`POST` is the exception and returns 403: there is no pre-existing record whose
-existence could leak, and a 404 on a mounted collection route would be
-indistinguishable from "model not mounted".
+`POST` is the exception and returns 403: a 404 on a mounted collection route is
+indistinguishable from "model not mounted", a genuinely different failure. The
+duplicate-id check inside `createHandler` is filtered for the same reason — a
+collision with a *hidden* record returns 403, identical to a create against an
+id that never existed, so `409` cannot be used to enumerate ids.
 
-Because the predicate is enforced on record routes, it must match those urls.
-A predicate returned only for an exact collection url (`url.endsWith('/owners')`)
-leaves every record route unguarded — match on the prefix instead.
+Because the predicate is enforced on record routes, it must match those urls,
+and it must match **`request.originalUrl`**. `RestServer.mountRoute` mounts each
+model as an Express sub-app, so `request.url` is mount-relative — `/angela`, not
+`/owners/angela` — and a prefix match against it is always false. That failure
+mode is silent and fails **open**. A predicate returned only for an exact
+collection url (`url.endsWith('/owners')`) is the other half of the same trap: it
+leaves every record route unguarded. And `originalUrl` carries the query string,
+so an anchored `=== '/owners'` silently misses `/owners?filter[age]=30` — match
+on `originalUrl.split('?')[0]`.
 
 Enforcement is post-fetch: the predicate is opaque JavaScript and cannot be
 translated to a `WHERE` clause. Record routes fetch by primary key, so this
-costs one row.
+costs one row; the collection route already loads the full set, which is
+[#197](https://github.com/abofs/stonyx-orm/issues/197)'s premise.
 
-> **Note:** `include` (sideloading) does **not** yet apply the included model's
-> own access filter. Tracked as
-> [#196](https://github.com/abofs/stonyx-orm/issues/196).
+##### Executors in `_withHooks`
+
+`_withHooks` runs several things downstream of the handler, and each is capable
+of changing state on its own. All of them must sit behind a gate:
+
+| Executor | Gate |
+|---|---|
+| the handler itself | GATE 1 (pre-handler) for `update`/`delete` |
+| `context.oldState` / `context.recordId` construction | GATE 1 |
+| before-hooks (which may short-circuit) | GATE 1 |
+| `sqlDb.persist` | GATE 2 (post-handler `denied`) |
+| after-hooks | GATE 2 |
+| `Orm.db.save()` autosave | GATE 2 |
+
+A new executor added to that function belongs below GATE 2, or it is a security
+bug. Every past instance of this defect has been an executor that nobody
+realised was one.
+
+> **Known gap:** the predicate is evaluated against the record the route is
+> addressed to. It is **not** applied to related or included records — those
+> resolve a different model's access class, which is not implemented yet. So
+> `GET /owners/angela` can be 404 while `GET /animals/1/owner` returns angela in
+> full. Tracked as [#196](https://github.com/abofs/stonyx-orm/issues/196),
+> which covers `include=`, related-resource routes and relationship-linkage
+> routes.
 
 ## Configuration & Environment
 

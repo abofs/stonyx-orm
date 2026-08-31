@@ -149,23 +149,40 @@ await Orm.db.save();
 ## 7. Access Control
 
 ```javascript
-// test/sample/access/global-access.js
+// Illustrative — the shipped fixture is test/sample/access/global-access.ts,
+// which differs (it filters two models and uses a dedicated hidden subject).
 export default class GlobalAccess {
   models = ['owner', 'animal']; // or '*' for all
 
   access(request) {
-    // Deny an entire surface outright → 403
-    if (request.url.startsWith('/admin')) return false;
+    // `originalUrl`, NOT `url`. RestServer.mountRoute mounts each model as an
+    // Express sub-app, so `request.url` has the mount path STRIPPED:
+    // GET /owners/angela arrives here with url === '/angela'. A prefix match
+    // against `url` is therefore always false — the branch never fires,
+    // access() falls through to the permission array below, and the filter
+    // silently enforces nothing on any surface. It fails OPEN.
+    //
+    // The query string is stripped too: `originalUrl` carries it, so a bare
+    // `=== '/owners'` misses `/owners?filter[age]=30` and that collection comes
+    // back UNFILTERED. Also fails open.
+    const path = request.originalUrl.split('?')[0];
 
-    // Per-record filter. Enforced on EVERY surface that can reach a record —
-    // the collection, GET/PATCH/DELETE by id, and both relationship route
-    // families — not on the collection alone. Match on the url PREFIX so the
-    // predicate is returned for record routes too; endsWith('/owners') would
-    // leave /owners/angela unguarded.
+    // Deny an entire surface outright → 403
+    if (path.startsWith('/owners/archived')) return false;
+
+    // Per-record filter. Enforced on every surface ADDRESSED TO a record — the
+    // collection, GET/PATCH/DELETE by id, and both relationship route families
+    // — not on the collection alone. Match on the url PREFIX so the predicate is
+    // returned for record routes too; endsWith('/owners') would leave
+    // /owners/angela unguarded. Anchored, so it cannot also catch
+    // /owners-archive.
     //
     // A rejected record is 404 on record routes (indistinguishable from a
     // record that does not exist) and 403 on POST.
-    if (request.url.startsWith('/owners')) {
+    //
+    // If ORM_REST_ROUTE is set, build the prefix from it — a hard-coded
+    // '/owners' fails open under /api.
+    if (path === '/owners' || path.startsWith('/owners/')) {
       return record => record.id !== 'angela';
     }
 
