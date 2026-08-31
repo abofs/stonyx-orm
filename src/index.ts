@@ -27,6 +27,7 @@ import { count, avg, sum, min, max } from './aggregates.js';
 export { default } from './main.js';
 export { store, relationships } from './main.js';
 export type { PersistErrorDetail } from './main.js';
+export type { AccessContext, AccessFunction, AccessMethod } from './types/orm-types.js'; // access() contract (#202)
 export { Model, View, Serializer }; // base classes
 export { attr, belongsTo, hasMany, createRecord, updateRecord }; // helpers
 export { count, avg, sum, min, max }; // aggregate helpers

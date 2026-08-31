@@ -168,3 +168,74 @@ export interface SnapshotEntry {
   source?: string;
   viewQuery?: string;
 }
+
+/**
+ * The shapes a consumer `access()` predicate may return.
+ *
+ * - `false` (or any falsy value) -- deny, 403.
+ * - `true` -- allow, with no per-record filter.
+ * - a permission string or array of them, drawn from the same four verbs as
+ *   {@link AccessContext.operation}. A BARE STRING IS ONE PERMISSION, not a
+ *   grant of all four.
+ * - a `(record) => boolean` predicate -- allow, and filter every record the
+ *   request touches through it.
+ *
+ * Anything else fails CLOSED. See `src/orm-request.ts` `auth()`.
+ */
+export type AccessMethod = string | boolean | string[] | ((record: unknown) => boolean);
+
+/**
+ * The structural facts about the request being authorised, handed to a consumer
+ * `access()` predicate as its SECOND argument (abofs/stonyx-orm#202).
+ *
+ * These are the facts the framework already holds at authorisation time. Before
+ * #202 a consumer had to reconstruct both of them by string-matching a URL, and
+ * five independent fail-open variants of that reconstruction were found in one
+ * three-line documented example -- each one wrong in the direction that GRANTS
+ * access. Read these instead; there is nothing to parse and no variant to miss.
+ *
+ * `record` is deliberately NOT a member. `auth()` runs after route matching but
+ * before any handler executes (`@stonyx/rest-server` `src/request.ts:58-60`),
+ * so nothing has been fetched yet -- carrying a record here would force a
+ * pre-fetch on every request. It is also unnecessary: the `(record) => boolean`
+ * return shape of {@link AccessMethod} already IS the per-record hook, applied
+ * by the handlers. Auth-time and record-time are separate decision points.
+ */
+export interface AccessContext {
+  /**
+   * The model this route was mounted for, e.g. `'owner'` or `'phone-number'`.
+   *
+   * Model names are kebab-case, as declared under `config.orm.paths.model` and
+   * keyed in the store -- NOT the pluralised, mount-prefixed route name. It is
+   * read from the `OrmRequest` instance and is never derived from the request
+   * target, so a mount prefix, a case-varied path, a query string or an
+   * absolute-form request-target cannot change it.
+   */
+  model: string;
+
+  /**
+   * The operation being authorised: `'read'`, `'create'`, `'update'` or
+   * `'delete'`, and no second vocabulary. These are exactly the values of
+   * `methodAccessMap` in `src/orm-request.ts`, which is also what the
+   * permission-array return shape is matched against -- so the two forms cannot
+   * disagree.
+   *
+   * `undefined` when the dispatched method has no entry in that map. Express
+   * delivers `HEAD` to the `GET` handler, so this is reachable. It is left
+   * undefined rather than defaulted on purpose: a fabricated `'read'` would
+   * turn an unclassified request into an authorised one.
+   */
+  operation?: string;
+}
+
+/**
+ * A consumer `access()` predicate.
+ *
+ * `context` is optional in the type because the second argument is ADDITIVE:
+ * JavaScript ignores extra arguments, so every pre-#202 single-argument
+ * predicate keeps working untouched. Changing the FIRST argument instead would
+ * have been the breaking form, and a predicate that can no longer identify its
+ * collection falls through to a full CRUD grant -- so the "safer" breaking
+ * change would have converted every unmigrated predicate into a fail-open.
+ */
+export type AccessFunction = (request: unknown, context?: AccessContext) => AccessMethod;

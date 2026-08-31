@@ -66,7 +66,7 @@ import { getBeforeHooks, getAfterHooks } from './hooks.js';
 import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
-import type { OrmRecord } from './types/orm-types.js';
+import type { OrmRecord, AccessContext, AccessFunction, AccessMethod } from './types/orm-types.js';
 import { isOrmRecord } from './utils.js';
 
 interface OrmRequest$ extends Request {
@@ -94,7 +94,6 @@ interface JsonApiResponse {
   included?: unknown[];
 }
 
-type AccessMethod = string | boolean | string[] | ((record: unknown) => boolean);
 type HandlerFn = (request: OrmRequest$, state: { [key: string]: unknown }) => unknown | Promise<unknown>;
 
 const methodAccessMap: { [key: string]: string } = {
@@ -455,10 +454,10 @@ function isDenied(filter: unknown, record: unknown): boolean {
 
 export default class OrmRequest extends Request {
   model: string;
-  access: (request: unknown) => AccessMethod;
+  access: AccessFunction;
   handlers: { [key: string]: { [key: string]: HandlerFn } };
 
-  constructor({ model, access }: { model: string; access: (request: unknown) => AccessMethod }) {
+  constructor({ model, access }: { model: string; access: AccessFunction }) {
     super(...arguments as unknown as unknown[]);
 
     this.model = model;
@@ -1155,9 +1154,42 @@ export default class OrmRequest extends Request {
     // answers 500 -- and the documented sample itself can throw
     // (`request.originalUrl.split(...)` when originalUrl is absent), so the
     // failure mode is reachable by following the docs.
+    // -------------------------------------------------------------------------
+    // #202 -- hand the consumer the STRUCTURAL facts, not just the transport.
+    //
+    // Both members are already in hand here. `model` is `this.model`, the name
+    // setup-rest-server mounted this route for; `operation` is the SAME
+    // `methodAccessMap` lookup the permission-array branch at the bottom of
+    // this method performs, so the predicate form and the array form cannot
+    // answer differently about the same request.
+    //
+    // NEITHER IS DERIVED FROM THE REQUEST TARGET, and that is the whole point.
+    // Deriving `model` here from `request.baseUrl` (or from the mounted route
+    // name, or from `getPluralName(this.model)`) would move all five fail-open
+    // variants listed in this file's header OUT of the consumer and INTO the
+    // framework, where every consumer inherits them at once. `this.model` is
+    // assigned once at mount time and no request can influence it.
+    //
+    // `operation` is left UNDEFINED for a method with no entry in
+    // `methodAccessMap`, rather than defaulted. Express delivers HEAD to the
+    // GET handler, so an unmapped method really does reach this line; a
+    // `?? 'read'` here would hand the consumer a fabricated authorisation fact
+    // and turn an unclassified request into an authorised one. Undefined is
+    // the honest answer.
+    //
+    // `record` is deliberately absent -- see `AccessContext` in
+    // src/types/orm-types.ts. Nothing is fetched at this point and adding a
+    // lookup here would put a store read in the middle of an authorization
+    // path. The function return shape below IS the per-record hook.
+    // -------------------------------------------------------------------------
+    const context: AccessContext = {
+      model: this.model,
+      operation: methodAccessMap[request.method],
+    };
+
     let access: AccessMethod;
     try {
-      access = this.access(request);
+      access = this.access(request, context);
     } catch (error) {
       // Same reasoning as `isDenied`: fail closed, but say so. An `access()`
       // that throws denies EVERY request to the collection, and a silent 403

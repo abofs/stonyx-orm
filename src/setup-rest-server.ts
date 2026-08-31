@@ -7,14 +7,20 @@ import { forEachFileImport } from '@stonyx/utils/file';
 import { dbKey } from './db.js';
 import { getPluralName } from './plural-registry.js';
 import log from 'stonyx/log';
+import type { AccessFunction } from './types/orm-types.js';
 
 interface AccessInstance {
   models: string[] | '*';
-  access: (request: unknown) => unknown;
+  /**
+   * The consumer predicate. Called as `access(request, { model, operation })`
+   * -- the second argument is additive (abofs/stonyx-orm#202), so a predicate
+   * declared with a single parameter is still valid and still works.
+   */
+  access: AccessFunction;
 }
 
 export default async function(route: string, accessPath: string, metaRoute: boolean): Promise<void> {
-  const accessFiles: Record<string, (request: unknown) => unknown> = {};
+  const accessFiles: Record<string, AccessFunction> = {};
 
   try {
     await forEachFileImport(accessPath, (accessClass: unknown) => {
