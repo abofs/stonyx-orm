@@ -244,7 +244,8 @@ export default class Orm {
   }
 
   /**
-   * Resolve a model's `access` predicate by model name (abofs/stonyx-orm#202).
+   * Resolve the `access` predicate registered for a model name
+   * (abofs/stonyx-orm#202).
    *
    * This is the supported way to reach another model's predicate while
    * servicing a request routed to a different model. Call it with the model
@@ -253,13 +254,45 @@ export default class Orm {
    *
    * ```js
    * const predicate = Orm.instance.getAccess('animal');
-   * const verdict = predicate?.(request, { model: 'animal', operation: 'read' });
+   * if (!predicate) return deny;
+   * const verdict = predicate(request, { model: 'animal', operation: 'read' });
    * ```
    *
-   * Passing the context is not optional in practice. A predicate that
-   * identifies its collection from the request would otherwise answer about the
-   * collection the request is ADDRESSED TO -- owners -- while being asked about
-   * animals, and per #202's thesis it answers wrong in the granting direction.
+   * WHAT IT RESOLVES. The predicate of the access CLASS that claims the model,
+   * which is not necessarily specific to it: one class may claim many models
+   * and declares one `access` method, so
+   * `getAccess('owner') === getAccess('animal')` is `true` against this repo's
+   * fixture. See {@link Orm#accessFunctions}.
+   *
+   * `undefined` means NO PREDICATE COULD BE RESOLVED for that name. That
+   * includes a model whose access class failed to LOAD -- `setup-rest-server`
+   * catches, warns and publishes the partial map -- so it is not the same claim
+   * as "this model is unrestricted". Treat it as DENY, the same way
+   * `AccessContext.operation === undefined` is treated.
+   *
+   * PASSING THE CONTEXT MAKES A MODEL-CORRECT ANSWER POSSIBLE. It does not, on
+   * its own, make the answer model-correct: the resolved predicate has to READ
+   * the context. Measured against this repo's shipped access class on a request
+   * express dispatched to `GET /owners/angela`, asked about ANIMALS:
+   *
+   * ```
+   * getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
+   *   ->  record => record.id !== 'angela' && record.id !== 'restricted'
+   * ```
+   *
+   * The OWNERS filter, which returns `true` for animal 21 -- the record hidden
+   * on every animal surface. Under a mount that predicate recognises neither
+   * way it falls through to `['read', 'create', 'update', 'delete']`, a full
+   * CRUD grant. Either way: context supplied, answer not the animal answer,
+   * wrong in the GRANTING direction, because that predicate is arity-1 and
+   * identifies its collection from the request. AC9 asserts the first case on a
+   * live dispatch.
+   *
+   * Every predicate in this repo and in every consumer tree is arity-1 today,
+   * and there is no supported way for the caller to tell which kind it got; the
+   * boot-time arity warning that would surface it is abofs/stonyx-orm#213. Pass
+   * the context, and do not treat a resolved predicate's answer as
+   * model-specific until that predicate reads it.
    *
    * OWN PROPERTIES ONLY. A bare `this.accessFunctions[modelName]` walks the
    * prototype chain, so `getAccess('constructor')` resolved `Object` and

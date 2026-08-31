@@ -18,11 +18,25 @@
  *
  *   context.operation The operation being authorised. Exactly one of the four
  *                     verbs `'read'`, `'create'`, `'update'`, `'delete'` --
- *                     there is no second vocabulary, and it is never an HTTP
+ *                     no second vocabulary ON THIS PATH, and never an HTTP
  *                     method name like `'GET'`. These are the same four
  *                     strings the permission-array return shape is written in
  *                     (`['read', 'create']`), because both come from the one
  *                     `methodAccessMap` below.
+ *
+ *                     NOT the hook vocabulary. `HookContext.operation`
+ *                     (`src/hooks.ts`, documented under "Hook Context Object"
+ *                     in the README) carries `'list' | 'get' | 'create' |
+ *                     'update' | 'delete'` on an identically-named key of an
+ *                     identically-shaped context object, and the access
+ *                     vocabulary collapses `list` and `get` into `'read'`. For
+ *                     one `GET /animals/1` a hook sees `'get'` and `access()`
+ *                     sees `'read'`, so a predicate cannot tell a collection
+ *                     read from a record read. `AccessOperation` makes
+ *                     `operation === 'get'` a compile error for a TypeScript
+ *                     consumer, because a predicate that stops matching falls
+ *                     through to the permission array -- the misreading is
+ *                     fail-open shaped.
  *
  *                     `undefined` when the dispatched method has no entry in
  *                     that map. Express delivers `HEAD` to the `GET` handler,
@@ -34,6 +48,26 @@
  * So a consumer writes `if (model === 'owner' && operation === 'read')`. There
  * is no string to parse, no variant to miss, and no way to fail open through a
  * URL shape nobody anticipated.
+ *
+ * WHAT THE CONTEXT DOES NOT TELL YOU: WHICH SURFACE. It names the model and
+ * the verb, not the route. Measured over the live router, six surfaces produce
+ * one identical context:
+ *
+ *     GET /owners                          { model: 'owner', operation: 'read' }
+ *     GET /owners/gina                     { model: 'owner', operation: 'read' }
+ *     GET /owners/gina/pets                { model: 'owner', operation: 'read' }
+ *     GET /owners/gina/relationships/pets  { model: 'owner', operation: 'read' }
+ *     GET /owners/archived                 { model: 'owner', operation: 'read' }
+ *     GET /owners/gina?include=pets        { model: 'owner', operation: 'read' }
+ *
+ * So a rule that depends on the SUB-PATH still needs `request.path` -- which is
+ * mount-relative and query-free, and is the one read of argument one the
+ * warning below sanctions. This repo's own fixture has such a rule: its
+ * `/archived` deny cannot be expressed from the context alone, and a predicate
+ * migrated to context-only would silently drop it, turning a deny into an
+ * allow. The related-resource and `?include=` surfaces serve ANOTHER model's
+ * records under `model: 'owner'`, and the context gives no signal of that
+ * (abofs/stonyx-orm#196).
  *
  * `record` IS NOT IN THIS CONTEXT, deliberately. `auth()` runs after route
  * matching but BEFORE any handler executes (`@stonyx/rest-server`
@@ -53,9 +87,37 @@
  * an owners route -- use the boot-time registry:
  *
  *     const predicate = Orm.instance.getAccess('animal');
- *     const verdict = predicate?.(request, { model: 'animal', operation: 'read' });
+ *     if (!predicate) return deny;
+ *     const verdict = predicate(request, { model: 'animal', operation: 'read' });
  *
- * Passing the context explicitly is what makes that answer model-CORRECT.
+ * `undefined` means NO PREDICATE COULD BE RESOLVED for that name -- which
+ * includes the case where the model has an access class that failed to load,
+ * because `setup-rest-server.ts` catches a load failure, warns, and publishes
+ * whatever partial map it had. It does NOT mean the model is unrestricted.
+ * Treat it as DENY, the same way `operation === undefined` is treated above.
+ *
+ * PASSING THE CONTEXT MAKES A MODEL-CORRECT ANSWER POSSIBLE. It does not make
+ * the answer model-correct on its own -- the resolved predicate has to READ it.
+ * Measured against this repo's own shipped access class, on a request express
+ * dispatched to `GET /owners/angela`, asked about ANIMALS:
+ *
+ *     getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
+ *       ->  record => record.id !== 'angela' && record.id !== 'restricted'
+ *
+ * That is the OWNERS filter, and it returns `true` for animal 21 -- the record
+ * hidden on every animal surface. Under a mount that predicate recognises
+ * neither way it is worse: it falls through to
+ * `['read', 'create', 'update', 'delete']`, a full CRUD grant. Either way the
+ * context was supplied and the answer is not the animal answer, and it is wrong
+ * in the GRANTING direction, because that predicate is arity-1 and identifies
+ * its collection from the request. (The first of these is asserted on a live
+ * dispatch by AC9 in test/integration/orm-test.ts.)
+ *
+ * Every predicate in this repo and in every consumer tree is arity-1 on the day
+ * this ships, and the caller has no supported way to tell which kind it got --
+ * the boot-time arity warning that would surface it is abofs/stonyx-orm#213.
+ * So: pass the context, and do not treat a resolved predicate's answer as
+ * model-specific until that predicate has been migrated to read the context.
  *
  * ---------------------------------------------------------------------------
  * DO NOT RECONSTRUCT THE REQUEST PATH INSIDE `access()`.

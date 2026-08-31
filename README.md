@@ -397,7 +397,7 @@ parsing anything.
 | Key | Value |
 |---|---|
 | `model` | The model this route was mounted for, as a **model name**: kebab-case, exactly as declared under `config.orm.paths.model` and keyed in the store — `'owner'`, `'animal'`, `'phone-number'`. **Not** the pluralized, dasherized, mount-prefixed *route* name. |
-| `operation` | One of **`'read'`, `'create'`, `'update'`, `'delete'`** — and no second vocabulary. Never an HTTP method name like `'GET'`. `undefined` when the dispatched method has no entry in the framework's method map. |
+| `operation` | One of **`'read'`, `'create'`, `'update'`, `'delete'`** — and no second vocabulary *on this path*. Never an HTTP method name like `'GET'`, and **not** the hook vocabulary either (see [below](#operation-is-not-the-hook-operation)). `undefined` when the dispatched method has no entry in the framework's method map. |
 
 So a predicate can be written without reference to any URL:
 
@@ -419,6 +419,49 @@ There is no string to parse, no variant to miss, and no way to fail open through
 a URL shape nobody anticipated. `model` is fixed at mount time and no request
 can influence it — not a mount prefix, not a query string, not a case-varied
 path, not an absolute-form request target.
+
+#### What the context does not tell you: which surface
+
+It names **which model and which verb**, not **which route**. Measured over the
+live router, six surfaces produce one identical context:
+
+```
+GET /owners                          { model: 'owner', operation: 'read' }
+GET /owners/gina                     { model: 'owner', operation: 'read' }
+GET /owners/gina/pets                { model: 'owner', operation: 'read' }
+GET /owners/gina/relationships/pets  { model: 'owner', operation: 'read' }
+GET /owners/archived                 { model: 'owner', operation: 'read' }
+GET /owners/gina?include=pets        { model: 'owner', operation: 'read' }
+```
+
+So a rule that depends on the **sub-path** still needs `request.path` —
+mount-relative and query-free, and the one read of argument one that
+[Identifying the collection](#identifying-the-collection) sanctions. The sample
+access class shipped with this repo has such a rule: its `/archived` deny
+**cannot be expressed from the context alone**, and a predicate migrated to
+context-only would silently drop it — a deny becoming an allow.
+
+Note also that the related-resource and `?include=` surfaces serve *another
+model's* records under `model: 'owner'`, and the context gives a predicate no
+signal that it is authorizing a related-resource route. That is
+[#196](https://github.com/abofs/stonyx-orm/issues/196).
+
+#### `operation` is not the hook `operation`
+
+This module exposes a **second** `operation` vocabulary, on an identically-named
+key of an identically-shaped context object:
+[hook contexts](#hook-context-object) carry `list` / `get` / `create` /
+`update` / `delete`. The access vocabulary collapses `list` and `get` into
+`'read'`, so for one `GET /animals/1` a hook sees `'get'` while `access()` sees
+`'read'` — and a predicate cannot distinguish a collection read from a
+record read.
+
+"No second vocabulary" above is a statement about the **access path**, where
+both the context and the permission array come from one method map. It is not a
+statement about the module. Writing `operation === 'get'` in a predicate never
+matches, and a predicate that stops matching falls through to the permission
+array — so the misreading is fail-open shaped. In TypeScript the exported
+`AccessOperation` union makes it a compile error.
 
 The four `operation` values are the same four strings the permission-array
 return shape is written in (`['read', 'create', 'update', 'delete']`), because
@@ -459,18 +502,52 @@ request routed to a *different* model:
 import Orm from '@stonyx/orm';
 
 const predicate = Orm.instance.getAccess('animal');
-const verdict = predicate?.(request, { model: 'animal', operation: 'read' });
+if (!predicate) return deny;
+
+const verdict = predicate(request, { model: 'animal', operation: 'read' });
 ```
 
-`Orm.instance.getAccess(modelName)` returns the predicate, or `undefined` when
-that model has no access class. The raw map is `Orm.instance.accessFunctions`, keyed
-by model name; prefer `getAccess()`.
+**`undefined` means no predicate could be resolved — not that the model is
+unrestricted. Treat it as deny.** It covers a model with no access class *and* a
+model whose access class failed to **load**: a load failure is caught and warned
+about, and the partial map is published anyway, so a missing key is not evidence
+of an unrestricted model. This is the same rule as `operation === undefined`
+above, and for the same reason.
 
-Passing the context explicitly is what makes the answer **model-correct**. A
-predicate that identifies its collection from the request would otherwise answer
-about the collection the request is *addressed to* while being asked about
-another one — and per the five variants below, it answers wrong in the direction
-that grants access.
+The raw map is `Orm.instance.accessFunctions`, keyed by model name; prefer
+`getAccess()` — it is guarded against inherited `Object.prototype` members and a
+direct index is not. Note that it maps a model name to the predicate of the
+access *class* that claims it, which may claim many models: against this repo's
+sample, `getAccess('owner') === getAccess('animal')`.
+
+#### Passing the context makes a model-correct answer *possible*
+
+It does not make the answer model-correct on its own. **The resolved predicate
+has to read the context.** Measured against the access class shipped with this
+repo, on a request Express dispatched to `GET /owners/angela`, asked about
+**animals**:
+
+```
+getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
+  ->  record => record.id !== 'angela' && record.id !== 'restricted'
+```
+
+That is the **owners** filter, and it returns `true` for animal 21 — the record
+hidden on every animal surface. Under a mount that predicate recognizes neither
+way it is worse still: it falls through to
+`['read', 'create', 'update', 'delete']`, a full CRUD grant.
+
+Either way the context was supplied and the answer is not the animal answer, and
+it is wrong in the direction that **grants**. That predicate is single-argument
+and identifies its collection from the request, so it answered about the
+collection the request is *addressed to* while being asked about another one.
+Every predicate in this repo, and in every consumer tree, is single-argument on
+the day this ships, and a caller has no supported way to tell which kind it
+resolved. The boot-time arity warning that would surface it is
+[#213](https://github.com/abofs/stonyx-orm/issues/213).
+
+So: pass the context, and do not treat a resolved predicate's answer as
+model-specific until that predicate has been migrated to read it.
 
 ### Return values
 
@@ -607,15 +684,19 @@ sub-paths beneath the mount, as the `/archived` deny above does.
   [#202](https://github.com/abofs/stonyx-orm/issues/202): `access()` never
   received the model structurally and `setup-rest-server.ts` discarded the
   model→predicate map at boot. **#202 has landed and both halves now exist** —
-  see [The access context](#the-access-context-second-argument): `context.model`
-  makes the answer model-correct and `Orm.instance.getAccess(modelName)` makes
-  another model's predicate reachable. **The mechanism exists; the ORM does not
-  yet use it on this path.** The re-parenting write above is still unblocked —
-  that enforcement is
+  see [The access context](#the-access-context-second-argument):
+  `Orm.instance.getAccess(modelName)` makes another model's predicate
+  **reachable**, and `context.model` makes a **model-correct answer possible** —
+  possible, not guaranteed: the resolved predicate has to read the context, and
+  every predicate in tree is still single-argument
+  ([#213](https://github.com/abofs/stonyx-orm/issues/213)), so today it answers
+  about the collection the request is addressed to. **The mechanism exists; the
+  ORM does not yet use it on this path.** The re-parenting write above is still
+  **not refused** — that enforcement is
   [#196](https://github.com/abofs/stonyx-orm/issues/196) and
   [#207](https://github.com/abofs/stonyx-orm/issues/207), which were blocked on
-  #202 and are now unblocked. Until they land, do not rely on a filter to keep a
-  record unmodifiable; keep the *writable* collections' predicates as tight as
+  #202 and are now free to proceed. Until they land, do not rely on a filter to
+  keep a record unmodifiable; keep the *writable* collections' predicates as tight as
   the hidden ones.
 - **Authorization by identifying the collection is a consumer-side
   reconstruction of information the framework already holds.** `access()`
