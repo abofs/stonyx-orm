@@ -2323,6 +2323,17 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(liveHidden.status, 404, 'the migrated predicate is live-enforcing on /ctx-animals');
       assert.equal(liveVisible.status, 200, 'and admitting what it should');
 
+      // WHERE AC9's REGISTRY CLAIM IS ACTUALLY CARRIED. The swap below writes an
+      // entry and the next line reads it back, which taken ALONE is a test
+      // seeding what production is supposed to seed. It is not vacuous, and the
+      // reason is `urlIdentifying` above: that read comes from the BOOT registry
+      // and throws when there is none, which is why removing
+      // `Orm.instance.accessFunctions = ...` from setup-rest-server.ts reds AC9
+      // (measured — it reds AC3, AC8 and AC9). AC8 carries the same claim
+      // independently. If a future edit drops the `urlIdentifying` read, AC9's
+      // registry half silently becomes a self-check and this comment stops
+      // being true — the swap exists to substitute a MIGRATED predicate for the
+      // shipped arity-1 one, not to demonstrate that the registry exists.
       const restore = Orm.instance.accessFunctions.animal;
       try {
         Orm.instance.accessFunctions.animal = urlFreeAnimalAccess;
@@ -2330,7 +2341,7 @@ module('[Integration] ORM', function(hooks) {
         const resolved = Orm.instance.getAccess('animal');
 
         assert.strictEqual(typeof resolved, 'function',
-          'the animal predicate RESOLVES from the registry (red when the registry is absent: before this story the map died at setup-rest-server.ts:62 and this was undefined)');
+          'the animal predicate RESOLVES from the registry (red when the registry is absent: before this story the map died in setup-rest-server.ts and this was undefined)');
         assert.strictEqual(resolved, urlFreeAnimalAccess,
           'and it is the same function object the live /ctx-animals route is enforcing');
 
@@ -2341,6 +2352,12 @@ module('[Integration] ORM', function(hooks) {
         assert.notOk(verdict(store.get('animal', SHIPPED_HIDDEN)),
           'and the filter REJECTS the animal owned by `restricted` — the ANIMAL answer');
         assert.ok(verdict(store.get('animal', SHIPPED_VISIBLE)), 'while admitting a visible one');
+
+        // ILLUSTRATION, not coverage. This exercises a branch of the
+        // TEST-LOCAL predicate defined in this module, so no production change
+        // can make it fail. It is here to show the contrast a consumer reads
+        // — the answer is not the owner answer — not to assert framework
+        // behaviour. Same for the context-withheld call below.
         assert.ok(verdict(store.get('owner', 'angela')),
           "and it is not the OWNER predicate's answer, which would have rejected angela");
 
@@ -2350,6 +2367,13 @@ module('[Integration] ORM', function(hooks) {
         // (b) again, from the other side: drop the context and the same
         // migrated predicate cannot answer at all — it fails closed rather than
         // guessing from the request. The context is what carries the model.
+        //
+        // ILLUSTRATION, as above: this is the test-local predicate's own
+        // early-return branch, so it is the documented consumer idiom being
+        // demonstrated, not a framework guarantee being asserted. The framework
+        // guarantee that a caller cannot silently omit the context is the
+        // REQUIRED `context` parameter on `AccessFunction`, which is a
+        // compile-time fact (TS2554) and not reachable from this tier.
         assert.strictEqual(resolved(captured), false,
           'without the context there is no model to answer about, and a predicate that cannot identify its subject denies');
       } finally {
