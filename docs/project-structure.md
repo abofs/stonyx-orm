@@ -274,7 +274,7 @@ every endpoint that is *addressed to* a record — not only on the collection:
 | `GET /:models/:id/relationships/{relationship}` | `404` — same | `_generateRelationshipRoutes` |
 | `PATCH /:models/:id` | `404`, no attribute is applied | `_withHooks` GATE 1 |
 | `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued | `_withHooks` GATE 1 |
-| `POST /:models` (no client id) | `403`, and the created record is rolled back out of the store | `createHandler` |
+| `POST /:models` (no client id) | `403`, and a record **this request inserted** is rolled back out of the store — see the `createdNewSlot` row in the guard table for the case where it did not insert one | `createHandler` |
 | `POST /:models` (client-supplied id) | `403`, refused before any store lookup | `createHandler` GATE 0 |
 
 Denied record-level requests return **404, not 403**, so that "exists but
@@ -301,9 +301,10 @@ unfiltered caller keeps `409`/`200`. And a caller can still learn that a
 collection *has* a filter, which discloses a configuration fact rather than a
 record.
 
-Because the predicate is enforced on record routes, it must match those urls —
-and **matching urls is the wrong contract**, tracked as
-[#202](https://github.com/abofs/stonyx-orm/issues/202). Four fail-open variants
+Because the predicate is enforced on record routes, `access()` has to work out
+which collection a request addresses — and **being asked to reconstruct that from
+the request target is the wrong contract**, tracked as
+[#202](https://github.com/abofs/stonyx-orm/issues/202). Five fail-open variants
 of the same three-line sample have now been found, each after the previous was
 fixed:
 
@@ -311,18 +312,33 @@ fixed:
 |---|---|---|
 | 1 | `request.url` instead of `originalUrl` | `mountRoute` mounts each model as an Express sub-app, so `url` is mount-relative (`/angela`, not `/owners/angela`) and a prefix match is **always false** |
 | 2 | anchored match against a raw `originalUrl` | `originalUrl` carries the query string, so `=== '/owners'` misses `/owners?filter[age]=30` — the collection comes back unfiltered |
-| 3 | case-sensitive matcher | `RestServer` mounts with a bare `express()`, default `caseSensitive: false`, while `originalUrl` preserves the caller's case: `DELETE /ANIMALS/22` destroyed a hidden record. Router-side fix: [stonyx-rest-server#47](https://github.com/abofs/stonyx-rest-server/issues/47) |
-| 4 | hard-coded `/owners` | `ORM_REST_ROUTE=/api` makes every url `/api/owners/...` and the sample matches nothing — environment-specifically |
+| 3 | case-sensitive matcher | `RestServer` mounts with a bare `express()`, default `caseSensitive: false`, while the matched text preserves the caller's case: `DELETE /ANIMALS/22` destroyed a hidden record. Router-side fix: [stonyx-rest-server#47](https://github.com/abofs/stonyx-rest-server/issues/47) |
+| 4 | hard-coded `/owners` | `ORM_REST_ROUTE=/api` makes every url `/api/owners/...` and the sample matches nothing — environment-specifically. The documented remediation was itself broken: `` `${config.orm.restServer.route}owners` `` is `/apiowners` |
+| 5 | **any** match against `originalUrl` | HTTP/1.1 permits an absolute-form request-target. Express routes on `parseurl(req).pathname`, but `originalUrl` is the raw target: `GET http://anything.example/owners/angela` has no `/owners` prefix. Measured — the record came back in full, `DELETE` succeeded, and it walked past a hard `return false` deny too |
 
-`endsWith('/owners')` is a fifth and older half of the same trap: it leaves every
-record route unguarded.
+`endsWith('/owners')` is an older half of variant 2: it leaves every record route
+unguarded.
 
-The shipped fixture (`test/sample/access/global-access.ts`) and all three samples
-now close all four: `originalUrl`, `.split('?')[0]`, `.toLowerCase()`, and a
-prefix built from `config.orm.restServer.route`. **That is a stopgap and the
-samples say so.** They are safe against four variants we happened to find; the
-pattern asks a consumer to re-derive from a transport artifact what the ORM
-already holds structurally.
+**The fix was not a fifth rule; it was to stop parsing.** The shipped fixture and
+both samples now read `request.baseUrl` — the mount Express actually matched. It
+carries no query string (2), is not mount-relative (1), already contains the
+configured `ORM_REST_ROUTE` prefix (4 — so the `/apiowners` mistake is
+unconstructible and the whole `collectionPrefix` derivation is deleted), and is
+unaffected by absolute-form (5). Only the case rule survives, plus **fail closed
+when `baseUrl` is absent**: `?? ''` converted a missing request target into an
+empty string, which matched no collection, which fell through to a total grant —
+a guard added to stop a throw that traded fail-closed for fail-open.
+
+**That is still a stopgap and the samples say so.** `baseUrl` is a transport
+artifact standing in for a structural fact.
+
+**The tested matcher used to be a different matcher.** Every `F_*` mutation
+targets `test/sample/access/global-access.ts`, which `files` excludes from the
+package, while the code a consumer copies is the README's — independently
+written and pinned by nothing. That is how variant 5 came to live in the shipped
+copy while the tested copy was being mutated eight ways. They are now one shape,
+and assertion 46 reads both files and compares the two `access()` bodies line for
+line.
 
 Enforcement is post-fetch: the predicate is opaque JavaScript and cannot be
 translated to a `WHERE` clause. Record routes fetch by primary key, so this
@@ -343,6 +359,26 @@ of changing state on its own. All of them must sit behind a gate:
 | `sqlDb.persist` | GATE 2 (post-handler `denied`) |
 | after-hooks | GATE 2 |
 | `Orm.db.save()` autosave | GATE 2 |
+| **`context.state`** | **not an executor — an INPUT.** See below |
+
+**`context.state` is an input to the authorization decision, not only an output
+channel.** It is the object `auth()` plants `state.filter` in, *and* the object
+handed to every before-hook as `context.state`, *and* the object
+`@stonyx/rest-server` reads `redirect` and `pipe` back off after the handler
+returns. So a published extension point can write to the thing the gates read.
+
+Measured: `beforeHook('get', 'animal', ctx => { delete ctx.state.filter })` turned
+`GET /animals/21` from `404` into `200` and `GET /animals` from 20 records into
+22. GATE 1 held, because it destructures `filter` **before** the hook loop; the
+read handlers did not, because they re-destructured it from the same live object
+**after** arbitrary consumer code had been handed it. The two spellings look
+identical at the call site, and only one of them is safe.
+
+`_withHooks` therefore snapshots `filter` once, at the top, and hands the handler
+`{ ...state, filter }` — the snapshot, never the live bag. `context.state` stays
+the live object, because `redirect`/`pipe` require it. **A new read of
+`state.filter` anywhere below the snapshot is a security bug**, the same way a
+new executor below GATE 2 is.
 
 A new executor added to that function belongs below GATE 2, or it is a security
 bug. Every past instance of this defect has been an executor that nobody
@@ -386,15 +422,43 @@ property of the function it lives in, if there is one.
 | catch-all relationship routes (`Md`/`Me`) | deleted | Both branches returned a constant 404, so no distinguishing test could exist. If either route ever stops being a constant 404 it becomes an eighth surface and must filter the parent. |
 | create rollback: `store.get(...) === record` identity check | **survivor, retained** | **There is no `await` anywhere between `slotsBefore`, `createRecord`, `createdNewSlot`, `isDenied` and `store.remove`.** The whole window is synchronous, so it is atomic under Node's event loop and no concurrent request can interleave; before-`create` hooks run *before* the handler (`_withHooks` runs its hook loop ahead of `await handler(...)`), so they are outside it, and a consumer predicate running inside `isDenied` executes *after* `createdNewSlot` is computed and cannot flip it. Nothing can occupy the slot, whoever chose the id. **Becomes reachable if an `await` is introduced between the create and the rollback** — which is what a future editor would actually do. Mutating it (inverting the condition) **is** killed by assertion 14; only deleting it survives. |
 | create rollback: `createdNewSlot` check | **killable** — assertion 31 | `assignRecordId` returns last-INSERTED + 1, not max + 1 ([#203](https://github.com/abofs/stonyx-orm/issues/203)), so a server-assigned id can land on an occupied slot. GATE 0 cannot refuse that request — it supplied no id. |
+| `normalizeBodyId`'s `typeof id !== 'string'` early return | **killable** — assertion 49 | It had no mutation for four rounds. Dropping it sends a non-string body id through `parseInt`, so `POST {"id":9105.5}` looks the collision up under `9105` and answers `409` against a record the caller never named — the hex divergence one type over. |
+| `_withHooks`'s `(state \|\| {})` | **survivor by construction, retained** | The rest-server dispatcher always passes `getState(req)`, so no test can reach the `undefined` branch. Kept because the sibling relationship routes declare `state` with a `= {}` default and the two shapes should not disagree, and because it now defends the whole function (context, snapshot and handler call all read `callState`) rather than one destructure the next line would throw past anyway. **Becomes reachable if a dispatcher other than `@stonyx/rest-server` invokes these handlers**, which is what a consumer mounting them by hand would do. |
+| GATE 2's `Number.isInteger(response) &&` | **equivalent mutant, retained** | The only non-integer a handler in this file returns is a `{ data, links }` object, and `{} >= 400` is `false` by coercion, so dropping it changes no reachable outcome. Kept because `>=` coerces rather than rejects and the shapes it coerces are not obvious — `[500] >= 400` is **true**, so a handler that returned an array would have every response read as a denial. **Becomes killable the moment a handler returns anything array-like or numeric-string-like.** |
 | `normalizeBodyId`'s `id === ''` early return | **killable** — assertion 44 | `''` is the only body id that means "no id": `createRecord` treats it as absent and assigns a server id. Coercing it gives `parseInt('') === NaN`, and a record **can** be held under `NaN`, so `POST {"id":""}` would answer 409 against a record it never named. Its whitespace sibling (`id.trim() === ''`) was **deleted** rather than kept: it made the body surface disagree with `getId`, which maps `'   '` to `NaN` and therefore addresses that slot on every other route. |
 
-> **Known gap:** the predicate is evaluated against the record the route is
-> addressed to. It is **not** applied to related or included records — those
+> **Known gap (reads):** the predicate is evaluated against the record the route
+> is addressed to. It is **not** applied to related or included records — those
 > resolve a different model's access class, which is not implemented yet. So
 > `GET /owners/angela` can be 404 while `GET /animals/1/owner` returns angela in
 > full. Tracked as [#196](https://github.com/abofs/stonyx-orm/issues/196),
 > which covers `include=`, related-resource routes and relationship-linkage
 > routes.
+>
+> **Known gap (writes) — [#207](https://github.com/abofs/stonyx-orm/issues/207),
+> and no artifact may claim otherwise.** The same per-model scoping applies to
+> writes, and there it de-hides records rather than merely disclosing them.
+> `POST /owners {"relationships":{"pets":{"data":{"id":21}}}}` — or
+> `attributes: {pets: [21, 22]}`, which never enters the relationships loop at
+> all — re-parents hidden animals 21 and 22 onto an owner the caller may write.
+> `owner` is the field the animals predicate reads, so they stop being rejected
+> and become readable and deletable through `/animals`. Reachable
+> unauthenticated.
+>
+> It is **blocked, not deferred by preference**. Refusing it means checking
+> animal 21 against the **animal** model's predicate while servicing an
+> **owners** route. That is cross-model access resolution, and the contract
+> cannot express it: `access()` never receives the model structurally
+> ([#202](https://github.com/abofs/stonyx-orm/issues/202)) and
+> `setup-rest-server.ts` builds `accessFiles[model]` and then hands each entry
+> to `mountRoute` without keeping the map
+> ([#196](https://github.com/abofs/stonyx-orm/issues/196)), so at request time
+> there is nothing to consult. The chain is **#202 → #196 → #207**.
+>
+> **Nothing in this repository may assert that a hidden record cannot be
+> modified, or that the filter cannot be defeated.** Three consecutive review
+> rounds were blocked on an artifact claiming more than the code delivered; this
+> is the current shape of that claim.
 
 ## Configuration & Environment
 

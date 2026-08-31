@@ -311,57 +311,71 @@ await setupRestServer('/', './access');
 
 Access classes define models and provide custom filtering/authorization logic.
 
-> **The URL-matching in this example is a stopgap. Read
-> [Matching the url](#matching-the-url) before copying it.** The same three-line
-> example has failed **open** in four distinct ways during one review, each found
-> only after the previous was fixed, by four different people. The sample below
-> closes all four; that is not the same as being safe — it is safe against the
-> four variants that happen to have been found, and there is no reason to believe
-> the list is complete.
+> **Do not reconstruct the request path inside `access()`. Read
+> [Identifying the collection](#identifying-the-collection) before copying this.**
+> Every attempt to identify the collection by parsing the request target has
+> failed **open** — five distinct variants of this same example, each found only
+> after the previous was fixed, by five different people. The sample below does
+> not parse anything: it reads `request.baseUrl`, the mount Express actually
+> matched.
 >
-> **The real fix is
+> That is still a stopgap. **The real fix is
 > [#202](https://github.com/abofs/stonyx-orm/issues/202)** — `access()` should
-> receive the model, the operation and the record, so there is no URL to parse
-> and no variant to miss. Until it lands, prefer the array shape (`['read']`) or
-> `false` where you can: the **function** shape is the one that requires URL
-> matching. The same warning is repeated at the top of `src/orm-request.ts`,
-> which ships; the longer write-up in `docs/usage-patterns.md` does **not** ship,
-> so this README and that source header are the two copies a consumer sees.
+> receive the model, the operation and the record, so there is nothing to
+> identify. Until it lands, prefer the array shape (`['read']`) or `false` where
+> you can: the **function** shape is the one that requires any matching at all.
+> The same warning is repeated at the top of `src/orm-request.ts`, which ships;
+> the longer write-up in `docs/usage-patterns.md` does **not** ship, so this
+> README and that source header are the two copies a consumer sees.
+>
+> This sample is the same code as the shipped test fixture, and a test asserts
+> the two `access()` bodies are identical line for line. For four rounds they
+> were two independently written copies — and the fifth fail-open variant was
+> found in the one nothing was mutating.
 
 ```js
-import config from 'stonyx/config';
-
-// Build the mount prefix from the SAME value the ORM mounts under, and compare
-// lower-cased. Both are load-bearing — see "Matching the url".
-function collectionPrefix(name) {
-  const route = config.orm.restServer.route ?? '/';
-  const trimmed = String(route).replace(/^\/+|\/+$/g, '');
-
-  return `${trimmed === '' ? '' : `/${trimmed}`}/${name}`.toLowerCase();
-}
-
 export default class GlobalAccess {
   models = ['owner', 'animal'];
 
   access(request) {
-    // `originalUrl`, not `url` — `url` is mount-relative, so a prefix match
-    // against it is ALWAYS false. Query string stripped, because `originalUrl`
-    // carries it. Lower-cased, because the router matched case-insensitively
-    // and a matcher stricter than the router can be walked past. Every one of
-    // those three omissions fails OPEN.
-    const path = String(request.originalUrl ?? '').split('?')[0].toLowerCase();
-    const owners = collectionPrefix('owners');
+    // `request.baseUrl` is the mount Express matched — `/owners`, or
+    // `/api/owners` under ORM_REST_ROUTE=/api. Never parse `originalUrl`: it is
+    // the raw request target and can be absolute-form.
+    const mount = request.baseUrl;
 
-    // false → 403 for the whole request
-    if (path.startsWith(`${owners}/archived`)) return false;
+    // FAIL CLOSED. If Express did not tell us what it matched we are not behind
+    // the mount we think we are, and an unidentifiable request denies rather
+    // than falling through to the CRUD grant at the bottom.
+    if (typeof mount !== 'string' || mount === '') return false;
 
-    // A function is a per-record filter. Anchored on a `/` boundary so it
-    // cannot also match `/owners-archive`. Rejected records are 404 on record
-    // routes, 403 on POST.
-    if (path === owners || path.startsWith(`${owners}/`)) {
-      return record => record.id !== 'angela';
+    // Lower-cased because the router matched case-INSENSITIVELY, and a matcher
+    // stricter than the router that dispatched the request can be stepped
+    // around. The PATH only — record ids stay at their real case below.
+    const collection = mount.toLowerCase();
+
+    // `request.path` is mount-relative and query-free, so sub-path rules need no
+    // prefix arithmetic either. false → 403 for the whole request.
+    const path = String(request.path ?? '').toLowerCase();
+
+    if (collection.endsWith('/owners')) {
+      if (path === '/archived' || path.startsWith('/archived/')) return false;
+
+      // Returning a function plugs it in as a per-record filter, and it is
+      // enforced on every surface addressed to one of these records:
+      //   /owners, /owners/:id, /owners/:id/pets, /owners/:id/relationships/pets
+      // A rejected record is 404 on record routes — the same status as a record
+      // that does not exist — so the filter is not an existence oracle.
+      return record => record.id !== 'angela' && record.id !== 'restricted';
     }
 
+    // `record.owner` resolves to an OrmRecord, not to the owner's id string —
+    // comparing it directly against a string is the bug that made this predicate
+    // inert. Deliberately NO `?? record.owner` fallback: accepting the raw
+    // shape as well as the resolved one would absorb a resolution regression
+    // silently, which is exactly what blinded this fixture before.
+    if (collection.endsWith('/animals')) return record => record.owner?.id !== 'restricted';
+
+    // Allows full access to all calls that don't match any of the above conditions
     return ['read', 'create', 'update', 'delete'];
   }
 }
@@ -383,7 +397,13 @@ A `throw` inside `access()` is a **denial**, not a 500.
 ### Filter functions
 
 A function return value is a **per-record predicate**, and it is enforced on
-every endpoint that is addressed to a record — not only on the collection:
+every endpoint that is addressed to a record — not only on the collection.
+
+It is evaluated against the record the route is *addressed to*, **on that model
+only**. It is not a guarantee that a hidden record cannot be reached or modified:
+a write to a *different* collection can still re-parent one. See
+[Known limitations](#known-limitations) and
+[#207](https://github.com/abofs/stonyx-orm/issues/207).
 
 | Endpoint | A record the predicate rejects |
 |---|---|
@@ -393,7 +413,7 @@ every endpoint that is addressed to a record — not only on the collection:
 | `GET /:models/:id/relationships/{relationship}` | `404` — same |
 | `PATCH /:models/:id` | `404`, no attribute is applied |
 | `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued |
-| `POST /:models` | `403`, and nothing is left in the store |
+| `POST /:models` | `403`, and a record **this request inserted** is rolled back — see [Known limitations](#known-limitations) for the case where it did not insert one |
 
 **Denied record-level requests return 404, not 403.** This is deliberate and it
 is the property most easily "improved" away. 403 would confirm that the record
@@ -431,72 +451,81 @@ Let the server assign the id and read it back from the response. Callers with no
 function-style filter are unaffected: `409` on a duplicate id and `200` on a free
 one both behave exactly as before.
 
-### Matching the url
+### Identifying the collection
 
-**This section describes a pattern the framework should not be asking you to
-implement.** It has produced four separate fail-open defects, listed below,
-each found only after the previous was fixed, and there is no reason to believe
-the list is complete. [#202](https://github.com/abofs/stonyx-orm/issues/202)
-replaces it. Until then, all four rules apply and each one, omitted, fails
-**open**.
+**Do not reconstruct the request path.** Every version of this sample that tried
+to has failed **open**, and each variant was found only after the previous one
+was fixed:
 
-**1. Match `request.originalUrl`, never `request.url`.**
-`RestServer.mountRoute` mounts each model as an Express **sub-app**, so by the
-time `access()` runs the mount path has been stripped from `request.url`:
-
-| request | `request.url` | `request.originalUrl` |
+| # | Variant | Why it fails open |
 |---|---|---|
-| `GET /owners` | `/` | `/owners` |
-| `GET /owners/angela` | `/angela` | `/owners/angela` |
-| `GET /owners/angela/pets` | `/angela/pets` | `/owners/angela/pets` |
+| 1 | match `request.url` | `RestServer.mountRoute` mounts each model as an Express **sub-app**, so `url` is mount-relative — `GET /owners/angela` arrives as `/angela`. A `/owners` prefix match is **always false**, so the branch never fires and `access()` falls through to whatever it returns last. |
+| 2 | anchored match on a raw `request.originalUrl` | `originalUrl` carries the query string, so `=== '/owners'` misses `/owners?filter[age]=30` and that collection comes back unfiltered. `endsWith('/owners')` is the older half of the same trap: it leaves every record route unguarded. |
+| 3 | case-sensitive matcher | `RestServer` mounts with a bare `express()`, whose default is `caseSensitive: false`. A matcher stricter than the router that dispatched the request can simply be stepped around: `GET /owners/angela` → 404 but `GET /OwNeRs/angela` → 200 in full, and `DELETE /ANIMALS/22` destroyed a hidden record. Router-side fix: [stonyx-rest-server#47](https://github.com/abofs/stonyx-rest-server/issues/47). |
+| 4 | hard-coded `/owners` | With `ORM_REST_ROUTE=/api` every url becomes `/api/owners/...` and the sample matches nothing — environment-specifically, which is harder to notice than failing everywhere. The remediation this document used to give was itself broken: `` `${config.orm.restServer.route}owners` `` evaluates to **`/apiowners`**, so a reader who followed the correction exactly still failed open and believed they had handled it. |
+| 5 | any match on `originalUrl` at all | HTTP/1.1 permits an **absolute-form** request-target. Express routes on `parseurl(req).pathname`, so the request dispatches normally — but `originalUrl` is the raw target. `GET http://anything.example/owners/angela` yields `originalUrl === 'http://anything.example/owners/angela'`, which has no `/owners` prefix. Measured: the record came back in full, `DELETE` succeeded, and it walked past a hard `return false` deny the same way. |
 
-`request.url.startsWith('/owners')` is therefore **always false**: the branch
-never fires, `access()` falls through to whatever it returns last, and a filter
-that looks correct enforces nothing on any surface.
+**The fix is not a sixth rule.** It is to stop parsing:
 
-**2. Strip the query string, and match the prefix rather than the exact url.**
-The predicate has to be returned for record routes too, so
-`url.endsWith('/owners')` leaves `/owners/angela` unguarded — and `originalUrl`
-carries the query string, so a bare `=== '/owners'` misses
-`/owners?filter[age]=30` and lets a filtered collection through unfiltered.
-Anchoring on the path portion covers both without also matching
-`/owners-archive`.
+**Use `request.baseUrl`.** It is the mount Express *actually matched* when it
+dispatched the request. It carries no query string (variant 2), it is not
+mount-relative (variant 1), it already contains the configured `ORM_REST_ROUTE`
+prefix (variant 4 — there is nothing left to derive, so `/apiowners` is
+unconstructible), and it is unaffected by an absolute-form target (variant 5).
 
-**3. Compare lower-cased.** `RestServer` mounts with a bare `express()`, whose
-default is `caseSensitive: false`, while `originalUrl` preserves the caller's
-case. A case-sensitive matcher is stricter than the router that dispatched the
-request, so it can simply be stepped around:
+| request | `request.url` | `request.originalUrl` | `request.baseUrl` | `request.path` |
+|---|---|---|---|---|
+| `GET /owners` | `/` | `/owners` | `/owners` | `/` |
+| `GET /owners/angela` | `/angela` | `/owners/angela` | `/owners` | `/angela` |
+| `GET /owners/angela?filter[age]=30` | `/angela?filter[age]=30` | `/owners/angela?filter[age]=30` | `/owners` | `/angela` |
+| `GET /OwNeRs/angela` | `/angela` | `/OwNeRs/angela` | `/OwNeRs` | `/angela` |
+| `GET http://anything.example/owners/angela` | `http://anything.example/angela` | `http://anything.example/owners/angela` | `/owners` | `/angela` |
+| `GET /api/animals/22` (`ORM_REST_ROUTE=/api`) | `/22` | `/api/animals/22` | `/api/animals` | `/22` |
 
-```
-GET    /owners/angela  -> 404          GET    /OwNeRs/angela -> 200, angela in full
-GET    /owners         -> filtered     GET    /OWNERS        -> unfiltered
-DELETE /animals/22     -> 404          DELETE /ANIMALS/22    -> 204, record destroyed
-```
+Two rules remain, and they are the whole list:
 
-Lower-case the **path** only. Record ids are case-sensitive and must be compared
-at their real case. The router-side fix is tracked as
-[stonyx-rest-server#47](https://github.com/abofs/stonyx-rest-server/issues/47).
+**1. Compare lower-cased.** `baseUrl` is the text the caller sent, not the
+registered mount — `GET /OwNeRs/angela` yields `/OwNeRs`. The router matched it
+case-insensitively, so a case-sensitive comparison here is stricter than the
+router and can be walked past. Lower-case the **mount and path only**; record ids
+are case-sensitive and must be compared at their real case.
 
-**4. Build the prefix from the configured mount route.** With
-`ORM_REST_ROUTE=/api` the urls above become `/api/owners/...`, and a sample
-hard-coded to `/owners` matches nothing — environment-specifically, which is
-harder to notice than failing everywhere.
+**2. Fail closed when `baseUrl` is absent.** `String(request.originalUrl ?? '')`
+was added to stop a `TypeError`, and it traded fail-closed for fail-**open**: an
+empty string matches no collection, so `access()` fell through to the permission
+array and granted full CRUD. An input you cannot identify must **deny**.
 
-Note what this must *not* be. An earlier version of this document suggested
-`` `${config.orm.restServer.route}owners` ``. For the default route that is
-`/owners` and looks correct; for `ORM_REST_ROUTE=/api` it evaluates to
-**`/apiowners`**, so a reader who followed the correction exactly still failed
-open and believed they had handled it. Join on `/` and collapse the duplicate,
-as `collectionPrefix()` above does.
+Use `request.path` — mount-relative and query-free — if you need to distinguish
+sub-paths beneath the mount, as the `/archived` deny above does.
 
 ### Known limitations
 
-- **Authorization by URL matching is a consumer-side reconstruction of
-  information the framework already holds.** `access()` receives a transport
-  artifact and is asked to re-derive, correctly and defensively, which model,
-  which operation and which record the request addresses. The four rules above
-  are the four ways that reconstruction has been observed to fail open so far.
-  Tracked as [#202](https://github.com/abofs/stonyx-orm/issues/202).
+- **A function-style filter is not a guarantee that a hidden record cannot be
+  modified.** A write to a *different* collection can re-parent one and de-hide
+  it: `POST /owners` (or `PATCH /owners/{id}`) carrying
+  `relationships: { pets: { data: { id: 21 } } }` — or
+  `attributes: { pets: [21, 22] } `, which never enters the relationships loop at
+  all — re-parents animal 21 onto an owner the caller is permitted to write. The
+  animal's `owner` is the field the `/animals` predicate reads, so the record
+  stops being rejected: it becomes readable through `GET /animals/21` and
+  deletable through `DELETE /animals/21`. **Reachable unauthenticated** wherever
+  one collection is writable and another is filtered on a field the first can
+  set. Blocking it requires checking animal 21 against the **animal** model's
+  predicate while servicing an **owners** route — cross-model access resolution,
+  which the current contract cannot express: `access()` never receives the model
+  structurally ([#202](https://github.com/abofs/stonyx-orm/issues/202)) and
+  `setup-rest-server.ts` discards the model→predicate map at boot
+  ([#196](https://github.com/abofs/stonyx-orm/issues/196)). Tracked as
+  [#207](https://github.com/abofs/stonyx-orm/issues/207), blocked on that chain
+  (#202 → #196 → #207). Until it lands, do not rely on a filter to keep a record
+  unmodifiable; keep the *writable* collections' predicates as tight as the
+  hidden ones.
+- **Authorization by identifying the collection is a consumer-side
+  reconstruction of information the framework already holds.** `access()`
+  receives a transport artifact and is asked to work out which model, which
+  operation and which record the request addresses. The five variants above are
+  the five ways that has been observed to fail open so far. Tracked as
+  [#202](https://github.com/abofs/stonyx-orm/issues/202).
 - **Related and included records are not filtered.** The predicate is evaluated
   against the record the route is *addressed to*. `GET /animals/1/owner`,
   `GET /animals/1/relationships/owner` and `?include=owner` all serialize the
@@ -526,19 +555,34 @@ as `collectionPrefix()` above does.
   `updateRecord`. `id` is stripped in both handlers because it defeats breaking
   change 3 above; the general form is tracked as
   [#204](https://github.com/abofs/stonyx-orm/issues/204).
-- **A partially numeric `id` in a `POST` body can overwrite a different record
-  on an unfiltered collection.** The duplicate check rejects `"9105h"` as a
-  string, correctly, but the model's id transform truncates it to `9105` and the
-  create lands there. Filtered collections are unaffected — breaking change 3
-  refuses any client-supplied id — so this reaches consumers with **no**
-  function-style filter. Tracked as
+- **A `POST` body `id` that the duplicate check cannot resolve can still
+  overwrite a different record on an unfiltered collection.** The lookup is
+  correct and deliberately does not coerce: `"9105h"` is rejected as a string
+  rather than truncated, and `9105.5`, `[9105]` and `true` are passed through as
+  themselves. The model's id transform then coerces anyway — a bare `parseInt`
+  with no such guard — so the create lands on `9105` (or on `NaN`) and
+  overwrites whatever is there. **This is not string-only**: any body id whose
+  transform output differs from its lookup key is the same defect. Filtered
+  collections are unaffected — breaking change 3 refuses any client-supplied id
+  — so this reaches consumers with **no** function-style filter. Tracked as
   [#205](https://github.com/abofs/stonyx-orm/issues/205), alongside
   [#203](https://github.com/abofs/stonyx-orm/issues/203), which is the other way
   a create can land on an id nobody named.
+- **A denied `POST` rolls back only a record it *inserted*.** The rollback
+  requires the store to have grown, because removing by id alone is a write
+  primitive keyed by a caller-supplied value. When `assignRecordId` lands a
+  **server-assigned** id on an occupied slot
+  ([#203](https://github.com/abofs/stonyx-orm/issues/203) — it returns
+  last-*inserted* + 1, not max + 1, so a store whose insertion order is not
+  ascending collides), `createRecord` updates that record **in place**: the map
+  does not grow, the rollback correctly declines to remove a record this request
+  did not create, and the `403` leaves the caller's attributes on someone else's
+  record. Narrow — it needs a non-ascending insertion order — but it is the
+  reachability condition, so it is stated rather than implied.
 
-### Breaking changes in 0.4.0
+### Breaking changes
 
-There is no changelog or release-notes channel yet
+These land in the next published build. There is no changelog or release-notes channel yet
 ([stonyx-workflows#17](https://github.com/abofs/stonyx-workflows/issues/17)), so
 they are recorded here.
 
@@ -548,8 +592,10 @@ they are recorded here.
    `models: '*'` mounts every model by default. It is not optional: if a denied
    delete returned 404 while a missing one returned 204, the pair would be a
    perfect existence oracle and the filter would be worthless.
-2. **After-hooks no longer fire for a write that failed** — denied, missing,
-   `400` or `409`. Previously `afterHook('delete', ...)` ran with a populated
+2. **After-hooks no longer fire for a request that failed** — denied, missing,
+   `400` or `409`. The gate is on the handler's status, not on the operation, so
+   it covers reads as well: a `GET /:id` that answers 404 runs no after-`get`
+   hook either. Previously `afterHook('delete', ...)` ran with a populated
    `context.recordId` on a request that deleted nothing, so a consumer cascade
    destroyed children behind a 404.
 3. **`POST` with a client-supplied `id` returns `403` when a function-style
@@ -572,6 +618,11 @@ they are recorded here.
    previously reachable by id despite being filtered from the collection now
    return 404. Only affects function-style `access` users, for whom the old
    behaviour was the bypass.
+
+   "Seven surfaces" means the seven endpoints of **the filtered model**. A write
+   to another collection can still reach one of its records through a
+   relationship — [#207](https://github.com/abofs/stonyx-orm/issues/207), which
+   is **not** closed here.
 5. **A predicate that throws is treated as a denial** rather than propagating to
    Express's default 500 handler. So is an `access()` that throws.
 6. **`access()` returning a bare string is one permission, not full access.**
@@ -579,6 +630,14 @@ they are recorded here.
    branch and granted all four operations — `return 'read'` allowed `DELETE`.
    It is now equivalent to `['read']`. Any other unrecognised shape (an object,
    a number) now returns `403` rather than granting full access.
+7. **`POST` with a client-supplied `id` normalises the body id before the
+   duplicate check**, so an id shape that previously *missed* the store's key
+   now finds it. `POST {"id":"0x2391"}` and `POST {"id":"  21  "}` answer `409`
+   where they answered `200`, and the `200` was not a success: the lookup missed,
+   the duplicate check was skipped, and `createRecord` overwrote the colliding
+   record in place. **This one reaches consumers with no filter at all** — the
+   population breaking changes 3 and 4 explicitly exempt. If you were relying on
+   a hex-shaped or whitespace-padded id creating a second record, it never did.
 
 ### Include Parameter (Sideloading Relationships)
 
@@ -853,13 +912,29 @@ afterHook('delete', 'animal', async (context) => {
 // Additional access control - halt with 403 if unauthorized
 beforeHook('delete', 'animal', (context) => {
   const user = context.state.currentUser;
-  const animal = store.get('animal', context.params.id);
+
+  // `context.oldState` — NOT a store lookup. For `update` and `delete` the ORM
+  // has already fetched the record (and already applied the access filter to
+  // it) before this hook runs, so re-fetching it here is a fourth id coercion
+  // that has to agree with three others.
+  //
+  // And it would not agree. `context.params.id` is the raw url segment, always
+  // a string, while the store keys numeric-id models by NUMBER — so
+  // `store.get('animal', '21')` misses the record held under `21`, and so does
+  // `store.find('animal', '21')`: neither coerces. The miss reads as "no such
+  // record", which in an authorization hook fails whichever way your code
+  // happens to handle a null.
+  const animal = context.oldState;
 
   if (animal.owner !== user.id && !user.isAdmin) {
     return 403; // Forbidden
   }
 });
 ```
+
+> If you do need a lookup for some *other* model inside a hook, coerce the id
+> yourself to the type that model's `id` attribute declares — the store is a
+> `Map` and `'21'` and `21` are different keys.
 
 #### Auditing
 
@@ -994,11 +1069,29 @@ beforeHook('create', 'post', (context) => {
 
 ### Hook Execution Order
 
-1. **Before hooks** fire first (sequentially, in registration order)
-2. **Main operation** executes (if no before hook halted)
-3. **After hooks** fire last (sequentially, in registration order)
+1. **Authorization is evaluated first for `update` and `delete`.** A record the
+   access filter rejects returns `404` **before any before-hook runs**, so a
+   hook never sees a record — or a `context.oldState` — that the caller is not
+   allowed to read. `create` is the exception: there is no record to test until
+   the handler has built one, so `beforeHook('create', ...)` **does** fire for a
+   `POST` that goes on to answer `403`.
+2. **Before hooks** fire next (sequentially, in registration order).
+3. **Main operation** executes (if no before hook halted).
+4. **After hooks** fire last (sequentially, in registration order) — **only if
+   the request succeeded.**
 
-Before hooks can halt the operation by returning a value. After hooks run after completion and cannot halt.
+Before hooks can halt the operation by returning a value, and that value becomes
+the response.
+
+**After hooks do not run for a failed request.** Any status `>= 400` — denied,
+missing, `400`, `409` — skips the entire after-hook pipeline, along with SQL
+persistence and `onUpdate` autosave. This is a behaviour change; see
+[Breaking changes](#breaking-changes). It applies to the samples above: the
+`afterHook('delete', ...)` auditing hook writes **no** audit row for a `DELETE`
+that answered `404`, and the `afterHook('update', ...)` change-tracking hook
+writes none for a `PATCH` that answered `404` or `400`. If you need a record of
+refused requests, log them from a before-hook or from your own middleware —
+`after<operation>` fires only for an operation that actually happened.
 
 ### Best Practices
 

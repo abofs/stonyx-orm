@@ -51,6 +51,7 @@ import { setupIntegrationTests } from 'stonyx/test-helpers';
 import config from 'stonyx/config';
 import OrmRequest from '../../src/orm-request.js';
 import GlobalAccess from '../sample/access/global-access.js';
+import transforms from '../../src/transforms.js';
 
 const { module, test } = QUnit;
 
@@ -71,11 +72,42 @@ const CREATE_ID = 9103;  // used by the POST assertions
 const globalAccess = new GlobalAccess();
 const access = request => globalAccess.access(request);
 
-function makeRequest({ method = 'GET', url, params = {}, body, query = {} } = {}) {
+// Builds the request shape @stonyx/rest-server hands `auth()` and the handlers.
+//
+// `baseUrl` and `path` are what the shipped matcher reads now, so this helper
+// has to produce them the way Express does when `RestServer.mountRoute` mounts
+// each model as a sub-app: `baseUrl` is the MATCHED MOUNT (case as the caller
+// sent it, no query string, unaffected by an absolute-form target) and `path`
+// is the remainder, also query-free. Measured against express 5.2.1:
+//
+//   GET /owners/angela                        baseUrl /owners  path /angela
+//   GET /OwNeRs/angela                        baseUrl /OwNeRs  path /angela
+//   GET /owners/angela?filter[age]=30         baseUrl /owners  path /angela
+//   GET http://anything.example/owners/angela baseUrl /owners  path /angela
+//   GET /api/animals/22  (mounted at /api)    baseUrl /api/animals path /22
+//
+// The default `mount` is the first path segment, which is the shape
+// setup-rest-server produces for the default `ORM_REST_ROUTE` of '/'. Pass
+// `mount` explicitly for a configured route. This helper is a STAND-IN: the
+// integration tier drives the real router and is what proves these values are
+// the ones express actually supplies — see the absolute-form assertion in
+// test/integration/orm-test.ts.
+function makeRequest({ method = 'GET', url, mount, path, params = {}, body, query = {} } = {}) {
+  const target = String(url ?? '');
+  const pathname = target.includes('://')
+    ? `/${target.split('://')[1].split('/').slice(1).join('/')}`.split('?')[0]
+    : target.split('?')[0];
+  const baseUrl = mount !== undefined ? mount : `/${pathname.split('/')[1] ?? ''}`;
+  const rest = path !== undefined
+    ? path
+    : (typeof baseUrl === 'string' ? (pathname.slice(baseUrl.length) || '/') : '/');
+
   return {
     protocol: 'http',
     method,
     originalUrl: url,
+    baseUrl,
+    path: rest,
     params,
     body,
     query,
@@ -1590,19 +1622,26 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       assert.strictEqual(status, 403, 'and answers 403');
     });
   });
-
   // =========================================================================
-  // The shipped sample matcher (assertions 37-38)
+  // The shipped sample matcher (assertions 37, 38, 46, 47)
   //
-  // Variants 3 and 4 of four fail-open shapes found in one three-line example.
-  // These pin the fixture, which is the sample the README and usage-patterns
-  // docs teach. See the header of test/sample/access/global-access.ts and
-  // abofs/stonyx-orm#202 — the matcher is a stopgap, not a safe pattern.
+  // FIVE fail-open shapes have now been found in one three-line example, each
+  // after the previous was fixed. Variants 1 and 2 are pinned by assertion 1;
+  // 3, 4 and 5 are below. The matcher no longer reconstructs the request path
+  // at all — it reads `request.baseUrl`, the mount express actually matched —
+  // so variants 1, 2, 4 and 5 become unconstructible rather than handled, and
+  // only the case rule survives.
+  //
+  // These pin the fixture, which is now the same code the README teaches
+  // (assertion 46). See the header of test/sample/access/global-access.ts and
+  // abofs/stonyx-orm#202 — reading `baseUrl` is still a stopgap, not a safe
+  // contract.
   // =========================================================================
   module('sample matcher fail-open variants', function() {
     test('[DEFECT] assertion 37 — the matcher is case-insensitive, because the ROUTER is', async function(assert) {
       // `RestServer` mounts with a bare `express()`, whose default is
-      // `caseSensitive: false`, while `originalUrl` preserves the caller's case.
+      // `caseSensitive: false`, and express sets `req.baseUrl` to the text it
+      // MATCHED — i.e. the caller's case (`/OwNeRs`), not the registered mount.
       // A case-SENSITIVE matcher therefore does not fire, `access()` falls
       // through to `['read','create','update','delete']`, and there is no filter
       // on any surface at once. Measured over a raw socket on the reviewed head:
@@ -1634,43 +1673,302 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
         'and neither is an unanchored one');
     });
 
-    test('[DEFECT] assertion 38 — the matcher builds its prefix from ORM_REST_ROUTE rather than hard-coding it', async function(assert) {
-      // Under `ORM_REST_ROUTE=/api` every url becomes `/api/owners/...`, a
-      // hard-coded `/owners` matches nothing, and the sample enforces NOTHING —
-      // environment-specifically, which is worse than failing everywhere.
+    test('[DEFECT] assertion 38 — the mount comes from express, so ORM_REST_ROUTE needs no derivation at all', async function(assert) {
+      // Variant 4 was: under `ORM_REST_ROUTE=/api` every url becomes
+      // `/api/owners/...`, a hard-coded `/owners` matches nothing, and the
+      // sample enforces NOTHING — environment-specifically, which is worse than
+      // failing everywhere. The documented remediation was itself broken:
+      // `` `${config.orm.restServer.route}owners` `` evaluates to `/apiowners`,
+      // so a reader who followed the correction exactly still failed open and
+      // believed they had handled it.
       //
-      // And the remediation the README used to give was itself broken:
-      // `` `${config.orm.restServer.route}owners` `` is `/apiowners`. A reader
-      // who followed the correction exactly still failed open and believed they
-      // had handled it. That expression is asserted wrong here so it cannot come
-      // back.
+      // `request.baseUrl` IS the configured mount. There is no prefix to build,
+      // so neither the hard-coded form nor the `/apiowners` form can be written
+      // — and the fixture no longer imports `stonyx/config` at all. This
+      // assertion pins that the mounted shape still matches and that the two
+      // broken shapes still do not.
+      assert.notStrictEqual('/api' + 'owners', '/api/owners',
+        "the old remediation expression evaluates to /apiowners, not /api/owners");
+
+      for (const mount of ['/api/owners', '/api/animals', '/API/Owners', '/deeply/nested/api/owners']) {
+        assert.strictEqual(typeof globalAccess.access(makeRequest({ url: `${mount}/angela`, mount })), 'function',
+          `a model mounted at ${mount} yields a per-record filter (was: an array — no filter)`);
+      }
+
+      assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/apiowners', mount: '/apiowners' })), 'object',
+        'and the broken remediation string matches nothing');
+      assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/owners/angela' })), 'function',
+        'and the default mount still matches');
+
+      // The fixture must not have reacquired a config dependency: changing the
+      // configured route cannot change any verdict, because the matcher never
+      // reads it.
       const original = config.orm.restServer.route;
       try {
-        config.orm.restServer.route = '/api';
-
-        assert.notStrictEqual(`${config.orm.restServer.route}owners`, '/api/owners',
-          "the README's old expression evaluates to /apiowners, not /api/owners");
-
-        for (const url of ['/api/owners', '/api/owners/angela', '/api/animals', '/api/animals/22', '/API/Owners']) {
-          assert.strictEqual(typeof globalAccess.access(makeRequest({ url })), 'function',
-            `${url} yields a per-record filter under ORM_REST_ROUTE=/api (was: an array — no filter)`);
-        }
-
-        assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/owners' })), 'object',
-          'and the unprefixed path no longer matches, because it is no longer a mounted route');
-        assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/apiowners' })), 'object',
-          'and the broken remediation string matches nothing');
-
-        // Trailing-slash form of the same config value must behave identically.
-        config.orm.restServer.route = '/api/';
-        assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/api/owners/angela' })), 'function',
-          'a trailing slash on the configured route does not break the prefix');
+        config.orm.restServer.route = '/somewhere-else';
+        assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/owners/angela' })), 'function',
+          'the verdict does not depend on config.orm.restServer.route');
       } finally {
         config.orm.restServer.route = original;
       }
+    });
 
-      assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/owners/angela' })), 'function',
-        'and the default route is restored and still matches');
+    test('[DEFECT] assertion 46 — the shipped fixture and the README sample are ONE matcher', async function(assert) {
+      // WHY THIS EXISTS. Every `F_*` mutation in the sweep targets
+      // test/sample/access/global-access.ts, which `package.json`'s `files`
+      // list EXCLUDES from the package. The matcher a consumer copies is the
+      // one in README.md, and for four rounds it was independently written and
+      // pinned by nothing — which is exactly how variant 5 came to be found in
+      // the shipped copy while the tested copy was being mutated eight ways.
+      //
+      // So the two are now the same code, and this asserts it structurally
+      // rather than by review: both `access(request) { ... }` bodies are
+      // extracted, comments and blank lines stripped, and compared line for
+      // line. Editing one without the other turns this red.
+      const { readFile } = await import('node:fs/promises');
+
+      const extract = (source, label) => {
+        const start = source.indexOf('  access(request) {');
+        assert.ok(start !== -1, `${label} contains an access(request) method`);
+        const end = source.indexOf('\n  }', start);
+        assert.ok(end !== -1, `${label}'s access(request) method is closed`);
+
+        return source
+          .slice(start, end)
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line && !line.startsWith('//'));
+      };
+
+      const fixtureSource = await readFile(new URL('../sample/access/global-access.ts', import.meta.url), 'utf8');
+      const readmeSource = await readFile(new URL('../../README.md', import.meta.url), 'utf8');
+
+      // The README carries exactly one `export default class GlobalAccess`
+      // sample; take the fenced block it lives in.
+      const blockStart = readmeSource.indexOf('export default class GlobalAccess');
+      assert.ok(blockStart !== -1, 'README carries the GlobalAccess sample');
+      const readmeBlock = readmeSource.slice(blockStart, readmeSource.indexOf('\n```', blockStart));
+
+      assert.deepEqual(extract(readmeBlock, 'the README sample'), extract(fixtureSource, 'the shipped fixture'),
+        'the README sample and the shipped fixture are the same matcher, line for line ' +
+        '(was: two independently written copies, and variant 5 lived in the one nothing mutated)');
+    });
+
+    test('[DEFECT] assertion 47 — variant 5: an absolute-form request-target cannot walk past the filter, and an unidentifiable request FAILS CLOSED', async function(assert) {
+      // VARIANT 5. HTTP/1.1 permits an absolute-form request-target. Express
+      // routes on `parseurl(req).pathname`, so the request reaches the handler
+      // normally — but `originalUrl` is the RAW target. Measured over a raw
+      // socket against the reviewed head:
+      //
+      //   GET    http://anything.example/owners/angela  -> 200, angela in full
+      //   DELETE http://anything.example/animals/22     -> 204, record destroyed
+      //   GET    http://anything.example/owners/archived -> walked past `return false`
+      //
+      // `String(request.originalUrl ?? '').split('?')[0].toLowerCase()` yields
+      // `http://anything.example/owners/angela`, which does not start with
+      // `/owners`, so `access()` fell through to the full CRUD grant. `baseUrl`
+      // is `/owners` either way — express sets it from the pathname it matched.
+      const absolute = url => makeRequest({ url, mount: '/owners', path: '/angela' });
+
+      for (const url of [
+        'http://anything.example/owners/angela',
+        'http://anything.example/OwNeRs/angela',
+        'https://localhost:9999/owners/angela?filter[age]=30',
+      ]) {
+        assert.strictEqual(typeof globalAccess.access(absolute(url)), 'function',
+          `${url} still yields a per-record filter (was: an array — full CRUD, no filter at all)`);
+      }
+
+      // The hard `return false` deny is reached through the same channel, and
+      // it was walked past the same way.
+      assert.strictEqual(
+        globalAccess.access(makeRequest({ url: 'http://anything.example/owners/archived', mount: '/owners', path: '/archived' })),
+        false, 'and the outright deny still fires on an absolute-form target (was: a full CRUD grant)');
+
+      // FAIL CLOSED. `?? ''` converted an absent request target into a total
+      // grant: the empty string matches no collection, so `access()` fell
+      // through to `['read','create','update','delete']`. A guard added to stop
+      // a throw traded fail-closed for fail-open. An input the matcher cannot
+      // identify DENIES.
+      const withBaseUrl = value => {
+        const request = makeRequest({ url: '/owners/angela', path: '/angela' });
+        request.baseUrl = value;
+
+        return request;
+      };
+
+      for (const value of [undefined, null, '', 42, {}]) {
+        assert.strictEqual(globalAccess.access(withBaseUrl(value)), false,
+          `an absent or non-string baseUrl (${String(value)}) denies (was: full CRUD, no filter)`);
+      }
+
+      // Over the real handler: `auth()` turns that `false` into a 403 rather
+      // than granting the request.
+      const ormRequest = new OrmRequest({ model: 'owner', access });
+      assert.strictEqual(ormRequest.auth(withBaseUrl(undefined), {}), 403, 'and auth() answers 403 for it');
+    });
+  });
+
+
+  // =========================================================================
+  // The authorization snapshot (assertion 48)
+  //
+  // `state` is the object `auth()` plants the filter in AND the object handed
+  // to every before-hook as `context.state`. It is therefore an INPUT to the
+  // authorization decision, not only an output channel, and a published
+  // extension point can write to it. `_withHooks` snapshots `filter` once,
+  // before the hook loop, and hands the handler the snapshot.
+  // =========================================================================
+  module('the authorization snapshot cannot be written by a hook', function(snapshotHooks) {
+    let unsubscribes;
+
+    snapshotHooks.beforeEach(function() { unsubscribes = []; });
+    snapshotHooks.afterEach(function() { while (unsubscribes.length) unsubscribes.pop()(); });
+
+    test('[DEFECT] assertion 48 — a before-hook cannot disarm the filter by mutating context.state', async function(assert) {
+      // MEASURED on the reviewed head, with the fixture filter in force:
+      //
+      //   beforeHook('get', 'animal', ctx => { delete ctx.state.filter })
+      //     GET /animals/9101 -> 404 became 200, hidden record in full
+      //     GET /animals      -> 20 records became 22
+      //
+      // GATE 1 held, because it reads a `filter` destructured BEFORE the hook
+      // loop. The read handlers did not: they re-destructured `filter` from the
+      // same live object, after arbitrary consumer code had been handed it.
+      // Writes were safe, reads were not, and the difference was invisible
+      // because both spellings look identical at the call site.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+
+      // Every way a hook can reach the filter: remove it, replace it with an
+      // allow-all, and replace it with a non-function truthy value.
+      const sabotage = [
+        ['delete', ctx => { delete ctx.state.filter; }],
+        ['allow-all', ctx => { ctx.state.filter = () => true; }],
+        ['non-function', ctx => { ctx.state.filter = 'read'; }],
+      ];
+
+      for (const [label, hook] of sabotage) {
+        unsubscribes.push(beforeHook('get', 'animal', hook));
+        unsubscribes.push(beforeHook('list', 'animal', hook));
+        unsubscribes.push(beforeHook('update', 'animal', hook));
+        unsubscribes.push(beforeHook('delete', 'animal', hook));
+
+        const single = await dispatch(ormRequest, ormRequest.handlers.get['/:id'], makeRequest({
+          url: `/animals/${HIDDEN_ID}`, params: { id: String(HIDDEN_ID) },
+        }));
+        assert.strictEqual(single, 404,
+          `GET /:id stays 404 when a before-hook ${label}s state.filter (was: 200, the hidden record in full)`);
+
+        const collection = await dispatch(ormRequest, ormRequest.handlers.get['/'], makeRequest({ url: '/animals' }));
+        assert.notOk(collection.data.some(record => Number(record.id) === HIDDEN_ID),
+          `the collection still omits the hidden record when a before-hook ${label}s state.filter (was: included)`);
+
+        const patched = await dispatch(ormRequest, ormRequest.handlers.patch['/:id'], makeRequest({
+          method: 'PATCH',
+          url: `/animals/${HIDDEN_ID}`,
+          params: { id: String(HIDDEN_ID) },
+          body: { data: { attributes: { age: 999 } } },
+        }));
+        assert.strictEqual(patched, 404, `PATCH stays 404 when a before-hook ${label}s state.filter`);
+
+        const deleted = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+          method: 'DELETE', url: `/animals/${HIDDEN_ID}`, params: { id: String(HIDDEN_ID) },
+        }));
+        assert.strictEqual(deleted, 404, `DELETE stays 404 when a before-hook ${label}s state.filter`);
+        assert.ok(store.get('animal', HIDDEN_ID), `and the hidden record survives the ${label} hook`);
+
+        while (unsubscribes.length) unsubscribes.pop()();
+      }
+    });
+
+    test('[GUARD] assertion 48b — the same requests still SUCCEED for a visible record, and state is still a live channel', async function(assert) {
+      // Proves 48 is not green because this harness refuses everything, and
+      // that pinning the filter did not sever `context.state` as the output
+      // channel @stonyx/rest-server reads `redirect` and `pipe` back off.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const seen = [];
+
+      unsubscribes.push(beforeHook('get', 'animal', ctx => { ctx.state.marker = 'written-by-before'; }));
+      unsubscribes.push(afterHook('get', 'animal', ctx => { seen.push(ctx.state.marker); }));
+
+      const state = {};
+      const status = ormRequest.auth(makeRequest({ url: `/animals/${VISIBLE_ID}` }), state);
+      assert.strictEqual(status, undefined, 'precondition: the request is authorized');
+
+      const response = await ormRequest.handlers.get['/:id'](makeRequest({
+        url: `/animals/${VISIBLE_ID}`, params: { id: String(VISIBLE_ID) },
+      }), state);
+
+      assert.strictEqual(Number(response?.data?.id), VISIBLE_ID, 'a visible record still comes back');
+      assert.deepEqual(seen, ['written-by-before'],
+        'and a before-hook write to context.state is still visible to an after-hook');
+      assert.strictEqual(state.marker, 'written-by-before',
+        'and lands on the SAME object the dispatcher holds, which is how state.redirect/state.pipe work');
+    });
+  });
+
+  // =========================================================================
+  // The coercion anchor (assertion 45) and the non-string passthrough (49)
+  // =========================================================================
+  module('coerceId — its anchor and its non-string boundary', function() {
+    test('[GUARD] assertion 45 — coerceId is anchored on the model id TRANSFORM, which is radix-less', async function(assert) {
+      // `coerceId` uses `parseInt(id)` with no radix. The reason is not that
+      // `getId` happens to do the same — it is that `transforms.number` is what
+      // produces the store KEY a record is filed under, and it is radix-less
+      // too. Adding a radix there (`parseInt(value, 10)`) is a one-word edit in
+      // a file with no connection to authorization; it would make the lookup key
+      // and the landing key disagree on a hex-shaped id — reopening exactly the
+      // divergence assertion 43 closes — while `coerceId`'s comment still read
+      // as correct. Nothing pinned it, so this does.
+      assert.strictEqual(transforms.number('0x2391'), 9105,
+        'transforms.number is radix-less, so a hex-shaped id files the record under 9105 ' +
+        '(adding a radix here files it under 0 while the lookup still resolves 9105)');
+      assert.strictEqual(transforms.number('1e3'), 1,
+        'and it is parseInt, not Number — Number("1e3") is 1000, which would file the record elsewhere again');
+      assert.strictEqual(transforms.number('9105.5'), 9105,
+        'and it truncates a float, which is the landing half of abofs/stonyx-orm#205');
+    });
+
+    test('[DEFECT] assertion 49 — a NON-STRING body id passes through uncoerced', async function(assert) {
+      // `normalizeBodyId` returns early for anything that is not a string. That
+      // line had no mutation in four rounds and it is load-bearing: without it
+      // a float body id runs through `parseInt`, so `{"id":9105.5}` would look
+      // the collision up under 9105 and answer 409 against a record it never
+      // named — the same false-collision shape as the hex divergence, one type
+      // over.
+      //
+      // It also widens abofs/stonyx-orm#205: "partially numeric" reads as
+      // string-only, but `{"id":9105.5}`, `{"id":[9105]}` and `{"id":true}` are
+      // the same defect — the LOOKUP correctly passes them through while the
+      // model's id transform truncates them into a real key.
+      const unfiltered = new OrmRequest({ model: 'animal', access: noFilterAccess });
+      const EXISTING = 9105;
+      createRecord('animal', { id: EXISTING, type: 1, age: 7, size: 'small', owner: 'gina', traits: [] }, { serialize: false, _skipAutoPersist: true });
+
+      const post = id => dispatch(unfiltered, unfiltered.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id, attributes: { type: 1, age: 99, size: 'large', owner: 'gina' } } },
+      }));
+
+      const keysBefore = animalIds();
+      const response = await post(9105.5);
+
+      assert.notStrictEqual(response, 409,
+        'POST {"id":9105.5} is NOT 409 — the float is looked up as itself, not truncated to 9105 ' +
+        '(dropping the non-string passthrough makes it a false collision against a record the caller never named)');
+
+      // THE RESIDUAL, pinned rather than described — abofs/stonyx-orm#205 in its
+      // widened form. The lookup is right; the model id transform truncates the
+      // float anyway, so the write lands on 9105.
+      assert.strictEqual(store.get('animal', EXISTING).age, 99,
+        'RESIDUAL (abofs/stonyx-orm#205): the id transform truncates 9105.5 to 9105, so the write lands there — ' +
+        'pinned so closing #205 turns this red rather than passing silently');
+
+      for (const key of animalIds()) {
+        if (!keysBefore.includes(key)) store.remove('animal', key, { _skipAutoPersist: true });
+      }
+      store.remove('animal', EXISTING, { _skipAutoPersist: true });
     });
   });
 

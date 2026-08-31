@@ -2,14 +2,13 @@
  * REST request handling and access enforcement for @stonyx/orm.
  *
  * ---------------------------------------------------------------------------
- * THE DOCUMENTED `access()` PATTERN IS A STOPGAP. READ THIS BEFORE RELYING ON IT.
+ * DO NOT RECONSTRUCT THE REQUEST PATH INSIDE `access()`.
  * ---------------------------------------------------------------------------
  * `auth()` below hands your `access(request)` a raw transport artifact and asks
- * you to re-derive from a URL string what this module already holds
- * structurally: which model, which operation, which record. The three-line
- * URL-matching example in README has failed **open** in four distinct ways
- * during the review of a single change, each found only after the previous was
- * fixed, by four different people:
+ * you to work out which collection it addresses. Every attempt to do that by
+ * parsing the request target has failed OPEN. Five distinct variants of the
+ * same three-line example have now been found, each after the previous was
+ * fixed, by five different people:
  *
  *   1. `request.url` is mount-relative under `RestServer.mountRoute`, so a
  *      prefix match against it is ALWAYS false.
@@ -20,20 +19,44 @@
  *      past it. Router-side: abofs/stonyx-rest-server#47.
  *   4. Under a configured `ORM_REST_ROUTE` a hard-coded `/owners` matches
  *      nothing -- environment-specifically, which is worse.
+ *   5. HTTP/1.1 permits an ABSOLUTE-FORM request-target. Express routes on
+ *      `parseurl(req).pathname`, but `originalUrl` is the raw target, so
+ *      `GET http://anything.example/owners/angela` reaches the handler with
+ *      `originalUrl === 'http://anything.example/owners/angela'`. A `/owners`
+ *      prefix match is false, `access()` falls through to whatever it returns
+ *      last, and the record comes back in full. It walks past a hard
+ *      `return false` deny the same way.
  *
- * The README sample closes all four. That is NOT the same as being safe; it is
- * safe against the four variants we happen to have found, and there is no
- * reason to believe the list is complete.
+ * The fix is not a sixth rule. It is to stop parsing:
  *
- * THE REAL FIX IS abofs/stonyx-orm#202: `access()` should receive the model, the
- * operation and the record, so there is no URL to parse and no variant to miss.
- * Prefer the array shape (`['read']`) or `false` until #202 lands; the
- * function shape is what requires the URL matching.
+ *   `request.baseUrl` is the mount Express ACTUALLY MATCHED when it dispatched
+ *   the request. It carries no query string, it is not mount-relative, it is
+ *   unaffected by absolute-form, and it already includes the configured
+ *   `ORM_REST_ROUTE` prefix -- so there is nothing to derive and nothing to
+ *   join. Compare it lower-cased (the router matched case-insensitively) and
+ *   fail CLOSED when it is absent. Use `request.path` -- mount-relative and
+ *   query-free -- if you need to distinguish sub-paths.
+ *
+ * `?? ''` is not a defence. It converts an absent request target into an empty
+ * string, which matches no collection, which falls through to the permission
+ * array -- a total grant. An input you cannot identify must DENY.
+ *
+ * THAT IS STILL A STOPGAP. `baseUrl` closes all five variants, but it is a
+ * transport artifact being asked to stand in for a structural fact.
+ * THE REAL FIX IS abofs/stonyx-orm#202: `access()` should receive the model,
+ * the operation and the record. Prefer the array shape (`['read']`) or `false`
+ * until #202 lands; the function shape is what requires any matching at all.
  *
  * The enforcement gates in this file (GATE 0/1/2, the create rollback, the
  * per-handler `isDenied` re-checks) are correct independently of that -- they
  * enforce whatever predicate you return. The stopgap is the part where YOU have
  * to work out which predicate to return.
+ *
+ * AND A PREDICATE IS NOT A GUARANTEE THAT A HIDDEN RECORD CANNOT BE MODIFIED.
+ * It is evaluated against the record the route is ADDRESSED TO, on that model
+ * only. A write to a DIFFERENT collection can still re-parent a hidden record
+ * and de-hide it -- abofs/stonyx-orm#207, which is blocked on #202 and #196.
+ * See `### Known limitations` in README.
  */
 import { Request } from '@stonyx/rest-server';
 import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
@@ -42,6 +65,7 @@ import { getPluralName } from './plural-registry.js';
 import { getBeforeHooks, getAfterHooks } from './hooks.js';
 import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
+import log from 'stonyx/log';
 import type { OrmRecord } from './types/orm-types.js';
 import { isOrmRecord } from './utils.js';
 
@@ -122,28 +146,47 @@ function getBaseUrl(request: OrmRequest$): string {
 }
 
 /**
- * The ONE coercion from a caller-supplied id string to the key the store holds
- * it under. Both id-bearing surfaces go through this, and neither has a copy.
+ * The ONE coercion from a caller-supplied id to the key the store holds it
+ * under. Every id-bearing surface in this file goes through it, and none has a
+ * copy: `getId()` (URL params), `normalizeBodyId()` (JSON body), and the
+ * post-create `context.record` lookup in `_withHooks`.
  *
- * WHY IT IS SHARED RATHER THAN DUPLICATED. `getId()` (URL) and
- * `normalizeBodyId()` (JSON body) each had their own arithmetic, and they
- * disagreed: `parseInt(id)` versus `parseInt(id, 10)`. On a hex-shaped id that
- * is a two-record difference --
+ * WHY IT IS SHARED RATHER THAN DUPLICATED. `getId()` and `normalizeBodyId()`
+ * each had their own arithmetic, and they disagreed: `parseInt(id)` versus
+ * `parseInt(id, 10)`. On a hex-shaped id that is a two-record difference --
  *
  *   GET  /animals/0x2391          -> record 9105   (getId    -> parseInt('0x2391')     = 9105)
  *   POST /animals {"id":"0x2391"} -> lookup under 0 (normalize -> parseInt('0x2391',10) = 0)
  *                                 -> a MISS, so the duplicate check was skipped and
  *                                    createRecord OVERWROTE 9105 in place, answering 200
  *
- * -- which is the raw-versus-normalised divergence that produced the round-3
- * blocker, in a narrower form, reintroduced by the fix for it. Two coercions
- * that must agree cannot be kept in agreement by review; they have to be one
- * function. Pinned by assertion 43.
+ * -- a narrower form of the raw-versus-normalised divergence that the body-id
+ * normalisation was added to close, reintroduced by the fix for it. Two
+ * coercions that must agree cannot be kept in agreement by review; they have to
+ * be one function. Pinned by assertion 43.
  *
- * `parseInt` and not `Number`, deliberately. They differ on `'1e3'` (1 vs 1000)
- * and `'9105.5'` (9105 vs 9105.5), and `getId` -- which decides which record an
- * id ADDRESSES -- is the reference, so `Number` would trade one divergence for
- * two. The reason `parseInt` is safe here is the `isNaN` gate in front of it:
+ * The third copy was found later and in a quieter place: `_withHooks` populated
+ * `context.record` for `create` with `isNaN(id) ? id : parseInt(id)` -- this
+ * function's body, inlined verbatim, feeding `store.get`. It was equivalent on
+ * every input reachable there, which is exactly what the two that DID diverge
+ * looked like until someone tried a hex id.
+ *
+ * `parseInt` and not `Number`, deliberately, and the anchor is NOT `getId`.
+ * It is `src/transforms.ts:7` -- `number: (value) => parseInt(value as string)`,
+ * also radix-less -- because that transform is what actually produces the store
+ * KEY a record is filed under. `getId` merely agrees with it. They differ from
+ * `Number` on `'1e3'` (1 vs 1000) and `'9105.5'` (9105 vs 9105.5), so switching
+ * this function to `Number` would make the lookup key disagree with the landing
+ * key on those shapes.
+ *
+ * THE CHANGE THAT WOULD BREAK THIS: adding a radix to `transforms.number`
+ * (`parseInt(value, 10)`). That is a one-word edit in a file with no connection
+ * to authorization, it would silently reopen the hex divergence in the other
+ * direction, and this comment would still read as correct. Assertion 45 pins
+ * the transform's radix-less shape directly, so that edit turns a test red
+ * rather than shipping.
+ *
+ * The reason `parseInt` is safe here is the `isNaN` gate in front of it:
  * `parseInt('9105h')` is `9105`, and truncating a partially-valid id into a
  * DIFFERENT VALID key is exactly how a collision lookup gets skipped. The gate
  * rejects it as a string instead, so nothing is ever truncated. That gate, not
@@ -388,7 +431,14 @@ function isDenied(filter: unknown, record: unknown): boolean {
   // hands back the oracle this whole change exists to close.
   try {
     return !(filter as (record: unknown) => boolean)(record);
-  } catch {
+  } catch (error) {
+    // Denied, but not silently. A consumer predicate that throws on every
+    // record turns the whole collection into a 404 wall, and with no
+    // diagnostic that is indistinguishable from an empty database. `stonyx/log`
+    // is the module convention (see setup-rest-server.ts); optional-call
+    // because a consumer may not have configured the log types.
+    log.error?.(`[@stonyx/orm] access filter threw for model -- denying. ${error instanceof Error ? error.message : String(error)}`);
+
     return true;
   }
 }
@@ -508,9 +558,24 @@ export default class OrmRequest extends Request {
       // the oracle exists for: with no per-record filter there are no hidden
       // records, and 409 discloses nothing GET /:id does not already.
       //
-      // RESIDUAL, stated rather than implied: a caller can still learn that a
-      // collection HAS a per-record filter (403 rather than 409/200 for an
-      // id-bearing POST). That discloses a configuration fact, not a record.
+      // RESIDUALS, stated rather than implied.
+      //
+      //   - a caller can still learn that a collection HAS a per-record filter
+      //     (403 rather than 409/200 for an id-bearing POST). That discloses a
+      //     configuration fact, not a record.
+      //   - this gate is about ids arriving on THIS model's create route. It
+      //     says nothing about a write to ANOTHER collection: a `POST /owners`
+      //     carrying `relationships: {pets: {data: {id: 21}}}` -- or
+      //     `attributes: {pets: [21, 22]}`, which never enters the
+      //     relationships loop at all -- re-parents hidden animal 21 onto an
+      //     owner the caller may write, which changes the very field the
+      //     animals predicate reads and DE-HIDES it. Blocking that needs animal
+      //     21 checked against the ANIMAL model's predicate while servicing an
+      //     OWNERS route, i.e. cross-model access resolution: abofs/stonyx-orm
+      //     #207, blocked on #202 (`access` receives the model structurally)
+      //     and #196 (setup-rest-server discards the model->predicate map at
+      //     boot). NOT closed here, and no comment in this file may say it is.
+      //
       // See README `### Known limitations`.
       if (id !== undefined) {
         if (typeof filter === 'function') return 403; // Forbidden
@@ -540,8 +605,11 @@ export default class OrmRequest extends Request {
       // on the create surface. Pinned by assertion 39.
       //
       // The `id` member of the resource object is now the ONLY channel a caller
-      // id can arrive on, which is what makes GATE 0's guarantee checkable
-      // rather than merely asserted. INHERITED from `dev`, which carries this
+      // id can arrive on FOR THIS MODEL'S OWN CREATE ROUTE, which is what makes
+      // GATE 0's guarantee checkable rather than merely asserted. It is not a
+      // statement about the record's reachability in general -- a relationship
+      // write on another collection reaches it without ever touching this
+      // handler (abofs/stonyx-orm#207). INHERITED from `dev`, which carries this
       // loop verbatim; the general form -- the loop accepts any key, not just
       // `id`, so a body key that is not a declared relationship is still
       // mass-assigned -- is abofs/stonyx-orm#204.
@@ -565,13 +633,13 @@ export default class OrmRequest extends Request {
       // mutates the existing OrmRecord IN PLACE, so `store.get(...) === record`
       // is true for a record the request did not create. The map's size is the
       // only O(1) signal that distinguishes an insert from an overwrite.
-      const slotsBefore = (store.get(model) as Map<string | number, unknown> | undefined)?.size ?? 0;
+      const slotsBefore = store.get(model)?.size ?? 0;
 
       const created = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false, _skipAutoPersist: true });
       const record = isOrmRecord(created) ? created : null;
       if (!record) return 500;
 
-      const createdNewSlot = ((store.get(model) as Map<string | number, unknown> | undefined)?.size ?? 0) > slotsBefore;
+      const createdNewSlot = (store.get(model)?.size ?? 0) > slotsBefore;
 
       // 403 here, NOT 404. The oracle argument does not apply to create: there
       // is no pre-existing record whose existence could leak, the caller
@@ -617,9 +685,11 @@ export default class OrmRequest extends Request {
         //                     silently re-armed when that code moves.
         //                     SO IT BECOMES REACHABLE IF AN `await` IS
         //                     INTRODUCED HERE, which is the change a future
-        //                     editor would actually make. See the
-        //                     guards-redundant-by-construction table in
-        //                     docs/project-structure.md.
+        //                     editor would actually make. Stated here rather
+        //                     than by reference: `docs/` is not in `files`, so
+        //                     a pointer into it resolves to nothing for anyone
+        //                     who installed this package. README carries the
+        //                     consumer-facing half.
         if (createdNewSlot && store.get(model, record.id as string | number) === record) {
           store.remove(model, record.id as string | number, { _skipAutoPersist: true });
         }
@@ -693,7 +763,12 @@ export default class OrmRequest extends Request {
     };
 
     const deleteHandler: HandlerFn = async ({ params }, { filter }) => {
-      const record = await store.find(model, getId(params));
+      // Coerced ONCE. `getId(params)` was evaluated twice here -- once to find
+      // the record and once to remove it -- and a coercion evaluated repeatedly
+      // is a coercion that can be edited in one place and not the other, which
+      // is the defect `coerceId` exists to prevent.
+      const recordId = getId(params);
+      const record = await store.find(model, recordId) as OrmRecord | undefined;
 
       // BEHAVIOUR CHANGE (#190): a DELETE of a record that never existed
       // returned 204 before this change. It now returns 404, matching the
@@ -708,7 +783,10 @@ export default class OrmRequest extends Request {
       // turns a 404 into a destroyed record.
       if (isDenied(filter, record)) return 404;
 
-      store.remove(model, getId(params), { _skipAutoPersist: true });
+      // Removed by the id of the record actually fetched, not by re-deriving it
+      // from the params a second time: the record the filter tested and the
+      // record removed are then provably the same one.
+      store.remove(model, record.id as string | number, { _skipAutoPersist: true });
       return 204;
     };
 
@@ -766,7 +844,35 @@ export default class OrmRequest extends Request {
   // ===========================================================================
   private _withHooks(operation: string, handler: HandlerFn): HandlerFn {
     return async (request: OrmRequest$, state: { [key: string]: unknown }) => {
-      const { filter } = (state || {}) as { filter?: unknown };
+      // `|| {}` so this function behaves like the relationship routes below,
+      // which declare `state` with a `= {}` default. It is unkillable through
+      // the rest-server dispatcher, which always passes `getState(req)`; it is
+      // listed as such in the guards-redundant-by-construction table rather
+      // than left silently unkillable, and it defends the WHOLE function (the
+      // context, the snapshot and the handler call all read `callState`) rather
+      // than one destructure that the next line would throw past anyway.
+      const callState = (state || {}) as { [key: string]: unknown };
+
+      // ---------------------------------------------------------------------
+      // THE AUTHORIZATION SNAPSHOT. Read ONCE, here, before any consumer code
+      // can run.
+      //
+      // `callState` is the object `auth()` planted the filter in, and it is
+      // also handed to every before-hook as `context.state` -- a published,
+      // WRITABLE extension point. So `state.filter` is an INPUT to the
+      // authorization decision, not only an output channel, and re-reading it
+      // after the hook loop lets a consumer hook disarm the filter:
+      //
+      //   beforeHook('get', 'animal', ctx => { delete ctx.state.filter })
+      //     -> GET /animals/21 turned 404 into 200
+      //     -> GET /animals    turned 20 records into 22
+      //
+      // GATE 1 already used this snapshot, so writes held; the READ handlers
+      // re-destructured `filter` from the live bag and did not. Everything
+      // downstream now reads `filter` from here, and the handler is handed
+      // `handlerState` below -- never `callState`.
+      // ---------------------------------------------------------------------
+      const { filter } = callState as { filter?: unknown };
 
       // Build context object for hooks
       const context: HookContext = {
@@ -776,7 +882,11 @@ export default class OrmRequest extends Request {
         params: request.params,
         body: request.body,
         query: request.query,
-        state,
+        // Deliberately the LIVE object: `redirect` and `pipe` are read back off
+        // it by @stonyx/rest-server after the handler returns, so hooks must be
+        // able to write to it. What must not happen is the authorization
+        // decision reading it back, which is what the snapshot above prevents.
+        state: callState,
       };
 
       // Capture old state for operations that modify data
@@ -822,7 +932,14 @@ export default class OrmRequest extends Request {
       }
 
       // Execute main handler
-      const response = await handler(request, state);
+      // The handler receives the SNAPSHOT, never the live bag. `filter` is
+      // assigned LAST so it wins over anything a before-hook wrote to
+      // `callState.filter` -- including a `delete`, which the spread would
+      // otherwise carry through as an absent key. Every other key a hook adds
+      // is still visible to the handler; only the authorization input is
+      // pinned.
+      const handlerState = { ...callState, filter };
+      const response = await handler(request, handlerState);
 
       // Set context.record for update BEFORE persist so SQL drivers can read it
       if (operation === 'update' && (response as JsonApiResponse)?.data) {
@@ -836,6 +953,16 @@ export default class OrmRequest extends Request {
       // authorization ones: a 400 (POST with no `type`) and a 409 (duplicate id)
       // are equally requests in which nothing happened, and a persist or a
       // cascade hook for one of them is just as wrong.
+      // `Number.isInteger` is a TYPE guard, not a behaviour guard, and it is
+      // unkillable TODAY: the only non-integer a handler in this file can
+      // return is a `{ data, links }` object, and `{} >= 400` is `false` by JS
+      // coercion, so dropping it changes no reachable outcome. It is kept
+      // because `>=` coerces rather than rejects, and the shapes it coerces
+      // are not obvious -- `[500] >= 400` is TRUE, so a handler that one day
+      // returned an array would have every response read as a denial. Listed
+      // as an equivalent mutant rather than left to read as coverage; it
+      // becomes killable the moment a handler returns anything array-like or
+      // numeric-string-like.
       const denied = Number.isInteger(response) && (response as number) >= 400;
 
       // EXECUTOR 1 -- SQL persistence, for all write operations.
@@ -864,8 +991,16 @@ export default class OrmRequest extends Request {
       } else if (operation === 'create' && (response as JsonApiResponse)?.data && ((response as { data: { id?: unknown } }).data.id)) {
         // For create, get the record from store using the ID from the response
         const responseData = (response as { data: { id: string | number } }).data;
-        const recordId = isNaN(responseData.id as unknown as number) ? responseData.id : parseInt(responseData.id as string);
-        context.record = store.get(this.model, recordId);
+        // `normalizeBodyId`, not a copy of its body. This line WAS
+        // `isNaN(id) ? id : parseInt(id)` -- `coerceId` inlined verbatim, a
+        // third coercion feeding a store lookup, sitting under a docblock that
+        // said neither surface had a copy. Equivalent on every input that can
+        // reach this truthy-guarded branch (`21`->`21`, `'21'`->`21`,
+        // `'angela'`->`'angela'`; `''` and `0` cannot reach it), so this is a
+        // de-duplication rather than a behaviour change -- and that is the
+        // point: the two that disagreed were equivalent on every input anyone
+        // checked, too.
+        context.record = store.get(this.model, normalizeBodyId(responseData.id) as string | number);
       } else if (operation === 'delete') {
         // For delete, the record may no longer exist, but we have oldState
         context.recordId = getId(request.params);
@@ -1013,7 +1148,12 @@ export default class OrmRequest extends Request {
     let access: AccessMethod;
     try {
       access = this.access(request);
-    } catch {
+    } catch (error) {
+      // Same reasoning as `isDenied`: fail closed, but say so. An `access()`
+      // that throws denies EVERY request to the collection, and a silent 403
+      // wall is the hardest possible thing to diagnose from the outside.
+      log.error?.(`[@stonyx/orm] access() threw for model "${this.model}" -- denying. ${error instanceof Error ? error.message : String(error)}`);
+
       return 403; // Forbidden
     }
 

@@ -9,6 +9,7 @@ import { dbKey } from '../../src/db.js';
 import { readFile, deleteFile } from '@stonyx/utils/file';
 import config from 'stonyx/config';
 import RestServer from '@stonyx/rest-server';
+import net from 'node:net';
 
 const { module, test } = QUnit;
 let endpoint;
@@ -1511,6 +1512,66 @@ module('[Integration] ORM', function(hooks) {
       const destroy = await fetch(`${endpoint}/ANIMALS/${HIDDEN}`, { method: 'DELETE' });
       assert.equal(destroy.status, 404, 'DELETE /ANIMALS/:id on a hidden record is 404 (was: 204)');
       assert.ok(store.get('animal', HIDDEN), 'and the record survives (was: DESTROYED)');
+    });
+
+    test('[DEFECT] variant 5 — an ABSOLUTE-FORM request-target cannot walk past the filter, over the real router', async function(assert) {
+      // HTTP/1.1 permits an absolute-form request-target
+      // (RFC 9112 3.2.2 — `GET http://host/path HTTP/1.1`). Express routes on
+      // `parseurl(req).pathname`, so the request dispatches to the same handler,
+      // but `request.originalUrl` is the RAW target. The shipped sample matched
+      // on `String(request.originalUrl ?? '').split('?')[0].toLowerCase()`,
+      // which for this request is `http://anything.example/animals/21` — no
+      // `/animals` prefix, so `access()` fell through to the CRUD array and
+      // there was no filter on ANY surface. Measured on the reviewed head:
+      //
+      //   GET    /animals/21                          -> 404
+      //   GET    http://anything.example/animals/21    -> 200, the hidden record in full
+      //   DELETE http://anything.example/animals/21    -> 204, record DESTROYED
+      //
+      // `fetch()` cannot express this — it always sends origin-form — so this
+      // has to go over a raw socket, which is also the point: a consumer cannot
+      // assume the request target is a path.
+      //
+      // The matcher now reads `request.baseUrl`, which express sets from the
+      // pathname it matched, so the absolute form never reaches the comparison.
+      const { port } = config.restServer;
+      const rawRequest = (method, target, host = 'localhost') => new Promise((resolve, reject) => {
+        const socket = net.connect(port, '127.0.0.1', () => {
+          socket.write(`${method} ${target} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+        });
+        let buffer = '';
+        socket.setTimeout(5000, () => { socket.destroy(); reject(new Error('raw request timed out')); });
+        socket.on('data', chunk => { buffer += chunk; });
+        socket.on('end', () => resolve({
+          status: Number(buffer.split('\r\n')[0].split(' ')[1]),
+          body: buffer.split('\r\n\r\n').slice(1).join('\r\n\r\n'),
+        }));
+        socket.on('error', reject);
+      });
+
+      // Precondition: the raw socket reaches the same router the rest of this
+      // module fetches from, and origin-form behaves as the fetch-based
+      // assertions above already established.
+      const originForm = await rawRequest('GET', `/animals/${HIDDEN}`);
+      assert.equal(originForm.status, 404, 'precondition: origin-form GET on the hidden record is 404');
+
+      const readable = await rawRequest('GET', `http://anything.example/animals/${HIDDEN}`);
+      assert.equal(readable.status, 404,
+        'absolute-form GET on the hidden record is 404 (was: 200, with the hidden record in full)');
+      assert.notOk(readable.body.includes('"restricted"'),
+        'and the response does not carry the hidden record');
+
+      const cased = await rawRequest('GET', `http://anything.example/ANIMALS/${HIDDEN}`);
+      assert.equal(cased.status, 404, 'absolute-form combined with a case-varied path is 404 too');
+
+      const collection = await rawRequest('GET', 'http://anything.example/animals');
+      assert.equal(collection.status, 200, 'the absolute-form collection still routes');
+      assert.notOk(JSON.parse(collection.body).data.some(record => Number(record.id) === HIDDEN),
+        'and the hidden record is absent from it (was: INCLUDED)');
+
+      const destroyed = await rawRequest('DELETE', `http://anything.example/animals/${HIDDEN}`);
+      assert.equal(destroyed.status, 404, 'absolute-form DELETE is 404 (was: 204)');
+      assert.ok(store.get('animal', HIDDEN), 'and the hidden record survives (was: DESTROYED)');
     });
 
     test('[DEFECT] a denied write runs no consumer hook, over the real dispatch', async function(assert) {
