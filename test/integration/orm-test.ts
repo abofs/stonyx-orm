@@ -9,6 +9,10 @@ import { dbKey } from '../../src/db.js';
 import { readFile, deleteFile } from '@stonyx/utils/file';
 import config from 'stonyx/config';
 import RestServer from '@stonyx/rest-server';
+// The BUILT OrmRequest, deliberately — see the #202 module below. `dist` is what
+// the running app mounted; the `src` copy would carry its own `store` module
+// instance, so a route mounted from it would serve a different, empty store.
+import OrmRequest from '../../dist/orm-request.js';
 import net from 'node:net';
 
 const { module, test } = QUnit;
@@ -1646,7 +1650,6 @@ module('[Integration] ORM', function(hooks) {
   // #202 — access(request, { model, operation }) AND the model->predicate
   // registry surviving boot.
   //
-  // SCAFFOLD ONLY at this commit: every assertion below is a QUnit.todo stub.
   // The tier each AC runs at is fixed by the refinement (issue #202,
   // "Refinement — revised (Sprint 83)", §6/§7) and is NOT the implementer's
   // choice: anything that depends on request shape runs over the LIVE express
@@ -1654,65 +1657,678 @@ module('[Integration] ORM', function(hooks) {
   // fabricates `baseUrl`/`path` itself and variant 5 survived four review
   // rounds inside that harness.
   //
-  // AC4 (unit half) and AC6 (static) live in
+  // AC4 (context shape) and AC6 (static) live in
   // test/unit/access-context-test.ts — they do not depend on the router.
+  //
+  // ---------------------------------------------------------------------------
+  // WHY THIS MODULE MOUNTS ITS OWN ROUTES
+  //
+  // Every AC below needs a MIGRATED predicate — one that reads `context` instead
+  // of the URL — enforcing over the real router. There is no such predicate in
+  // the tree: `test/sample/access/global-access.ts` is arity-1 and stays that
+  // way through #202, because migrating it in lockstep with the README copy is
+  // #213 and assertion 46 pins the two together (refinement §3). The refinement
+  // states that consequence and accepts it: "AC1 must be exercised with a
+  // test-local migrated predicate".
+  //
+  // So this module mounts extra routes through the SAME production call
+  // `setup-rest-server.ts:82` makes — `RestServer.instance.mountRoute(OrmRequest,
+  // { name, options: { model, access } })` — onto the SAME express app that is
+  // already listening, and drives them over real HTTP. Nothing here fabricates a
+  // request: express routes it, express builds `req`, and `auth()` is reached
+  // through @stonyx/rest-server's dispatcher.
+  //
+  // The mount names are deliberately NOT the pluralised model name. A framework
+  // that derived `context.model` from the URL, the mount, or the route name
+  // would hand these predicates `'ctx-animals'`, every `model === 'animal'` test
+  // would stop matching, and this module goes red — which is precisely the
+  // mutant AC1 names.
+  //
+  // `OrmRequest` is imported from `dist/` rather than `src/`: `dist` is what the
+  // running app mounted, and the source copy would carry its OWN `store` module
+  // instance, so a route mounted from it would serve a different (empty) store.
   // ===========================================================================
   module('Access Context and Registry (#202)', function(ctxHooks) {
-    QUnit.todo('AC1 — a URL-free predicate enforces access on all seven surfaces, over the live router', function(assert) {
-      // TODO: mount a route whose access predicate reads NO field of `request`
-      // and keys only on `context.model`, then drive all seven surfaces
-      // (README.md:408-416) against it.
-      assert.ok(false, 'not implemented');
+    // Subjects owned by this module. The #190 module above destroys its own
+    // VISIBLE subject in its last test, so nothing here may lean on it.
+    const CTX_HIDDEN = 7850;     // owned by `restricted` — must be filtered out
+    const CTX_VISIBLE = 7851;    // owned by gina         — must survive the filter
+    const CTX_DOOMED = 7852;     // created and deleted by the AC2 delete pass
+    const SHIPPED_HIDDEN = 21;   // the shared fixture's hidden animal
+    const SHIPPED_VISIBLE = 13;  // gina's cat, visible on /animals
+
+    // The four operation verbs, and the only four (src/orm-request.ts:100-105).
+    const VERBS = ['read', 'create', 'update', 'delete'];
+
+    // Mount names. `api/` on the second one reproduces the shape
+    // setup-rest-server builds under a configured ORM_REST_ROUTE
+    // (`${name}/${pluralizedModel}`), which is fail-open variant 4.
+    const CTX_MOUNT = 'ctx-animals';
+    const CTX_PREFIXED_MOUNT = 'api/ctx-animals';
+    const OP_MOUNT = 'ctx-op-animals';
+    const READONLY_MOUNT = 'ctx-readonly-animals';
+    const LEGACY_MOUNT = 'ctx-legacy-animals';
+    const DENY_MOUNT = 'ctx-denied-animals';
+    const BROKEN_MOUNT = 'ctx-broken-animals';
+
+    // Every context the URL-free predicate was handed, with the live request
+    // object that came with it.
+    const observed = [];
+    // Set by AC4 only: called at the instant `auth()` invokes the predicate.
+    let authTimeProbe = null;
+
+    // THE MIGRATED PREDICATE. It reads NO field of `request` — the parameter is
+    // not even named — so mount-relativity, query strings, case, an
+    // ORM_REST_ROUTE prefix and an absolute-form target cannot reach it by
+    // construction. Everything it decides on comes from the second argument.
+    function urlFreeAnimalAccess(_request, context) {
+      observed.push({ context, request: _request });
+      if (authTimeProbe) authTimeProbe();
+
+      // Fail CLOSED on anything it cannot identify, so a framework that stopped
+      // supplying the context — or supplied a model derived from the URL — is
+      // 403 here rather than falling through to a grant.
+      if (!context || context.model !== 'animal') return false;
+      if (!VERBS.includes(context.operation)) return false;
+
+      return record => record.owner?.id !== 'restricted';
+    }
+
+    // AC2/AC5: echoes the operation the framework supplied straight back as the
+    // permission-array form. The request is permitted if and only if
+    // `context.operation` is the SAME string `methodAccessMap[request.method]`
+    // produces — so a framework emitting 'GET', 'list' or 'index' turns every
+    // request on this route into a 403.
+    const operationLog = [];
+    function operationEchoAccess(request, context) {
+      operationLog.push({
+        method: request.method,
+        operation: context.operation,
+        hasOperationKey: 'operation' in context,
+        model: context.model,
+      });
+
+      if (context.operation === undefined) return false;
+
+      return [context.operation];
+    }
+
+    // AC2: the array form, written by hand in the same vocabulary.
+    const readOnlyAccess = () => ['read'];
+
+    // AC3: an UNMIGRATED, single-argument predicate — the shape every consumer
+    // has today, and the shape the shipped fixture still has. It reads argument
+    // ONE and nothing else. Deliberately the same fail-closed shape as
+    // test/sample/access/global-access.ts:98-108.
+    function legacySingleArgAccess(request) {
+      const mount = request.baseUrl;
+      if (typeof mount !== 'string' || mount === '') return false;
+
+      return record => record.owner?.id !== 'restricted';
+    }
+
+    // AC7: the negative controls.
+    const denyAccess = () => false;
+    const brokenShapeAccess = () => 42;
+
+    // Raw socket, for the absolute-form request target `fetch()` cannot express
+    // (RFC 9112 3.2.2). Same shape as the variant-5 assertion above.
+    function rawRequest(method, target, host = 'localhost') {
+      const { port } = config.restServer;
+
+      return new Promise((resolve, reject) => {
+        const socket = net.connect(port, '127.0.0.1', () => {
+          socket.write(`${method} ${target} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+        });
+        let buffer = '';
+        socket.setTimeout(5000, () => { socket.destroy(); reject(new Error('raw request timed out')); });
+        socket.on('data', chunk => { buffer += chunk; });
+        socket.on('end', () => resolve({
+          status: Number(buffer.split('\r\n')[0].split(' ')[1]),
+          body: buffer.split('\r\n\r\n').slice(1).join('\r\n\r\n'),
+        }));
+        socket.on('error', reject);
+      });
+    }
+
+    const seedAnimal = (id, owner, age = 4) => {
+      if (!store.get('animal', id)) {
+        createRecord('animal', { id, type: 1, age, size: 'small', owner, traits: [] }, { serialize: false, _skipAutoPersist: true });
+      }
+    };
+
+    const animalIds = () => Array.from(store.get('animal').keys());
+
+    // The registry as the BOOT left it, read before any test can touch it. AC8
+    // asserts against the live `Orm.instance`; this is only used to restore it.
+    let bootAnimalAccess;
+    // Express router depth before this module mounted anything, so `after()`
+    // can put the live app back exactly as it found it.
+    let stackDepth;
+
+    const expressRouter = () => RestServer.instance.api.router ?? RestServer.instance.api._router;
+
+    ctxHooks.before(function() {
+      seedAnimal(CTX_HIDDEN, 'restricted', 9);
+      seedAnimal(CTX_VISIBLE, 'gina', 5);
+
+      bootAnimalAccess = Orm.instance.accessFiles.animal;
+      stackDepth = expressRouter().stack.length;
+
+      // The same call setup-rest-server.ts:82 makes, onto the same app.
+      for (const [name, access] of [
+        [CTX_MOUNT, urlFreeAnimalAccess],
+        [CTX_PREFIXED_MOUNT, urlFreeAnimalAccess],
+        [OP_MOUNT, operationEchoAccess],
+        [READONLY_MOUNT, readOnlyAccess],
+        [LEGACY_MOUNT, legacySingleArgAccess],
+        [DENY_MOUNT, denyAccess],
+        [BROKEN_MOUNT, brokenShapeAccess],
+      ]) {
+        RestServer.instance.mountRoute(OrmRequest, { name, options: { model: 'animal', access } });
+      }
     });
 
-    QUnit.todo('AC1 — none of the five fail-open variants changes the outcome for a URL-free predicate', function(assert) {
-      // TODO: mount-relative, query string, case, ORM_REST_ROUTE prefix,
-      // absolute-form request-target (raw socket).
-      assert.ok(false, 'not implemented');
+    ctxHooks.after(function() {
+      // Unmount, so no later module is served by a route this one added.
+      expressRouter().stack.length = stackDepth;
+      Orm.instance.accessFiles.animal = bootAnimalAccess;
+      authTimeProbe = null;
+
+      for (const id of animalIds()) {
+        if (typeof id === 'number' && id >= 7850 && id <= 7899) store.remove('animal', id, { _skipAutoPersist: true });
+      }
     });
 
-    QUnit.todo('AC2 — operation is one of read/create/update/delete and no second vocabulary', function(assert) {
-      // TODO: the SAME string through the array form and the predicate form
-      // must yield the same decision, over the live router.
-      assert.ok(false, 'not implemented');
+    test('AC1 — a URL-free predicate enforces access on all seven surfaces, over the live router', async function(assert) {
+      // The seven surfaces are README.md:408-416. The predicate under test
+      // reads NOTHING off the request, so if the framework does not supply a
+      // correct `context.model` it fails closed and every 200 below turns into
+      // a 403 — and if the framework supplied a model derived from the URL it
+      // would be 'ctx-animals', which is the same failure.
+      const single = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_VISIBLE}`);
+      const hiddenSingle = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_HIDDEN}`);
+
+      assert.equal(single.status, 200, 'surface 2: GET /:id on a permitted record is 200');
+      assert.equal(hiddenSingle.status, 404, 'surface 2: and 404 on a filtered one — same status as a record that does not exist');
+
+      const collection = await fetch(`${endpoint}/${CTX_MOUNT}`);
+      const { data } = await collection.json();
+
+      assert.equal(collection.status, 200, 'surface 1: GET /:models is 200');
+      assert.ok(data.some(record => Number(record.id) === CTX_VISIBLE), 'surface 1: and carries the permitted record');
+      assert.notOk(data.some(record => Number(record.id) === CTX_HIDDEN), 'surface 1: and NOT the filtered one');
+      assert.notOk(data.some(record => Number(record.id) === SHIPPED_HIDDEN), 'surface 1: nor the fixture animal owned by `restricted`');
+
+      const related = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_VISIBLE}/owner`);
+      const hiddenRelated = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_HIDDEN}/owner`);
+      const linkage = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_VISIBLE}/relationships/owner`);
+      const hiddenLinkage = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_HIDDEN}/relationships/owner`);
+
+      assert.equal(related.status, 200, 'surface 3: GET /:id/{rel} is 200 for a permitted parent');
+      assert.equal(hiddenRelated.status, 404, 'surface 3: and 404 for a filtered one');
+      assert.equal(linkage.status, 200, 'surface 4: GET /:id/relationships/{rel} is 200 for a permitted parent');
+      assert.equal(hiddenLinkage.status, 404, 'surface 4: and 404 for a filtered one');
+
+      const patch = (id, age) => fetch(`${endpoint}/${CTX_MOUNT}/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', id, attributes: { age } } })
+      });
+
+      const hiddenAgeBefore = store.get('animal', CTX_HIDDEN).age;
+      const deniedPatch = await patch(CTX_HIDDEN, 999);
+      const allowedPatch = await patch(CTX_VISIBLE, 6);
+
+      assert.equal(deniedPatch.status, 404, 'surface 5: PATCH on a filtered record is 404');
+      assert.equal(store.get('animal', CTX_HIDDEN).age, hiddenAgeBefore, 'surface 5: and mutates nothing');
+      assert.equal(allowedPatch.status, 200, 'surface 5: PATCH on a permitted record still works');
+      assert.equal(store.get('animal', CTX_VISIBLE).age, 6, 'surface 5: and really did write');
+
+      const idsBefore = animalIds();
+      const deniedCreate = await fetch(`${endpoint}/${CTX_MOUNT}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } })
+      });
+      const allowedCreate = await fetch(`${endpoint}/${CTX_MOUNT}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } })
+      });
+
+      assert.equal(deniedCreate.status, 403, 'surface 7: POST of a record the filter rejects is 403');
+      assert.equal(allowedCreate.status, 200, 'surface 7: POST of a permitted record succeeds');
+
+      for (const id of animalIds()) {
+        if (!idsBefore.includes(id)) store.remove('animal', id, { _skipAutoPersist: true });
+      }
+
+      const deniedDelete = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_HIDDEN}`, { method: 'DELETE' });
+
+      assert.equal(deniedDelete.status, 404, 'surface 6: DELETE on a filtered record is 404');
+      assert.ok(store.get('animal', CTX_HIDDEN), 'surface 6: and the record survives');
+
+      // The predicate really was consulted, really was handed the context, and
+      // the model it was handed is the MODEL name — not the mount, not the
+      // pluralised route name, not anything the caller could influence.
+      const models = [...new Set(observed.map(entry => entry.context.model))];
+      assert.deepEqual(models, ['animal'],
+        'every call was told model `animal` — never the mount name `ctx-animals` (the mutant AC1 names)');
+      assert.ok(observed.every(entry => VERBS.includes(entry.context.operation) || entry.context.operation === undefined),
+        'and an operation from the four verbs');
     });
 
-    QUnit.todo('AC3 — an existing single-argument predicate is unchanged by the new second argument', function(assert) {
-      // TODO: argument ONE must still be the request. Per variant 1 a predicate
-      // that can no longer match falls through to a full CRUD grant, so this is
-      // the AC that stops the "safer" breaking form from being a fail-open.
-      assert.ok(false, 'not implemented');
+    test('AC1 — none of the five fail-open variants changes the outcome for a URL-free predicate', async function(assert) {
+      // Variants 1-5, as listed in src/orm-request.ts and reproduced in the
+      // shipped sample's header. Against a predicate that reads no URL these
+      // cannot reach the decision at all — this measures that claim over the
+      // live router rather than asserting it.
+      const seenBefore = observed.length;
+
+      // Variant 2 — query string.
+      const queried = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_HIDDEN}?filter[age]=9`);
+      const queriedCollection = await fetch(`${endpoint}/${CTX_MOUNT}?filter[size]=small`);
+      const queriedData = (await queriedCollection.json()).data;
+
+      assert.equal(queried.status, 404, 'variant 2: a query string does not un-hide the filtered record');
+      assert.notOk(queriedData.some(record => Number(record.id) === CTX_HIDDEN), 'variant 2: nor on the collection');
+
+      // Variant 3 — case. Express mounts case-INSENSITIVELY, so this routes.
+      const upper = await fetch(`${endpoint}/${CTX_MOUNT.toUpperCase()}/${CTX_HIDDEN}`);
+      const upperVisible = await fetch(`${endpoint}/${CTX_MOUNT.toUpperCase()}/${CTX_VISIBLE}`);
+
+      assert.equal(upperVisible.status, 200, 'variant 3: the upper-cased path really does route to the same handler');
+      assert.equal(upper.status, 404, 'variant 3: and the filtered record is still 404 through it');
+
+      // Variant 4 — a mount prefix, the shape a configured ORM_REST_ROUTE
+      // produces. Same predicate object, mounted twice.
+      const prefixed = await fetch(`${endpoint}/${CTX_PREFIXED_MOUNT}/${CTX_HIDDEN}`);
+      const prefixedVisible = await fetch(`${endpoint}/${CTX_PREFIXED_MOUNT}/${CTX_VISIBLE}`);
+
+      assert.equal(prefixedVisible.status, 200, 'variant 4: the prefixed mount routes');
+      assert.equal(prefixed.status, 404, 'variant 4: and the verdict is identical under it');
+
+      // Variant 5 — an absolute-form request target, over a raw socket.
+      const absolute = await rawRequest('GET', `http://anything.example/${CTX_MOUNT}/${CTX_HIDDEN}`);
+      const absoluteVisible = await rawRequest('GET', `http://anything.example/${CTX_MOUNT}/${CTX_VISIBLE}`);
+
+      assert.equal(absoluteVisible.status, 200, 'variant 5: the absolute-form target reaches the handler');
+      assert.equal(absolute.status, 404, 'variant 5: and the filtered record is still 404');
+      assert.notOk(absolute.body.includes('"restricted"'), 'variant 5: and the body does not carry the hidden record');
+
+      // Variant 1 — `request.url` is mount-relative. Measured on the request
+      // objects express actually built for the calls above, rather than
+      // asserted: the condition that made variant 1 possible is present on
+      // every one of them, and none of it reached the verdict.
+      const calls = observed.slice(seenBefore);
+      assert.ok(calls.length >= 8, 'the predicate was consulted for each of the requests above');
+
+      const mountRelative = calls.filter(({ request }) => request.url !== request.originalUrl);
+      assert.ok(mountRelative.length > 0,
+        'variant 1: express really did hand the predicate a mount-relative `url` distinct from `originalUrl`');
+      assert.ok(calls.some(({ request }) => String(request.originalUrl).includes('?')),
+        'variant 2: and a raw target carrying a query string');
+      assert.ok(calls.some(({ request }) => String(request.baseUrl).includes('/api/')),
+        'variant 4: and a prefixed baseUrl');
+      assert.ok(calls.some(({ request }) => String(request.originalUrl).includes('://')),
+        'variant 5: and an absolute-form originalUrl');
+      assert.deepEqual([...new Set(calls.map(({ context }) => context.model))], ['animal'],
+        'and through all five, `context.model` never moved off `animal`');
     });
 
-    QUnit.todo('AC4 — no store read is introduced at auth time by a full request through the live router', function(assert) {
-      // TODO: store-read spy over a real dispatch.
-      assert.ok(false, 'not implemented');
+    test('AC2 — operation is one of read/create/update/delete and no second vocabulary, over the live router', async function(assert) {
+      // The predicate on this mount returns `[context.operation]` — the
+      // permission-ARRAY form, written in whatever vocabulary the framework
+      // just used. `auth()` then checks that array against
+      // `methodAccessMap[request.method]` twenty lines further down
+      // (src/orm-request.ts:1187). So each request below is permitted if and
+      // only if the two agree, and a framework emitting 'GET', 'list' or
+      // 'index' turns every one of them into a 403.
+      const before = operationLog.length;
+      seedAnimal(CTX_DOOMED, 'gina');
+
+      const read = await fetch(`${endpoint}/${OP_MOUNT}/${CTX_VISIBLE}`);
+      const list = await fetch(`${endpoint}/${OP_MOUNT}`);
+      const idsBefore = animalIds();
+      const create = await fetch(`${endpoint}/${OP_MOUNT}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', attributes: { type: 1, age: 2, size: 'small', owner: 'gina' } } })
+      });
+      const update = await fetch(`${endpoint}/${OP_MOUNT}/${CTX_VISIBLE}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', id: CTX_VISIBLE, attributes: { age: 7 } } })
+      });
+      const destroy = await fetch(`${endpoint}/${OP_MOUNT}/${CTX_DOOMED}`, { method: 'DELETE' });
+
+      assert.equal(read.status, 200, "GET /:id is permitted by an array holding the framework's own operation string");
+      assert.equal(list.status, 200, 'and so is GET /:models');
+      assert.equal(create.status, 200, 'POST is permitted by it');
+      assert.equal(update.status, 200, 'PATCH is permitted by it');
+      assert.equal(destroy.status, 204, 'DELETE is permitted by it');
+
+      for (const id of animalIds()) {
+        if (!idsBefore.includes(id)) store.remove('animal', id, { _skipAutoPersist: true });
+      }
+
+      const calls = operationLog.slice(before);
+      const byMethod = {};
+      for (const call of calls) byMethod[call.method] = call.operation;
+
+      assert.deepEqual(byMethod, { GET: 'read', POST: 'create', PATCH: 'update', DELETE: 'delete' },
+        'and the operation supplied for each dispatched method is the four-verb one');
+      assert.ok(calls.every(call => VERBS.includes(call.operation)),
+        "no second vocabulary: never 'GET', never 'list', never 'index'");
+
+      // The same four strings, written by hand in the ARRAY form, decide the
+      // same way — which is what "one vocabulary" means operationally.
+      const readable = await fetch(`${endpoint}/${READONLY_MOUNT}/${CTX_VISIBLE}`);
+      const writable = await fetch(`${endpoint}/${READONLY_MOUNT}/${CTX_VISIBLE}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', id: CTX_VISIBLE, attributes: { age: 8 } } })
+      });
+      const removable = await fetch(`${endpoint}/${READONLY_MOUNT}/${CTX_VISIBLE}`, { method: 'DELETE' });
+
+      assert.equal(readable.status, 200, "a hand-written ['read'] permits the request the framework called `read`");
+      assert.equal(writable.status, 403, 'and refuses the one it called `update`');
+      assert.equal(removable.status, 403, 'and the one it called `delete`');
+      assert.ok(store.get('animal', CTX_VISIBLE), 'the refused delete removed nothing');
     });
 
-    QUnit.todo('AC5 — the context never fabricates an operation for a method express delivers but methodAccessMap does not map', function(assert) {
-      // TODO: HEAD is the ONLY such method (PUT 404s at the router because
-      // OrmRequest registers only get/patch/post/delete). It must be DELIVERED
-      // by express to the GET handler.
-      assert.ok(false, 'not implemented');
+    test('AC3 — an existing single-argument predicate is unchanged by the new second argument', async function(assert) {
+      // The breaking form of this change would have put the context in argument
+      // ONE. Per fail-open variant 1, a predicate that can no longer match its
+      // collection falls through to the full CRUD grant — so the "safer"
+      // breaking change converts every unmigrated predicate into a fail-open.
+      // This is the assertion that stops it.
+      assert.equal(legacySingleArgAccess.length, 1, 'the subject really is a single-argument predicate');
+
+      const visible = await fetch(`${endpoint}/${LEGACY_MOUNT}/${CTX_VISIBLE}`);
+      const hidden = await fetch(`${endpoint}/${LEGACY_MOUNT}/${CTX_HIDDEN}`);
+      const collection = await fetch(`${endpoint}/${LEGACY_MOUNT}`);
+      const { data } = await collection.json();
+
+      // Under the breaking mutant `request.baseUrl` is undefined, the fail-closed
+      // guard fires, and this 200 becomes a 403. Without the guard it becomes a
+      // full grant and the 404 below becomes a 200.
+      assert.equal(visible.status, 200, 'argument ONE is still the request: the mount check still matches');
+      assert.equal(hidden.status, 404, 'and the per-record filter it returns is still enforced');
+      assert.notOk(data.some(record => Number(record.id) === CTX_HIDDEN), 'on the collection too');
+
+      // And the SHIPPED fixture — still arity-1, deliberately (its migration is
+      // #213) — is still the predicate enforcing the real /animals routes.
+      assert.equal(Orm.instance.getAccess('animal').length, 1,
+        'the shipped predicate in the live registry is still single-argument');
+
+      const shippedHidden = await fetch(`${endpoint}/animals/${SHIPPED_HIDDEN}`);
+      const shippedVisible = await fetch(`${endpoint}/animals/${SHIPPED_VISIBLE}`);
+
+      assert.equal(shippedHidden.status, 404, 'and it still hides animal 21 on the real /animals route');
+      assert.equal(shippedVisible.status, 200, 'while still serving a visible one');
     });
 
-    QUnit.todo('AC7 — negative control: a denying predicate still denies through the new path', function(assert) {
-      // TODO: false / unrecognised-shape branches still deny on every surface.
-      assert.ok(false, 'not implemented');
+    test('AC4 — no store read is introduced at auth time by a full request through the live router', async function(assert) {
+      // The mutant: an implementer reads the issue body's superseded
+      // `{ model, operation, record }` text and adds a lookup at
+      // src/orm-request.ts:1160 to populate it. That is a store hit on every
+      // request, in the middle of an authorization path.
+      const findSpy = sinon.spy(store, 'find');
+      const getSpy = sinon.spy(store, 'get');
+      let atAuthTime = null;
+
+      authTimeProbe = () => {
+        atAuthTime = { find: findSpy.callCount, get: getSpy.callCount };
+      };
+
+      try {
+        findSpy.resetHistory();
+        getSpy.resetHistory();
+
+        const response = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_VISIBLE}`);
+
+        assert.equal(response.status, 200, 'a full record request over the live router succeeded');
+        assert.deepEqual(atAuthTime, { find: 0, get: 0 },
+          'and NOTHING had been read out of the store when access() was called');
+
+        // Confirms the check could have failed: the same spies do see the reads
+        // the handler makes after auth, so a zero at auth time is a measurement
+        // and not a dead counter.
+        assert.ok(findSpy.callCount + getSpy.callCount > 0,
+          'while the handler, downstream of auth, does read the store through these same spies');
+      } finally {
+        authTimeProbe = null;
+        findSpy.restore();
+        getSpy.restore();
+      }
+
+      const contexts = observed.map(entry => entry.context);
+      assert.ok(contexts.every(context => !('record' in context)),
+        'and no context handed to the predicate over this whole module ever carried a `record` key');
     });
 
-    QUnit.todo('AC8 — the model->predicate registry survives boot and is reachable from the live Orm instance', function(assert) {
-      // TODO: assert on Orm.instance after a REAL boot, not a constructed object.
-      assert.ok(false, 'not implemented');
+    test('AC5 — the context never fabricates an operation for a method express delivers but methodAccessMap does not map', async function(assert) {
+      // MEASURED, not assumed (refinement §4): express delivers HEAD to the GET
+      // handler, so an unmapped method really does reach auth(); PUT never
+      // does, because OrmRequest registers only get/patch/post/delete
+      // (src/orm-request.ts:806-822) and the router 404s it first. A unit test
+      // that fabricates `method: 'HEAD'` never learns either fact.
+      const before = operationLog.length;
+
+      const head = await fetch(`${endpoint}/${OP_MOUNT}/${CTX_VISIBLE}`, { method: 'HEAD' });
+      const put = await fetch(`${endpoint}/${OP_MOUNT}/${CTX_VISIBLE}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', id: CTX_VISIBLE, attributes: { age: 3 } } })
+      });
+      const control = await fetch(`${endpoint}/${OP_MOUNT}/${CTX_VISIBLE}`);
+
+      const calls = operationLog.slice(before);
+      const headCall = calls.find(call => call.method === 'HEAD');
+      const getCall = calls.find(call => call.method === 'GET');
+
+      assert.ok(headCall, 'express DELIVERED the HEAD request to the GET handler, so auth() really ran for it');
+      assert.strictEqual(headCall.operation, undefined,
+        "and `operation` is undefined for it — not defaulted to 'read', which would authorise an unclassified request");
+      assert.ok(headCall.hasOperationKey, 'the key is present and undefined, rather than quietly absent');
+      assert.strictEqual(headCall.model, 'animal', 'while `model` is still supplied — only the unmapped half is undefined');
+
+      assert.notOk(calls.some(call => call.method === 'PUT'),
+        'PUT never reached auth() at all — the router 404s it, so an AC written against PUT would be unfalsifiable');
+      assert.equal(put.status, 404, 'and the caller sees that 404 from the router');
+
+      // Control: the same route, same path, a MAPPED method. Without it,
+      // "operation is undefined" could be true because the context is empty.
+      assert.strictEqual(getCall.operation, 'read', 'a mapped method on the same route is still classified');
+      assert.equal(control.status, 200, 'and still permitted');
+
+      // The consequence, stated rather than assumed: this predicate treats an
+      // unclassified request as a denial, which is the documented guidance.
+      // The SHIPPED behaviour of HEAD against the method map is #215, filed
+      // separately and deliberately not absorbed here.
+      assert.equal(head.status, 403, 'this predicate denies the unclassified request, as the documentation instructs');
     });
 
-    QUnit.todo('AC9 — another model predicate is reachable AND model-correct while servicing a request routed to a different model', function(assert) {
-      // TODO: capture the request object express actually produced during a
-      // real GET /owners/:id, resolve the ANIMAL predicate from the registry,
-      // invoke it with { model: 'animal', operation: 'read' } and that live
-      // request, and assert it answers about ANIMALS while baseUrl reads
-      // '/owners'. That contrast IS the assertion.
-      assert.ok(false, 'not implemented');
+    test('AC7 — negative control: a denying predicate still denies through the new path', async function(assert) {
+      // Without this the whole change is satisfiable by granting everything.
+      const ageBefore = store.get('animal', CTX_VISIBLE).age;
+
+      for (const mount of [DENY_MOUNT, BROKEN_MOUNT]) {
+        const shape = mount === DENY_MOUNT ? 'a `false` return' : 'an unrecognised return shape';
+
+        const single = await fetch(`${endpoint}/${mount}/${CTX_VISIBLE}`);
+        const collection = await fetch(`${endpoint}/${mount}`);
+        const related = await fetch(`${endpoint}/${mount}/${CTX_VISIBLE}/owner`);
+        const linkage = await fetch(`${endpoint}/${mount}/${CTX_VISIBLE}/relationships/owner`);
+        const patch = await fetch(`${endpoint}/${mount}/${CTX_VISIBLE}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: { type: 'animal', id: CTX_VISIBLE, attributes: { age: 111 } } })
+        });
+        const create = await fetch(`${endpoint}/${mount}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } })
+        });
+        const destroy = await fetch(`${endpoint}/${mount}/${CTX_VISIBLE}`, { method: 'DELETE' });
+
+        assert.deepEqual(
+          [single.status, collection.status, related.status, linkage.status, patch.status, create.status, destroy.status],
+          [403, 403, 403, 403, 403, 403, 403],
+          `${shape} denies all seven surfaces`);
+      }
+
+      assert.equal(store.get('animal', CTX_VISIBLE).age, ageBefore, 'and nothing was written behind a 403');
+      assert.ok(store.get('animal', CTX_VISIBLE), 'and nothing was destroyed behind one');
+
+      // Confirms the 403s above are the predicate's doing and not a property of
+      // every route this module mounted.
+      const permitted = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_VISIBLE}`);
+      assert.equal(permitted.status, 200, 'while the permitting predicate on a sibling mount still answers 200');
+    });
+
+    test('AC8 — the model->predicate registry survives boot and is reachable from the live Orm instance', async function(assert) {
+      // Asserted against the LIVE `Orm.instance` this suite booted, not a
+      // constructed object. Before this story `accessFiles` was a function-local
+      // in setup-rest-server.ts, populated per model, consumed once by the mount
+      // loop and discarded when that function returned — `Orm` carried no access
+      // registry of any kind, so at request time there was no route from a model
+      // NAME to that model's predicate.
+      const registry = Orm.instance.accessFiles;
+
+      assert.ok(registry && typeof registry === 'object', 'Orm.instance carries an access registry after a real boot');
+      assert.deepEqual(Object.keys(registry).sort(), ['animal', 'category', 'owner', 'phone-number', 'trait'],
+        'holding every model the shipped access class claims');
+
+      // Keyed by MODEL name, which is what a consumer has. The pluralised,
+      // dasherized route names the mount loop derives are NOT keys.
+      assert.ok('phone-number' in registry, 'keys are model names — kebab-case, as declared and as stored');
+      assert.notOk('phoneNumbers' in registry, 'not the camel-cased route name');
+      assert.notOk('animals' in registry, 'not the pluralised one either');
+
+      assert.strictEqual(typeof Orm.instance.getAccess('animal'), 'function', 'getAccess resolves a model to its predicate');
+      assert.strictEqual(Orm.instance.getAccess('animal'), registry.animal, 'and resolves the very entry in the map');
+      assert.strictEqual(Orm.instance.getAccess('not-a-model'), undefined, 'and answers undefined for a model with no access class');
+
+      // Reachable is not enough — it has to be the predicate that is ACTUALLY
+      // ENFORCING. Both halves are measured on one live dispatch: the request
+      // object express built for a real `GET /animals`, and the response that
+      // dispatch produced.
+      let captured = null;
+      const unsubscribe = beforeHook('list', 'animal', context => { captured = context.request; });
+
+      let response;
+      let body;
+      try {
+        response = await fetch(`${endpoint}/animals`);
+        body = await response.json();
+      } finally {
+        unsubscribe();
+      }
+
+      assert.equal(response.status, 200, 'the live /animals collection answered');
+      assert.notOk(body.data.some(record => Number(record.id) === SHIPPED_HIDDEN),
+        'and the record owned by `restricted` is absent from it — the filter is live');
+      assert.ok(captured && captured.baseUrl === '/animals', 'and the hook handed back the request express dispatched');
+
+      const filter = Orm.instance.getAccess('animal')(captured, { model: 'animal', operation: 'read' });
+
+      assert.strictEqual(typeof filter, 'function', 'the registry entry, asked about that same request, yields a per-record filter');
+      assert.notOk(filter(store.get('animal', SHIPPED_HIDDEN)),
+        'which rejects exactly the record the live response omitted — the registry holds the enforcing predicate, not a stale copy');
+      assert.ok(filter(store.get('animal', SHIPPED_VISIBLE)), 'and admits the one it carried');
+    });
+
+    test('AC9 — another model predicate is reachable AND model-correct while servicing a request routed to a different model', async function(assert) {
+      // THE ACCEPTANCE CRITERION THIS STORY EXISTS FOR. #196 and #207 both need
+      // to evaluate model X's predicate while servicing a request routed to
+      // model Y. The registry makes the predicate REACHABLE; the
+      // { model, operation } context makes the answer MODEL-CORRECT. Neither
+      // half alone unblocks anything, which is why they shipped together.
+      //
+      // The request object below is one express actually produced during a real
+      // dispatch, taken off the hook context (src/orm-request.ts:943-947 plants
+      // the live request there). It is NOT `makeRequest`: that helper fabricates
+      // `baseUrl` and `path` from a url string it also invents, and fail-open
+      // variant 5 survived four review rounds inside it.
+      let captured = null;
+      const unsubscribe = beforeHook('get', 'owner', context => { captured = context.request; });
+
+      let ownerResponse;
+      try {
+        ownerResponse = await fetch(`${endpoint}/owners/angela`);
+      } finally {
+        unsubscribe();
+      }
+
+      assert.equal(ownerResponse.status, 404, 'a real GET /owners/angela — the owner predicate hides angela, so this dispatch really was authorised');
+      assert.ok(captured, 'and the live request object was captured from that dispatch');
+      assert.strictEqual(captured.baseUrl, '/owners', 'baseUrl reads /owners — express set it from the mount it matched');
+      assert.strictEqual(captured.originalUrl, '/owners/angela', 'and originalUrl is the target the caller sent');
+      assert.ok(captured.socket && typeof captured.socket.remoteAddress === 'string',
+        'it came off a real socket — a fabricated request cannot carry one');
+
+      // (b) THE FAILURE MODE, ON THE SHIPPED PREDICATE, ON THIS LIVE REQUEST.
+      // The predicate the registry holds for `animal` today identifies its
+      // collection from the request (its migration is #213). Ask it about
+      // ANIMALS while it is holding a request addressed to /owners and it
+      // answers about OWNERS — and per #202's thesis it answers in the granting
+      // direction: animal 21, the record hidden on every animal surface, passes.
+      const urlIdentifying = Orm.instance.getAccess('animal');
+      const wrongAnswer = urlIdentifying(captured, { model: 'animal', operation: 'read' });
+
+      assert.strictEqual(typeof wrongAnswer, 'function', 'the URL-identifying predicate returns a filter for this request');
+      assert.ok(wrongAnswer(store.get('animal', SHIPPED_HIDDEN)),
+        'and it GRANTS animal 21 — the owner answer, given while being asked about animals. That is #196 objection verbatim, wrong in the granting direction');
+
+      // (a) + the fix. `urlFreeAnimalAccess` is not a mock: it is the predicate
+      // this module has been enforcing over the live router for every assertion
+      // above, and the two requests below re-establish that inside this test.
+      // The shipped fixture cannot play this part because #202 must not migrate
+      // it — assertion 46 pins it line-for-line to the README sample and #213
+      // owns moving both (refinement §3).
+      const liveHidden = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_HIDDEN}`);
+      const liveVisible = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_VISIBLE}`);
+
+      assert.equal(liveHidden.status, 404, 'the migrated predicate is live-enforcing on /ctx-animals');
+      assert.equal(liveVisible.status, 200, 'and admitting what it should');
+
+      const restore = Orm.instance.accessFiles.animal;
+      try {
+        Orm.instance.accessFiles.animal = urlFreeAnimalAccess;
+
+        const resolved = Orm.instance.getAccess('animal');
+
+        assert.strictEqual(typeof resolved, 'function',
+          'the animal predicate RESOLVES from the registry (red when the registry is absent: before this story the map died at setup-rest-server.ts:62 and this was undefined)');
+        assert.strictEqual(resolved, urlFreeAnimalAccess,
+          'and it is the same function object the live /ctx-animals route is enforcing');
+
+        const verdict = resolved(captured, { model: 'animal', operation: 'read' });
+
+        assert.strictEqual(typeof verdict, 'function',
+          'asked about `animal` while holding the /owners request, it returns a per-record filter — not the CRUD fall-through grant');
+        assert.notOk(verdict(store.get('animal', SHIPPED_HIDDEN)),
+          'and the filter REJECTS the animal owned by `restricted` — the ANIMAL answer');
+        assert.ok(verdict(store.get('animal', SHIPPED_VISIBLE)), 'while admitting a visible one');
+        assert.ok(verdict(store.get('owner', 'angela')),
+          "and it is not the OWNER predicate's answer, which would have rejected angela");
+
+        assert.strictEqual(captured.baseUrl, '/owners',
+          'all of which was decided while the request in hand was still routed to /owners. That contrast IS the assertion');
+
+        // (b) again, from the other side: drop the context and the same
+        // migrated predicate cannot answer at all — it fails closed rather than
+        // guessing from the request. The context is what carries the model.
+        assert.strictEqual(resolved(captured), false,
+          'without the context there is no model to answer about, and a predicate that cannot identify its subject denies');
+      } finally {
+        Orm.instance.accessFiles.animal = restore;
+      }
+
+      assert.strictEqual(Orm.instance.getAccess('animal'), restore, 'the boot registry is left exactly as it was found');
     });
   });
   });
