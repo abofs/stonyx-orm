@@ -98,8 +98,8 @@
  *
  * PASSING THE CONTEXT MAKES A MODEL-CORRECT ANSWER POSSIBLE. It does not make
  * the answer model-correct on its own -- the resolved predicate has to READ it.
- * Measured against this repo's own shipped access class, on a request express
- * dispatched to `GET /owners/angela`, asked about ANIMALS:
+ * Measured against an ARITY-1 predicate, on a request express dispatched to
+ * `GET /owners/angela`, asked about ANIMALS:
  *
  *     getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
  *       ->  record => record.id !== 'angela' && record.id !== 'restricted'
@@ -110,23 +110,30 @@
  * `['read', 'create', 'update', 'delete']`, a full CRUD grant. Either way the
  * context was supplied and the answer is not the animal answer, and it is wrong
  * in the GRANTING direction, because that predicate is arity-1 and identifies
- * its collection from the request. (The first of these is asserted on a live
- * dispatch by AC9 in test/integration/orm-test.ts.)
+ * its collection from the request. (Asserted on a live dispatch by AC9 in
+ * test/integration/orm-test.ts, against a deliberately arity-1 predicate.)
  *
- * Every predicate in this repo and in every consumer tree is arity-1 on the day
- * this ships, and the caller has no supported way to tell which kind it got --
- * the boot-time arity warning that would surface it is abofs/stonyx-orm#213.
+ * This repo's own sample access class has since been MIGRATED to read the
+ * context (abofs/stonyx-orm#222), so `getAccess('animal')` here now answers
+ * with the animal filter. That is not true of a consumer tree: an arity-1
+ * predicate keeps working -- the second argument is additive -- and the caller
+ * has no supported way to tell which kind it got. The boot-time arity warning
+ * that surfaces one is abofs/stonyx-orm#221.
  * So: pass the context, and do not treat a resolved predicate's answer as
  * model-specific until that predicate has been migrated to read the context.
  *
  * ---------------------------------------------------------------------------
  * DO NOT RECONSTRUCT THE REQUEST PATH INSIDE `access()`.
  * ---------------------------------------------------------------------------
- * `auth()` below hands your `access(request)` a raw transport artifact and asks
- * you to work out which collection it addresses. Every attempt to do that by
- * parsing the request target has failed OPEN. Five distinct variants of the
- * same three-line example have now been found, each after the previous was
- * fixed, by five different people:
+ * You do not have to. `auth()` below hands your predicate the ACCESS CONTEXT as
+ * argument two, and `context.model` already names the collection -- see the
+ * contract section above. Argument ONE is still the raw transport artifact, and
+ * everything from here to the end of this banner is the record of what happened
+ * when predicates worked the collection out from it. IT IS HISTORY, NOT
+ * GUIDANCE: do not write any of it into a new predicate. Every attempt to
+ * identify the collection by parsing the request target has failed OPEN. Five
+ * distinct variants of the same three-line example have now been found, each
+ * after the previous was fixed, by five different people:
  *
  *   1. `request.url` is mount-relative under `RestServer.mountRoute`, so a
  *      prefix match against it is ALWAYS false.
@@ -145,22 +152,31 @@
  *      last, and the record comes back in full. It walks past a hard
  *      `return false` deny the same way.
  *
- * The fix is not a sixth rule. It is to stop parsing:
+ * The fix is not a sixth rule, and it is not a better string to match. It is to
+ * stop identifying the collection at all: read `context.model`.
  *
- *   `request.baseUrl` is the mount Express ACTUALLY MATCHED when it dispatched
- *   the request. It carries no query string, it is not mount-relative, it is
- *   unaffected by absolute-form, and it already includes the configured
- *   `ORM_REST_ROUTE` prefix -- so there is nothing to derive and nothing to
- *   join. Compare it lower-cased (the router matched case-insensitively) and
- *   fail CLOSED when it is absent. Use `request.path` -- mount-relative and
- *   query-free -- if you need to distinguish sub-paths.
+ *   An intermediate revision of the sample read `request.baseUrl` -- the mount
+ *   Express ACTUALLY MATCHED. That closed all five variants (no query string,
+ *   not mount-relative, unaffected by absolute-form, already carrying the
+ *   configured `ORM_REST_ROUTE` prefix), but it was a transport artifact
+ *   standing in for a structural fact and the sample no longer does it.
+ *   `context.model` IS the structural fact, so all five variants are
+ *   unconstructible against a migrated predicate rather than handled.
+ *
+ * ONE READ OF ARGUMENT ONE SURVIVES, AND IT MUST: `request.path`. It is
+ * mount-relative and query-free, and it is for rules that distinguish SUB-PATHS
+ * beneath the mount. The context names which model and which verb, NOT which
+ * route, so the sample's `/archived` deny cannot be expressed from the context
+ * alone and a context-ONLY rewrite would silently turn that deny into an allow.
+ * Lower-case it before comparing -- the router matched case-insensitively -- and
+ * compare record ids at their real case.
  *
  * `?? ''` is not a defence. It converts an absent request target into an empty
  * string, which matches no collection, which falls through to the permission
- * array -- a total grant. An input you cannot identify must DENY.
+ * array -- a total grant. An input you cannot identify must DENY, and that
+ * applies to the context too: the sample returns `false` for an absent `model`
+ * rather than falling through.
  *
- * THAT IS STILL A STOPGAP. `baseUrl` closes all five variants, but it is a
- * transport artifact being asked to stand in for a structural fact.
  * THE REAL FIX IS abofs/stonyx-orm#202: `access()` should receive the model,
  * the operation and the record. Prefer the array shape (`['read']`) or `false`
  * until #202 lands; the function shape is what requires any matching at all.

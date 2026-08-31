@@ -245,7 +245,8 @@ Access control is defined via access classes in the configured `paths.access` di
 ```javascript
 export default class GlobalAccess {
   models = ['owner', 'animal']; // or '*' for all
-  access(request) {
+  access(request, { model, operation }) {
+    // `model` names the collection — do not derive it from the request target
     // Return false → 403 Forbidden
     // Return ['read', 'create', 'update', 'delete'] → allowed methods
     // Return (record) => boolean → per-record filter, applied to every surface
@@ -258,10 +259,12 @@ Method mapping: `GET → 'read'`, `POST → 'create'`, `DELETE → 'delete'`, `P
 Since [#202](https://github.com/abofs/stonyx-orm/issues/202) `access()` is called
 with a **second** argument — `access(request, { model, operation })` — carrying
 the model name and one of those four verbs. It is additive, so the
-single-argument form above still works; the consumer-facing write-up is
-[The access context](../README.md#the-access-context-second-argument) and
-retiring the URL-derivation guidance from the samples is
-[#213](https://github.com/abofs/stonyx-orm/issues/213).
+single-argument form above still works. The consumer-facing write-up is
+[The access context](../README.md#the-access-context-second-argument); the
+URL-derivation guidance was retired from the samples by
+[#222](https://github.com/abofs/stonyx-orm/issues/222), and the boot-time
+warning for a predicate that still declares one parameter is
+[#221](https://github.com/abofs/stonyx-orm/issues/221).
 
 #### Filter functions
 
