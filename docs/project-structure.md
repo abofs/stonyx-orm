@@ -274,26 +274,55 @@ every endpoint that is *addressed to* a record — not only on the collection:
 | `GET /:models/:id/relationships/{relationship}` | `404` — same | `_generateRelationshipRoutes` |
 | `PATCH /:models/:id` | `404`, no attribute is applied | `_withHooks` GATE 1 |
 | `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued | `_withHooks` GATE 1 |
-| `POST /:models` | `403`, and the record is rolled back out of the store | `createHandler` |
+| `POST /:models` (no client id) | `403`, and the created record is rolled back out of the store | `createHandler` |
+| `POST /:models` (client-supplied id) | `403`, refused before any store lookup | `createHandler` GATE 0 |
 
 Denied record-level requests return **404, not 403**, so that "exists but
 filtered out" is indistinguishable from "does not exist". Returning 403 there
 would confirm the record's existence to a caller who is not allowed to see it.
 `POST` is the exception and returns 403: a 404 on a mounted collection route is
-indistinguishable from "model not mounted", a genuinely different failure. The
-duplicate-id check inside `createHandler` is filtered for the same reason — a
-collision with a *hidden* record returns 403, identical to a create against an
-id that never existed, so `409` cannot be used to enumerate ids.
+indistinguishable from "model not mounted", a genuinely different failure.
 
-Because the predicate is enforced on record routes, it must match those urls,
-and it must match **`request.originalUrl`**. `RestServer.mountRoute` mounts each
-model as an Express sub-app, so `request.url` is mount-relative — `/angela`, not
-`/owners/angela` — and a prefix match against it is always false. That failure
-mode is silent and fails **open**. A predicate returned only for an exact
-collection url (`url.endsWith('/owners')`) is the other half of the same trap: it
-leaves every record route unguarded. And `originalUrl` carries the query string,
-so an anchored `=== '/owners'` silently misses `/owners?filter[age]=30` — match
-on `originalUrl.split('?')[0]`.
+**GATE 0 and why filtering the collision status was not enough.** The
+duplicate-id check has to run before the filter and sees hidden records, so the
+*status* of a `POST` leaks whether an id is taken. A previous revision filtered
+only the collision (403 for a hidden collision, 409 for a visible one). That is
+insufficient, because the status of a *successful create* is a third outcome:
+with a payload the caller is permitted to create — the normative case, and the
+one an attacker picks — `403` / `200` / `409` distinguish hidden / free / visible
+in **one request per id**. It cannot be closed while a caller both chooses the id
+and learns whether the create succeeded, so under a function-style filter the
+caller does not choose the id: any client-supplied `id` is refused with 403
+before any store lookup, so neither status nor latency depends on existence.
+
+Two consequences worth stating. The refusal is scoped to function-style
+`access`, because that is exactly the population with hidden records — an
+unfiltered caller keeps `409`/`200`. And a caller can still learn that a
+collection *has* a filter, which discloses a configuration fact rather than a
+record.
+
+Because the predicate is enforced on record routes, it must match those urls —
+and **matching urls is the wrong contract**, tracked as
+[#202](https://github.com/abofs/stonyx-orm/issues/202). Four fail-open variants
+of the same three-line sample have now been found, each after the previous was
+fixed:
+
+| # | Variant | Why it fails open |
+|---|---|---|
+| 1 | `request.url` instead of `originalUrl` | `mountRoute` mounts each model as an Express sub-app, so `url` is mount-relative (`/angela`, not `/owners/angela`) and a prefix match is **always false** |
+| 2 | anchored match against a raw `originalUrl` | `originalUrl` carries the query string, so `=== '/owners'` misses `/owners?filter[age]=30` — the collection comes back unfiltered |
+| 3 | case-sensitive matcher | `RestServer` mounts with a bare `express()`, default `caseSensitive: false`, while `originalUrl` preserves the caller's case: `DELETE /ANIMALS/22` destroyed a hidden record. Router-side fix: [stonyx-rest-server#47](https://github.com/abofs/stonyx-rest-server/issues/47) |
+| 4 | hard-coded `/owners` | `ORM_REST_ROUTE=/api` makes every url `/api/owners/...` and the sample matches nothing — environment-specifically |
+
+`endsWith('/owners')` is a fifth and older half of the same trap: it leaves every
+record route unguarded.
+
+The shipped fixture (`test/sample/access/global-access.ts`) and all three samples
+now close all four: `originalUrl`, `.split('?')[0]`, `.toLowerCase()`, and a
+prefix built from `config.orm.restServer.route`. **That is a stopgap and the
+samples say so.** They are safe against four variants we happened to find; the
+pattern asks a consumer to re-derive from a transport artifact what the ORM
+already holds structurally.
 
 Enforcement is post-fetch: the predicate is opaque JavaScript and cannot be
 translated to a `WHERE` clause. Record routes fetch by primary key, so this
@@ -309,7 +338,8 @@ of changing state on its own. All of them must sit behind a gate:
 |---|---|
 | the handler itself | GATE 1 (pre-handler) for `update`/`delete` |
 | `context.oldState` / `context.recordId` construction | GATE 1 |
-| before-hooks (which may short-circuit) | GATE 1 |
+| before-hooks on `update` / `delete` (which may short-circuit) | GATE 1 |
+| **before-hooks on `create`** | **ungated, and cannot be gated** — see below |
 | `sqlDb.persist` | GATE 2 (post-handler `denied`) |
 | after-hooks | GATE 2 |
 | `Orm.db.save()` autosave | GATE 2 |
@@ -317,6 +347,34 @@ of changing state on its own. All of them must sit behind a gate:
 A new executor added to that function belongs below GATE 2, or it is a security
 bug. Every past instance of this defect has been an executor that nobody
 realised was one.
+
+**The one exception, stated rather than left implied.** `beforeHook('create')`
+fires for a `POST` that answers 403. For `create` there is no record to test
+until `createHandler` has built one, so the denial is not knowable in time; GATE
+1 correctly does not attempt it. Every *after*-hook is gated. The README's
+breaking-change note covers after-hooks only, and `### Known limitations` now
+records this exception explicitly so the executor narrative is not read as "a
+denied write runs no consumer code at all".
+
+##### Guards that are redundant by construction, and why they are kept
+
+A gate that short-circuits earlier than a downstream check makes that check
+**unkillable** — no test can distinguish its presence from its absence — and
+unkillable code in an authorization file reads as coverage and is not. This has
+now happened twice on this file (`Md`/`Me`, then the two write handlers), so the
+class gets a table rather than a comment.
+
+The rule: a guard that a mutation cannot kill is either **deleted** (when both
+branches are genuinely equivalent) or **kept and listed here with the condition
+under which it becomes reachable**. It is never left silently unkillable.
+
+| Guard | Status | Disposition |
+|---|---|---|
+| `updateHandler` `isDenied` | **killable** — assertion 32 | GATE 1 decides *before* the before-hook loop, and a before-hook can change the verdict (mutating the record, or a predicate over per-request state). This is the only re-evaluation after that window, so it is a real guard, not defence in depth. |
+| `deleteHandler` `isDenied` | **killable** — assertion 33 | Same window. Deleting it destroys the record behind a 204. |
+| catch-all relationship routes (`Md`/`Me`) | deleted | Both branches returned a constant 404, so no distinguishing test could exist. If either route ever stops being a constant 404 it becomes an eighth surface and must filter the parent. |
+| create rollback: `store.get(...) === record` identity check | **survivor, retained** | GATE 0 refuses client-supplied ids under a filter, so no caller-chosen id reaches `createRecord` and nothing can occupy the slot between the create and the rollback. It becomes reachable the moment GATE 0 is narrowed — e.g. to permit ids for a subset of callers — and it is the only thing standing between the rollback and a deletion primitive. Mutating it (inverting the condition) **is** killed by assertion 14; only deleting it survives. |
+| create rollback: `createdNewSlot` check | **killable** — assertion 31 | `assignRecordId` returns last-INSERTED + 1, not max + 1 ([#203](https://github.com/abofs/stonyx-orm/issues/203)), so a server-assigned id can land on an occupied slot. GATE 0 cannot refuse that request — it supplied no id. |
 
 > **Known gap:** the predicate is evaluated against the record the route is
 > addressed to. It is **not** applied to related or included records — those

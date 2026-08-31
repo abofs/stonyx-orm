@@ -148,45 +148,85 @@ await Orm.db.save();
 
 ## 7. Access Control
 
+> **The url matching below is a STOPGAP.** This same example has failed **open**
+> in four distinct ways — mount-relative `url`, query string, case, and mount
+> prefix — each found only after the previous was fixed. All four are closed
+> here; that is not the same as being safe. See README "Matching the url" and
+> [#202](https://github.com/abofs/stonyx-orm/issues/202), which replaces url
+> matching with the model, operation and record.
+
 ```javascript
 // Illustrative — the shipped fixture is test/sample/access/global-access.ts,
 // which differs (it filters two models and uses a dedicated hidden subject).
+import config from 'stonyx/config';
+
+// VARIANT 4: build the prefix from the SAME value the ORM mounts under.
+// A hard-coded '/owners' matches nothing under ORM_REST_ROUTE=/api and the
+// filter enforces nothing — environment-specifically, which is worse than
+// failing everywhere.
+//
+// NOT `${config.orm.restServer.route}owners`: for the default route that is
+// '/owners' and looks right, but for '/api' it is '/apiowners'. An earlier
+// version of the README suggested exactly that, so a reader who followed the
+// correction still failed open and believed they had handled it.
+function collectionPrefix(name) {
+  const route = config.orm.restServer.route ?? '/';
+  const trimmed = String(route).replace(/^\/+|\/+$/g, '');
+
+  return `${trimmed === '' ? '' : `/${trimmed}`}/${name}`.toLowerCase();
+}
+
 export default class GlobalAccess {
   models = ['owner', 'animal']; // or '*' for all
 
   access(request) {
-    // `originalUrl`, NOT `url`. RestServer.mountRoute mounts each model as an
-    // Express sub-app, so `request.url` has the mount path STRIPPED:
-    // GET /owners/angela arrives here with url === '/angela'. A prefix match
-    // against `url` is therefore always false — the branch never fires,
-    // access() falls through to the permission array below, and the filter
-    // silently enforces nothing on any surface. It fails OPEN.
+    // VARIANT 1: `originalUrl`, NOT `url`. RestServer.mountRoute mounts each
+    // model as an Express sub-app, so `request.url` has the mount path
+    // STRIPPED: GET /owners/angela arrives here with url === '/angela'. A
+    // prefix match against `url` is therefore always false — the branch never
+    // fires, access() falls through to the permission array below, and the
+    // filter silently enforces nothing on any surface.
     //
-    // The query string is stripped too: `originalUrl` carries it, so a bare
+    // VARIANT 2: strip the query string. `originalUrl` carries it, so a bare
     // `=== '/owners'` misses `/owners?filter[age]=30` and that collection comes
-    // back UNFILTERED. Also fails open.
-    const path = request.originalUrl.split('?')[0];
+    // back UNFILTERED.
+    //
+    // VARIANT 3: compare lower-cased. RestServer mounts with a bare express(),
+    // whose default is caseSensitive:false, while originalUrl preserves the
+    // caller's case — so a case-SENSITIVE matcher is stricter than the router
+    // that dispatched the request and can be stepped around:
+    //   GET /owners/angela -> 404   but  GET /OwNeRs/angela -> 200, in full
+    //   DELETE /animals/22 -> 404   but  DELETE /ANIMALS/22 -> 204, destroyed
+    // Lower-case the PATH only; record ids stay case-sensitive.
+    // Router-side fix: abofs/stonyx-rest-server#47.
+    //
+    // Every one of the three fails OPEN.
+    const path = String(request.originalUrl ?? '').split('?')[0].toLowerCase();
+    const owners = collectionPrefix('owners');
 
     // Deny an entire surface outright → 403
-    if (path.startsWith('/owners/archived')) return false;
+    if (path.startsWith(`${owners}/archived`)) return false;
 
     // Per-record filter. Enforced on every surface ADDRESSED TO a record — the
     // collection, GET/PATCH/DELETE by id, and both relationship route families
     // — not on the collection alone. Match on the url PREFIX so the predicate is
     // returned for record routes too; endsWith('/owners') would leave
-    // /owners/angela unguarded. Anchored, so it cannot also catch
-    // /owners-archive.
+    // /owners/angela unguarded. Anchored on a `/` boundary, so it cannot also
+    // catch /owners-archive.
     //
     // A rejected record is 404 on record routes (indistinguishable from a
     // record that does not exist) and 403 on POST.
     //
-    // If ORM_REST_ROUTE is set, build the prefix from it — a hard-coded
-    // '/owners' fails open under /api.
-    if (path === '/owners' || path.startsWith('/owners/')) {
+    // NOTE: with a filter in force, a POST carrying a client-supplied `id` is
+    // refused with 403 whatever the payload — that is what stops POST being an
+    // id-enumeration oracle. Let the server assign the id.
+    if (path === owners || path.startsWith(`${owners}/`)) {
       return record => record.id !== 'angela';
     }
 
-    // Grant CRUD permissions
+    // Grant CRUD permissions. A bare string ('read') is ONE permission, not a
+    // grant of all four. Any shape that is not a boolean, a string, an array or
+    // a function returns 403 — unknown shapes fail closed.
     return ['read', 'create', 'update', 'delete'];
   }
 }
