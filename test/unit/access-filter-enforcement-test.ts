@@ -117,10 +117,17 @@ function seed() {
 }
 
 function cleanup() {
-  // Presence-checked: store.remove warns loudly for an absent id, and this
-  // runs before and after every test.
-  for (const id of [HIDDEN_ID, VISIBLE_ID, CREATE_ID]) {
-    if (store.get('animal', id)) store.remove('animal', id, { _skipAutoPersist: true });
+  // Sweeps the whole 9100-9199 band this file parks its subjects in, rather
+  // than a fixed id list. Several assertions now POST WITHOUT an id -- they have
+  // to, because a client-supplied id under a per-record filter is refused
+  // before createRecord is ever reached -- so the id a create lands on is
+  // assigned by assignRecordId and is not known to the caller in advance.
+  // A fixed list leaked those records into every later file.
+  const animals = store.get('animal') as Map<string | number, unknown> | undefined;
+  for (const key of Array.from(animals?.keys() ?? [])) {
+    if (typeof key === 'number' && key >= 9100 && key <= 9199) {
+      store.remove('animal', key, { _skipAutoPersist: true });
+    }
   }
 
   while (ownedOwners.length) {
@@ -128,6 +135,19 @@ function cleanup() {
     if (store.get('owner', id)) store.remove('owner', id, { _skipAutoPersist: true });
   }
 }
+
+// The ids currently held by the animal store, for assertions that must prove a
+// denied create added or removed NOTHING without knowing which id it would have
+// landed on.
+function animalIds() {
+  return Array.from((store.get('animal') as Map<string | number, unknown>).keys());
+}
+
+// An `access` that yields NO per-record filter -- the array shape. Used wherever
+// an assertion is about the unfiltered population: 409-on-collision, and the
+// raw-vs-normalised id lookup, both of which are unreachable through a
+// function-style filter now that GATE 0 refuses client-supplied ids.
+const noFilterAccess = () => ['read', 'create', 'update', 'delete'];
 
 module('[Unit] access filter enforced on every handler (#190)', function(hooks) {
   // Boots the app the same way every integration module does. Without it this
@@ -464,29 +484,38 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       const ormRequest = new OrmRequest({ model: 'animal', access });
       const handler = ormRequest.handlers.post['/'];
 
+      // NO `id` in the body, deliberately. GATE 0 now refuses a client-supplied
+      // id under a per-record filter BEFORE createRecord runs, so an id-bearing
+      // payload would return 403 without ever reaching the rollback -- the
+      // assertion would still be green and would have stopped testing the thing
+      // it is named for. The id-bearing case is assertion 22's subject.
+      const before = animalIds();
+
       const response = await dispatch(ormRequest, handler, makeRequest({
         method: 'POST',
         url: '/animals',
-        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+        body: { data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
       }));
 
       assert.strictEqual(response, 403, 'denied create is 403, explicitly not 404 (was: 200)');
-      assert.notOk(store.get('animal', CREATE_ID), 'denied create left no record behind (was: persisted)');
+      assert.deepEqual(animalIds(), before, 'denied create left no record behind (was: persisted)');
     });
 
     test('[GUARD] assertion 15 — POST passing the filter still succeeds and persists', async function(assert) {
       const ormRequest = new OrmRequest({ model: 'animal', access });
       const handler = ormRequest.handlers.post['/'];
 
+      const before = animalIds();
+
       const response = await dispatch(ormRequest, handler, makeRequest({
         method: 'POST',
         url: '/animals',
-        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+        body: { data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
       }));
 
       assert.notStrictEqual(response, 403, 'allowed create is not blocked');
-      assert.strictEqual(String(response.data.id), String(CREATE_ID), 'created record is returned');
-      assert.ok(store.get('animal', CREATE_ID), 'allowed create persisted the record');
+      assert.strictEqual(animalIds().length, before.length + 1, 'exactly one record was added');
+      assert.ok(store.get('animal', response.data.id), 'allowed create persisted the record at the id it reported');
     });
   });
 
@@ -626,10 +655,12 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
 
       const ormRequest = new OrmRequest({ model: 'animal', access });
 
+      // No `id`: an id-bearing payload is refused by GATE 0 before createRecord
+      // runs, which is a different code path and does not exercise GATE 2.
       const denied = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
         method: 'POST',
         url: '/animals',
-        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+        body: { data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
       }));
       assert.strictEqual(denied, 403, 'denied create is 403');
       assert.strictEqual(fired.length, 0, 'a denied create fires no afterCreate hook (was: 1, with response=403)');
@@ -661,10 +692,10 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
         method: 'POST',
         url: '/animals',
-        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+        body: { data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
       }));
 
-      assert.strictEqual(String(response.data.id), String(CREATE_ID), 'allowed create succeeds');
+      assert.ok(store.get('animal', response.data.id), 'allowed create succeeds');
       assert.strictEqual(fired.length, 1, 'exactly one afterCreate hook fired');
       assert.ok(fired[0].response, 'and it carries a response in context');
     });
@@ -709,41 +740,176 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
   // could leak"; a POST that COLLIDES has one.
   // =========================================================================
   module('create collision', function() {
-    test('[DEFECT] assertion 22 — POST colliding with a HIDDEN id is indistinguishable from POST against an id that never existed', async function(assert) {
+    test('[DEFECT] assertion 22 — the POST oracle is closed for EVERY payload, not just a denied one', async function(assert) {
+      // WHAT THE PREVIOUS VERSION OF THIS ASSERTION PROVED, AND WHY IT WAS NOT
+      // ENOUGH. It posted twice and both payloads carried `owner:"restricted"`,
+      // so both were DENIED creates and both were 403. It pinned the branch and
+      // not the property: the oracle is payload-dependent, and the one payload
+      // shape it used is the one shape that cannot exhibit it. Measured against
+      // the reviewed head with an ALLOWED payload — three-way distinguishable in
+      // ONE request per id:
+      //
+      //   POST {id: HIDDEN,  owner:'gina'} -> 403   a hidden record has this id
+      //   POST {id: MISSING, owner:'gina'} -> 200   this id is free
+      //   POST {id: VISIBLE, owner:'gina'} -> 409   a visible record has this id
+      //
+      // So this varies the payload across allowed AND denied, and the id across
+      // hidden, visible and free. Every cell must be the SAME status.
       const ormRequest = new OrmRequest({ model: 'animal', access });
       const handler = ormRequest.handlers.post['/'];
 
-      const post = id => dispatch(ormRequest, handler, makeRequest({
+      const post = (id, owner) => dispatch(ormRequest, handler, makeRequest({
         method: 'POST',
         url: '/animals',
-        body: { data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+        body: { data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner } } },
       }));
 
-      const collidesWithHidden = await post(HIDDEN_ID);
-      const neverExisted = await post(MISSING_ID);
+      const results = [];
+      for (const owner of ['gina', 'restricted']) {           // allowed / denied payload
+        for (const id of [HIDDEN_ID, VISIBLE_ID, MISSING_ID]) { // hidden / visible / free id
+          for (const shape of [id, String(id)]) {              // numeric / string-typed
+            results.push({ owner, id, shape, status: await post(shape, owner) });
+          }
+        }
+      }
 
-      assert.strictEqual(collidesWithHidden, 403, 'colliding with a hidden id is 403 (was: 409 — "record exists")');
-      assert.strictEqual(neverExisted, 403, 'a never-existed id is 403');
-      assert.strictEqual(collidesWithHidden, neverExisted,
-        'the two are equal — two unauthenticated requests per id no longer enumerate the id space');
-      assert.ok(store.get('animal', HIDDEN_ID), 'the colliding record was not touched');
-      assert.notOk(store.get('animal', MISSING_ID), 'the denied create left nothing behind');
+      const statuses = [...new Set(results.map(r => r.status))];
+      assert.deepEqual(statuses, [403],
+        'every (payload x id x id-type) cell is 403 — one status, so one request per id ' +
+        'distinguishes nothing (was: 403 hidden / 200 free / 409 visible under an ALLOWED payload)');
+
+      assert.ok(store.get('animal', HIDDEN_ID), 'the hidden colliding record was not touched');
+      assert.strictEqual(store.get('animal', VISIBLE_ID).age, 3, 'the visible colliding record was not touched');
+      assert.notOk(store.get('animal', MISSING_ID), 'no denied create left a record behind');
     });
 
-    test('[GUARD] assertion 23 — POST colliding with a VISIBLE id is still 409', async function(assert) {
-      // 409 discloses nothing the caller cannot already learn from GET /:id, so
-      // the conflict status is preserved exactly where it is safe. This also
-      // proves assertion 22 is not green merely because every POST is 403.
-      const ormRequest = new OrmRequest({ model: 'animal', access });
+    test('[GUARD] assertion 23 — the refusal is scoped to filtered callers: 409 and 200 both survive without a filter', async function(assert) {
+      // Proves assertion 22 is not green merely because every POST is 403 now,
+      // and pins the scope of GATE 0. An unfiltered caller — the population the
+      // oracle does not exist for, since there are no hidden records — keeps
+      // the documented 409-on-duplicate and still creates at a chosen id.
+      const ormRequest = new OrmRequest({ model: 'animal', access: noFilterAccess });
+      const handler = ormRequest.handlers.post['/'];
 
-      const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+      const conflict = await dispatch(ormRequest, handler, makeRequest({
         method: 'POST',
         url: '/animals',
         body: { data: { type: 'animal', id: VISIBLE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
       }));
+      assert.strictEqual(conflict, 409, 'an unfiltered caller still gets 409 on a duplicate id');
+      assert.strictEqual(store.get('animal', VISIBLE_ID).age, 3, 'and the existing record is unchanged');
 
-      assert.strictEqual(response, 409, 'colliding with a visible record is still 409');
-      assert.strictEqual(store.get('animal', VISIBLE_ID).age, 3, 'the existing visible record is unchanged');
+      const created = await dispatch(ormRequest, handler, makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+      }));
+      assert.strictEqual(String(created.data.id), String(CREATE_ID), 'and still creates at a client-supplied id');
+    });
+
+    test('[DEFECT] assertion 29 — a string-typed id cannot skip the collision lookup', async function(assert) {
+      // `createHandler` looked the collision up with the RAW body value while
+      // every other surface normalised through `getId()`. The store is a Map
+      // keyed by the coerced value, so `store.find(model, '9102')` missed the
+      // entry held under `9102`, the duplicate check was skipped, and
+      // createRecord took its last-entry-wins branch. On `dev` that silently
+      // OVERWROTE the colliding record and answered 200. Half of the blocker.
+      //
+      // Exercised through an UNFILTERED caller because that is the only caller
+      // that now reaches the lookup at all — which is also the population this
+      // silent-overwrite bug is live for.
+      const ormRequest = new OrmRequest({ model: 'animal', access: noFilterAccess });
+
+      const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id: String(VISIBLE_ID), attributes: { type: 1, age: 42, size: 'large', owner: 'restricted' } } },
+      }));
+
+      assert.strictEqual(response, 409, 'a string-typed duplicate id is 409, exactly as the numeric one is (was: 200)');
+      assert.strictEqual(store.get('animal', VISIBLE_ID).age, 3, 'and the colliding record was NOT overwritten (was: age 42)');
+    });
+
+    test('[DEFECT] assertion 30 — no POST payload can make a denied create remove a pre-existing record', async function(assert) {
+      // THE BLOCKER, as a property over the payload space rather than one case.
+      //
+      //   POST /animals {"id":"21", ..., "owner":"restricted"}
+      //     -> 403, and hidden record 21 is DELETED.
+      //
+      // The rollback required for a denied create was implemented as
+      // `store.remove(model, record.id)`. Keyed by a caller-supplied value that
+      // the collision lookup could be made to skip, a rollback IS a write
+      // primitive: the 403 branch became the destructor, and an unauthenticated
+      // caller could delete any id, hidden or not, with no DELETE request.
+      //
+      // Verified against `dev` by the reviewer: `dev` only ever OVERWRITES here.
+      // The deletion is introduced by the rollback, so it must be pinned over
+      // the whole payload space and not just the one shape that found it.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const handler = ormRequest.handlers.post['/'];
+
+      const hiddenBefore = store.get('animal', HIDDEN_ID);
+      const visibleBefore = store.get('animal', VISIBLE_ID);
+
+      for (const owner of ['restricted', 'gina', undefined]) {
+        for (const id of [HIDDEN_ID, VISIBLE_ID, MISSING_ID, 0]) {
+          for (const shape of [id, String(id)]) {
+            await dispatch(ormRequest, handler, makeRequest({
+              method: 'POST',
+              url: '/animals',
+              body: { data: { type: 'animal', id: shape, attributes: { type: 1, age: 77, size: 'small', owner } } },
+            }));
+
+            assert.strictEqual(store.get('animal', HIDDEN_ID), hiddenBefore,
+              `hidden record survives POST id=${JSON.stringify(shape)} owner=${owner} (was: DELETED for a string-typed id)`);
+            assert.strictEqual(store.get('animal', VISIBLE_ID), visibleBefore,
+              `visible record survives POST id=${JSON.stringify(shape)} owner=${owner}`);
+          }
+        }
+      }
+
+      assert.strictEqual(store.get('animal', HIDDEN_ID).age, 2, 'and the hidden record was not overwritten either');
+    });
+
+    test('[DEFECT] assertion 31 — the rollback removes only a slot THIS request created', async function(assert) {
+      // The other half of the blocker, and the half that survives GATE 0.
+      //
+      // `assignRecordId` returns last-INSERTED + 1, not max + 1, so a store
+      // whose insertion order is not ascending hands a create an id that is
+      // ALREADY TAKEN. createRecord then mutates that record in place. The
+      // rollback used to `store.remove` it — destroying a pre-existing record
+      // for a request that supplied no id at all, which GATE 0 therefore cannot
+      // refuse.
+      //
+      // Identity alone does NOT catch this: the overwrite is in place, so
+      // `store.get(model, record.id) === record` is true for a record this
+      // request did not create. The store's size is the signal that separates an
+      // insert from an overwrite.
+      //
+      // LIMIT OF THIS ASSERTION, stated: the pre-existing record's ATTRIBUTES
+      // are still clobbered by the colliding assignRecordId — that is a distinct
+      // pre-existing defect, filed as abofs/stonyx-orm#203 and not fixed here.
+      // This pins the ROLLBACK only: a 403 must not remove the slot.
+      const OCCUPIED = 9104;
+      const LAST = 9103;
+      createRecord('animal', { id: OCCUPIED, type: 1, age: 5, size: 'small', owner: 'gina', traits: [] }, { serialize: false, _skipAutoPersist: true });
+      createRecord('animal', { id: LAST, type: 1, age: 6, size: 'small', owner: 'gina', traits: [] }, { serialize: false, _skipAutoPersist: true });
+
+      // Predecessor assertion rather than re-implementing assignRecordId: the
+      // id a no-id create lands on is last-inserted + 1, and that slot is taken.
+      assert.strictEqual(animalIds().at(-1), LAST, 'the last INSERTED animal is 9103, not the highest id');
+      assert.ok(store.get('animal', OCCUPIED), 'and 9104 — which is 9103 + 1 — is already occupied');
+
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+      }));
+
+      assert.strictEqual(response, 403, 'the create is denied');
+      assert.ok(store.get('animal', OCCUPIED),
+        'the pre-existing record it collided with was NOT removed by the rollback (was: DELETED — a 403 that destroys a record no request named)');
     });
   });
 
@@ -776,12 +942,17 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       }));
       assert.strictEqual(badRequest, 400, 'a POST with no type is 400');
 
-      const conflict = await dispatch(ormRequest, handler, makeRequest({
+      // The 409 half must come from an UNFILTERED caller. Under a per-record
+      // filter a client-supplied id is now refused by GATE 0 with a 403, so
+      // asking the filtered request for a 409 would silently turn this into a
+      // second 403 case and stop pinning the `>= 400` boundary at 409 at all.
+      const unfiltered = new OrmRequest({ model: 'animal', access: noFilterAccess });
+      const conflict = await dispatch(unfiltered, unfiltered.handlers.post['/'], makeRequest({
         method: 'POST',
         url: '/animals',
         body: { data: { type: 'animal', id: VISIBLE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
       }));
-      assert.strictEqual(conflict, 409, 'a POST colliding with a visible record is 409');
+      assert.strictEqual(conflict, 409, 'a POST colliding with an existing record is 409');
 
       assert.strictEqual(persistStub.getCalls().filter(call => call.args[0] === 'create').length, 0,
         'neither the 400 nor the 409 reached persist');
@@ -796,14 +967,15 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // so the only part of it that touches SQL was the untested part.
       const ormRequest = new OrmRequest({ model: 'animal', access });
 
+      const before = animalIds();
       const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
         method: 'POST',
         url: '/animals',
-        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+        body: { data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
       }));
 
       assert.strictEqual(response, 403, 'denied create is 403');
-      assert.notOk(store.get('animal', CREATE_ID), 'the record was rolled back out of the store');
+      assert.deepEqual(animalIds(), before, 'the record was rolled back out of the store');
       assert.strictEqual(persistStub.getCalls().filter(call => call.args[0] === 'delete').length, 0,
         'the rollback issued no delete persist');
       assert.strictEqual(persistStub.getCalls().filter(call => call.args[0] === 'create').length, 0,
@@ -835,6 +1007,227 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
 
       const visible = await dispatch(ormRequest, handler, makeRequest({ url: `/animals/${VISIBLE_ID}`, params: { id: String(VISIBLE_ID) } }));
       assert.strictEqual(String(visible.data.id), String(VISIBLE_ID), 'a record the predicate does not throw on is unaffected');
+    });
+  });
+
+  // =========================================================================
+  // The per-handler guards GATE 1 shadows (assertions 32-33)
+  //
+  // Deleting `if (isDenied(filter, found)) return 404` from updateHandler and
+  // `if (isDenied(filter, record)) return 404` from deleteHandler — separately
+  // OR together — left the whole suite at 909/0. That is the `Md`/`Me` finding
+  // again: unkillable code in an authorization diff reads as coverage and is
+  // not. Deleting them is the WRONG remedy here, because unlike `Md`/`Me` (whose
+  // both branches returned the same 404) these are reachable and load-bearing.
+  //
+  // WHAT MAKES THEM REACHABLE. GATE 1 computes its verdict BEFORE the
+  // before-hook loop. `beforeHook` is a published extension point, and a
+  // before-hook can change the answer — by mutating the record, or against a
+  // predicate closing over per-request state. Between GATE 1 and the handler
+  // there is a window in which the filter's verdict can flip from allow to deny,
+  // and the handler check is the ONLY re-evaluation after it. Both assertions
+  // below drive exactly that window, and both go red if the check is deleted.
+  // =========================================================================
+  module('per-handler guards behind GATE 1', function(guardHooks) {
+    let unsubscribes;
+
+    guardHooks.beforeEach(function() { unsubscribes = []; });
+    guardHooks.afterEach(function() { while (unsubscribes.length) unsubscribes.pop()(); });
+
+    // Allows everything until `hide` flips, then denies TARGET. GATE 1 reads it
+    // before the hooks run, the handler reads it after.
+    function flippingAccess(state, targetId) {
+      return () => record => !(state.hide && String(record.id) === String(targetId));
+    }
+
+    test('[GUARD] assertion 32 — updateHandler re-checks the filter after the before-hooks, and a denial there still 404s', async function(assert) {
+      const state = { hide: false };
+      const ormRequest = new OrmRequest({ model: 'animal', access: flippingAccess(state, VISIBLE_ID) });
+      unsubscribes.push(beforeHook('update', 'animal', () => { state.hide = true; }));
+
+      const before = store.get('animal', VISIBLE_ID).age;
+      const response = await dispatch(ormRequest, ormRequest.handlers.patch['/:id'], makeRequest({
+        method: 'PATCH',
+        url: `/animals/${VISIBLE_ID}`,
+        params: { id: String(VISIBLE_ID) },
+        body: { data: { attributes: { age: 999 } } },
+      }));
+
+      assert.strictEqual(response, 404,
+        'a predicate that turns denying inside the before-hook window still 404s — GATE 1 already passed, ' +
+        'so deleting updateHandler\'s own isDenied applies the update instead');
+      assert.strictEqual(store.get('animal', VISIBLE_ID).age, before, 'and no attribute was applied');
+    });
+
+    test('[GUARD] assertion 33 — deleteHandler re-checks the filter after the before-hooks, and a denial there still 404s', async function(assert) {
+      const state = { hide: false };
+      const ormRequest = new OrmRequest({ model: 'animal', access: flippingAccess(state, VISIBLE_ID) });
+      unsubscribes.push(beforeHook('delete', 'animal', () => { state.hide = true; }));
+
+      const response = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+        method: 'DELETE',
+        url: `/animals/${VISIBLE_ID}`,
+        params: { id: String(VISIBLE_ID) },
+      }));
+
+      assert.strictEqual(response, 404, 'the delete is refused at the handler, past GATE 1');
+      assert.ok(store.get('animal', VISIBLE_ID),
+        'and the record survives — deleting deleteHandler\'s own isDenied destroys it behind a 204');
+    });
+
+    test('[GUARD] assertion 34 — the same two requests SUCCEED when the before-hook does not flip the predicate', async function(assert) {
+      // Proves 32 and 33 can fail in the opposite direction: they are not green
+      // because this harness refuses every write.
+      const state = { hide: false };
+      const ormRequest = new OrmRequest({ model: 'animal', access: flippingAccess(state, VISIBLE_ID) });
+      unsubscribes.push(beforeHook('update', 'animal', () => {}));
+
+      const patched = await dispatch(ormRequest, ormRequest.handlers.patch['/:id'], makeRequest({
+        method: 'PATCH',
+        url: `/animals/${VISIBLE_ID}`,
+        params: { id: String(VISIBLE_ID) },
+        body: { data: { attributes: { age: 999 } } },
+      }));
+      assert.strictEqual(store.get('animal', VISIBLE_ID).age, 999, 'the update applies when nothing flips');
+      assert.notStrictEqual(patched, 404, 'and the response is not a 404');
+
+      const deleted = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+        method: 'DELETE',
+        url: `/animals/${VISIBLE_ID}`,
+        params: { id: String(VISIBLE_ID) },
+      }));
+      assert.strictEqual(deleted, 204, 'and the delete succeeds');
+    });
+  });
+
+  // =========================================================================
+  // auth() failure modes (assertions 35-36)
+  // =========================================================================
+  module('auth() shape and failure handling', function() {
+    test('[DEFECT] assertion 35 — auth() fails CLOSED for every access shape it does not implement', async function(assert) {
+      // `AccessMethod` declares `string` legal and lists it FIRST, so
+      // `return 'read'` is the natural reading of the type. It fell through
+      // `!access`, `Array.isArray` and `typeof === 'function'` and returned
+      // undefined — i.e. FULL CRUD, no filter. `return 'read'` GRANTED DELETE.
+      // An object or a number did the same.
+      const auth = (value, method) => {
+        const ormRequest = new OrmRequest({ model: 'animal', access: () => value });
+        return ormRequest.auth(makeRequest({ method, url: '/animals/1', params: { id: '1' } }), {});
+      };
+
+      assert.strictEqual(auth('read', 'DELETE'), 403,
+        "a bare string is ONE permission, not a grant of all four (was: undefined — DELETE allowed)");
+      assert.strictEqual(auth('read', 'GET'), undefined, 'and it does grant the permission it names');
+      assert.strictEqual(auth('delete', 'DELETE'), undefined, 'for any of the four');
+
+      assert.strictEqual(auth({}, 'DELETE'), 403, 'an object fails closed (was: undefined — DELETE allowed)');
+      assert.strictEqual(auth({}, 'GET'), 403, 'on reads too');
+      assert.strictEqual(auth(1, 'DELETE'), 403, 'a number fails closed (was: undefined)');
+
+      assert.strictEqual(auth(true, 'DELETE'), undefined, 'and `true` still means full access');
+      assert.strictEqual(auth(false, 'GET'), 403, 'and `false` still denies');
+    });
+
+    test('[DEFECT] assertion 36 — an access() that THROWS is a denial, not a 500', async function(assert) {
+      // `isDenied` was hardened to fail closed; `auth()` was not. The documented
+      // sample itself can throw — `request.originalUrl.split(...)` when
+      // originalUrl is absent — so this is reachable by following the docs, and
+      // an uncaught throw reaches express's default 500 handler.
+      const ormRequest = new OrmRequest({ model: 'animal', access: () => { throw new TypeError('boom'); } });
+
+      let thrown = null;
+      let status;
+      try {
+        status = ormRequest.auth(makeRequest({ url: '/animals', params: {} }), {});
+      } catch (error) {
+        thrown = error;
+      }
+
+      assert.strictEqual(thrown, null, 'auth() does not propagate (was: TypeError escaped to express -> 500)');
+      assert.strictEqual(status, 403, 'and answers 403');
+    });
+  });
+
+  // =========================================================================
+  // The shipped sample matcher (assertions 37-38)
+  //
+  // Variants 3 and 4 of four fail-open shapes found in one three-line example.
+  // These pin the fixture, which is the sample the README and usage-patterns
+  // docs teach. See the header of test/sample/access/global-access.ts and
+  // abofs/stonyx-orm#202 — the matcher is a stopgap, not a safe pattern.
+  // =========================================================================
+  module('sample matcher fail-open variants', function() {
+    test('[DEFECT] assertion 37 — the matcher is case-insensitive, because the ROUTER is', async function(assert) {
+      // `RestServer` mounts with a bare `express()`, whose default is
+      // `caseSensitive: false`, while `originalUrl` preserves the caller's case.
+      // A case-SENSITIVE matcher therefore does not fire, `access()` falls
+      // through to `['read','create','update','delete']`, and there is no filter
+      // on any surface at once. Measured over a raw socket on the reviewed head:
+      //
+      //   GET    /owners/angela -> 404      GET    /OwNeRs/angela -> 200, angela in full
+      //   GET    /OWNERS        -> all 5    DELETE /ANIMALS/22    -> 204, record destroyed
+      //
+      // That last one is #190 verbatim, reachable by shifting one character.
+      for (const url of ['/OwNeRs/angela', '/OWNERS', '/Owners?filter[age]=30', '/ANIMALS/22', '/Animals']) {
+        assert.strictEqual(typeof globalAccess.access(makeRequest({ url })), 'function',
+          `${url} still yields a per-record filter (was: an array — full CRUD, no filter at all)`);
+      }
+
+      // Over the real handler, not just the matcher: the record stays hidden.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const response = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+        method: 'DELETE',
+        url: `/ANIMALS/${HIDDEN_ID}`,
+        params: { id: String(HIDDEN_ID) },
+      }));
+      assert.strictEqual(response, 404, 'DELETE /ANIMALS/:id on a hidden record is 404 (was: 204)');
+      assert.ok(store.get('animal', HIDDEN_ID), 'and the record survives (was: DESTROYED)');
+
+      // And it must not have become a match-everything: a sibling collection is
+      // still unfiltered, and record ids are NOT lower-cased.
+      assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/owners-archive' })), 'object',
+        'a sibling collection is still not matched');
+      assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/xowners' })), 'object',
+        'and neither is an unanchored one');
+    });
+
+    test('[DEFECT] assertion 38 — the matcher builds its prefix from ORM_REST_ROUTE rather than hard-coding it', async function(assert) {
+      // Under `ORM_REST_ROUTE=/api` every url becomes `/api/owners/...`, a
+      // hard-coded `/owners` matches nothing, and the sample enforces NOTHING —
+      // environment-specifically, which is worse than failing everywhere.
+      //
+      // And the remediation the README used to give was itself broken:
+      // `` `${config.orm.restServer.route}owners` `` is `/apiowners`. A reader
+      // who followed the correction exactly still failed open and believed they
+      // had handled it. That expression is asserted wrong here so it cannot come
+      // back.
+      const original = config.orm.restServer.route;
+      try {
+        config.orm.restServer.route = '/api';
+
+        assert.notStrictEqual(`${config.orm.restServer.route}owners`, '/api/owners',
+          "the README's old expression evaluates to /apiowners, not /api/owners");
+
+        for (const url of ['/api/owners', '/api/owners/angela', '/api/animals', '/api/animals/22', '/API/Owners']) {
+          assert.strictEqual(typeof globalAccess.access(makeRequest({ url })), 'function',
+            `${url} yields a per-record filter under ORM_REST_ROUTE=/api (was: an array — no filter)`);
+        }
+
+        assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/owners' })), 'object',
+          'and the unprefixed path no longer matches, because it is no longer a mounted route');
+        assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/apiowners' })), 'object',
+          'and the broken remediation string matches nothing');
+
+        // Trailing-slash form of the same config value must behave identically.
+        config.orm.restServer.route = '/api/';
+        assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/api/owners/angela' })), 'function',
+          'a trailing slash on the configured route does not break the prefix');
+      } finally {
+        config.orm.restServer.route = original;
+      }
+
+      assert.strictEqual(typeof globalAccess.access(makeRequest({ url: '/owners/angela' })), 'function',
+        'and the default route is restored and still matches');
     });
   });
 

@@ -626,40 +626,52 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('post call with existing id returns 409 conflict', async function(assert) {
-      // First, create a record with a specific id
-      const firstAnimal = {
-        data: {
-          type: 'animal',
-          id: 9999,
-          attributes: { type: 'dog', age: 2, size: 'small', owner: 'bob' }
-        }
+      // RETARGETED FROM /animals TO /traits, and the reason is a BEHAVIOUR
+      // CHANGE, not a convenience. `/animals` carries a function-style `access`
+      // filter in the shipped fixture, and under such a filter a client-supplied
+      // POST id is now refused with 403 before the collision lookup runs — that
+      // is what closes the POST existence oracle (#190), and it is asserted in
+      // its own right two modules below and in the unit tier's assertion 22.
+      // `/traits` is unfiltered, so this keeps asserting exactly what its name
+      // says: a duplicate client-supplied id is a 409.
+      const first = {
+        data: { type: 'trait', id: 9999, attributes: { type: 'habitat', value: 'farm', category: 'physical' } }
       };
-      const firstResponse = await fetch(`${endpoint}/animals`, {
+      const firstResponse = await fetch(`${endpoint}/traits`, {
         method: 'post',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(firstAnimal)
+        body: JSON.stringify(first)
       });
 
       assert.equal(firstResponse.status, 200, 'first creation succeeds');
 
       // Attempt to create another record with the same id
-      const duplicateAnimal = {
-        data: {
-          type: 'animal',
-          id: 9999,
-          attributes: { type: 'cat', age: 5, size: 'large', owner: 'gina' }
-        }
+      const duplicate = {
+        data: { type: 'trait', id: 9999, attributes: { type: 'color', value: 'black', category: 'appearance' } }
       };
-      const duplicateResponse = await fetch(`${endpoint}/animals`, {
+      const duplicateResponse = await fetch(`${endpoint}/traits`, {
         method: 'post',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(duplicateAnimal)
+        body: JSON.stringify(duplicate)
       });
 
       assert.equal(duplicateResponse.status, 409, 'duplicate id returns 409 conflict');
 
+      // And a STRING-typed duplicate is the same 409. The lookup used the raw
+      // body value while the store is keyed by the coerced one, so `"9999"`
+      // missed the entry, skipped the check and silently OVERWROTE the record
+      // with a 200.
+      const stringTyped = await fetch(`${endpoint}/traits`, {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'trait', id: '9999', attributes: { type: 'color', value: 'white', category: 'appearance' } } })
+      });
+
+      assert.equal(stringTyped.status, 409, 'a string-typed duplicate id is 409 too (was: 200, and the record was overwritten)');
+      assert.equal(store.get('trait', 9999).value, 'farm', 'and the existing record is unchanged (was: overwritten)');
+
       // Cleanup
-      store.remove('animal', 9999);
+      store.remove('trait', 9999);
     });
 
     test('post call without id increments from last record id', async function(assert) {
@@ -842,13 +854,21 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('nested includes handle null relationships gracefully', async function(assert) {
-      // Create an animal without traits
+      // Create an animal without traits.
+      //
+      // No client-supplied `id`, and that is a BEHAVIOUR CHANGE rather than a
+      // tidy-up: `/animals` carries a function-style `access` filter, and under
+      // one a client-supplied POST id is now refused with 403 before the
+      // collision lookup runs. That is what closes the POST existence oracle
+      // (#190). This test is about include= resolution, not about ids, so it
+      // takes the server-assigned id from the response — which it already did.
       const createResponse = await fetch(`${endpoint}/animals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { type: 'animal', id: 999, attributes: { type: 1, age: 1, size: 'tiny', owner: 'bob' } } })
+        body: JSON.stringify({ data: { type: 'animal', attributes: { type: 1, age: 1, size: 'tiny', owner: 'bob' } } })
       });
 
+      assert.equal(createResponse.status, 200, 'a create without a client-supplied id still succeeds under a filter');
       const { data: created } = await createResponse.json();
 
       // Try to include traits.metadata (traits doesn't exist, metadata doesn't exist)
@@ -859,7 +879,7 @@ module('[Integration] ORM', function(hooks) {
       // Should not crash even if traits.metadata doesn't exist
 
       // Cleanup
-      store.remove('animal', 999);
+      store.remove('animal', created.id);
     });
 
     test('get call with fields parameter returns only specified fields', async function(assert) {
@@ -1309,14 +1329,20 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('[DEFECT] POST failing the filter is 403 and leaves no record behind', async function(assert) {
+      // No `id` in the body. An id-bearing POST under a per-record filter is now
+      // refused before createRecord runs (see the oracle assertions below), so
+      // an id-bearing payload would be 403 without ever reaching the rollback —
+      // green, and no longer testing the rollback it is named for.
+      const before = store.get('animal').size;
+
       const response = await fetch(`${endpoint}/animals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { type: 'animal', id: 7801, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } })
+        body: JSON.stringify({ data: { type: 'animal', attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } })
       });
 
       assert.equal(response.status, 403, 'denied create is 403, deliberately not 404');
-      assert.notOk(store.get('animal', 7801), 'the record was rolled back out of the store');
+      assert.equal(store.get('animal').size, before, 'the record was rolled back out of the store');
     });
 
     test('[GUARD] a visible record is untouched on every surface (over-blocking)', async function(assert) {
@@ -1343,42 +1369,100 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(hidden.status, missing.status, 'the two are indistinguishable');
     });
 
-    test('[DEFECT] POST colliding with a HIDDEN id is indistinguishable from POST against an id that never existed', async function(assert) {
-      // createHandler's duplicate-id check runs BEFORE the filter and store.find
-      // sees hidden records, so an unconditional 409 left POST a complete
-      // existence oracle even with GET /:id correctly answering 404:
-      //   GET /animals/21 -> 404, POST {id:21} -> 409, POST {id:novel} -> 403.
-      // Two unauthenticated requests per id enumerated the whole id space.
-      const post = id => fetch(`${endpoint}/animals`, {
+    test('[DEFECT] the POST oracle is closed for EVERY payload, over the real dispatch', async function(assert) {
+      // The previous version of this test posted twice and BOTH payloads carried
+      // `owner:"restricted"` — both denied creates, both 403. It pinned the
+      // branch, not the property. The oracle is payload-DEPENDENT: with a
+      // payload the caller is permitted to create, the three outcomes are fully
+      // distinguishable in one request per id. Measured on the reviewed head:
+      //
+      //   POST {id: 21,   owner:'gina'} -> 403   a HIDDEN record has this id
+      //   POST {id: 7803, owner:'gina'} -> 200   this id is FREE
+      //   POST {id: 7802, owner:'gina'} -> 409   a VISIBLE record has this id
+      //
+      // A client-supplied id under a per-record filter is now refused
+      // unconditionally, before any store lookup, with the same 403 a denied
+      // create returns. So no status — and no lookup cost — depends on whether
+      // the id exists.
+      const post = (id, owner) => fetch(`${endpoint}/animals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } })
+        body: JSON.stringify({ data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner } } })
       });
 
       const readHidden = await fetch(`${endpoint}/animals/${HIDDEN}`);
-      const collides = await post(HIDDEN);
-      const novel = await post(COLLIDE);
-
       assert.equal(readHidden.status, 404, 'GET on the hidden record says it does not exist');
-      assert.equal(collides.status, 403, 'POST colliding with it says the same thing (was 409 — "record exists")');
-      assert.equal(novel.status, 403, 'POST against an id that really does not exist is 403');
-      assert.equal(collides.status, novel.status, 'the two are indistinguishable — the oracle is closed');
-      assert.ok(store.get('animal', HIDDEN), 'the colliding hidden record was not touched');
-      assert.notOk(store.get('animal', COLLIDE), 'the denied create left nothing behind');
+
+      const cells = [];
+      for (const owner of ['gina', 'restricted']) {
+        for (const id of [HIDDEN, VISIBLE, COLLIDE]) {
+          for (const shape of [id, String(id)]) {
+            cells.push((await post(shape, owner)).status);
+          }
+        }
+      }
+
+      assert.deepEqual([...new Set(cells)], [403],
+        'every (payload x id x id-type) cell is 403 (was: 403 hidden / 200 free / 409 visible under an ALLOWED payload)');
+      assert.ok(store.get('animal', HIDDEN), 'the hidden colliding record was not touched');
+      assert.ok(store.get('animal', VISIBLE), 'nor the visible one');
+      assert.notOk(store.get('animal', COLLIDE), 'and no denied create left a record behind');
     });
 
-    test('[GUARD] POST colliding with a VISIBLE id is still 409', async function(assert) {
-      // 409 discloses nothing a caller cannot already learn from GET /:id, so it
-      // is preserved exactly where it is safe. Also proves the assertion above
-      // is not green merely because every POST is 403.
-      const response = await fetch(`${endpoint}/animals`, {
+    test('[GUARD] the refusal is scoped to filtered callers: an unfiltered collection still answers 409', async function(assert) {
+      // Proves the assertion above is not green merely because every POST is 403
+      // now. `/traits` carries no function-style filter, so the documented
+      // 409-on-duplicate is intact for the population the oracle does not exist
+      // for. The pre-existing `post call with existing id returns 409 conflict`
+      // covers the same ground from the other direction.
+      const created = await fetch(`${endpoint}/traits`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: { type: 'animal', id: VISIBLE, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } })
+        body: JSON.stringify({ data: { type: 'trait', id: 7810, attributes: { type: 'habitat', value: 'farm', category: 'physical' } } })
       });
+      assert.equal(created.status, 200, 'an unfiltered collection still creates at a client-supplied id');
 
-      assert.equal(response.status, 409, 'colliding with a visible record is still 409');
-      assert.equal(store.get('animal', VISIBLE).age, 5, 'the existing visible record is unchanged');
+      const conflict = await fetch(`${endpoint}/traits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'trait', id: 7810, attributes: { type: 'color', value: 'black', category: 'appearance' } } })
+      });
+      assert.equal(conflict.status, 409, 'and still answers 409 on a duplicate');
+
+      store.remove('trait', 7810, { _skipAutoPersist: true });
+    });
+
+    test('[DEFECT] a case-varied path cannot walk past the filter, over the real router', async function(assert) {
+      // THE STRONGEST FORM OF VARIANT 3, and the reason it belongs in the
+      // integration tier rather than only against the matcher: `RestServer`
+      // mounts with a bare `express()`, whose default is `caseSensitive: false`,
+      // so express ROUTES `/ANIMALS/21` to the same handler while `originalUrl`
+      // hands the sample the caller's case. A case-sensitive matcher does not
+      // fire, `access()` falls through to a full CRUD grant, and there is no
+      // filter on any surface at once. Measured on the reviewed head:
+      //
+      //   GET /animals/21 -> 404          GET /ANIMALS/21 -> 200, id=21
+      //   GET /owners     -> 3 owners     GET /OWNERS     -> all 5
+      //   DELETE /animals/22 -> 404       DELETE /ANIMALS/22 -> 204, DESTROYED
+      //
+      // That last pair is #190 verbatim, reachable by shifting one character.
+      const lower = await fetch(`${endpoint}/animals/${HIDDEN}`);
+      const upper = await fetch(`${endpoint}/ANIMALS/${HIDDEN}`);
+      const mixed = await fetch(`${endpoint}/AnImAlS/${HIDDEN}`);
+
+      assert.equal(lower.status, 404, 'the canonical path is 404');
+      assert.equal(upper.status, 404, 'and so is the upper-cased one (was: 200, with the hidden record in full)');
+      assert.equal(mixed.status, 404, 'and the mixed-case one');
+
+      const collection = await fetch(`${endpoint}/ANIMALS`);
+      const { data } = await collection.json();
+      assert.equal(collection.status, 200, 'the collection still routes');
+      assert.notOk(data.some(record => Number(record.id) === HIDDEN),
+        'and the hidden record is absent from it (was: INCLUDED)');
+
+      const destroy = await fetch(`${endpoint}/ANIMALS/${HIDDEN}`, { method: 'DELETE' });
+      assert.equal(destroy.status, 404, 'DELETE /ANIMALS/:id on a hidden record is 404 (was: 204)');
+      assert.ok(store.get('animal', HIDDEN), 'and the record survives (was: DESTROYED)');
     });
 
     test('[DEFECT] a denied write runs no consumer hook, over the real dispatch', async function(assert) {

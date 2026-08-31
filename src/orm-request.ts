@@ -92,6 +92,30 @@ function getId(params: { id?: string; [key: string]: unknown }): string | number
   return parseInt(id);
 }
 
+/**
+ * Normalise a caller-supplied BODY id to the key the store will hold it under.
+ *
+ * `getId()` above is params-shaped: it takes `{ id?: string }` off the URL,
+ * where the value is always a string and a falsy one means "no id". A JSON body
+ * id is neither -- it can arrive as a number, and `0` is a legitimate id that
+ * `getId()` would flatten to `''`.
+ *
+ * WHY THIS EXISTS AT ALL. createHandler used to look the collision up with the
+ * RAW body value while every other surface normalised through `getId()`. The
+ * store is a Map keyed by the coerced value, so `store.find(model, '21')` misses
+ * the entry held under `21` and the duplicate check is skipped by typing the id
+ * as a string. On `dev` that silently overwrote the colliding record and
+ * answered 200; combined with the denied-create rollback added for #190 it
+ * became an unauthenticated DELETE of any id. Normalising here is half of that
+ * fix -- see the rollback in createHandler for the other half.
+ */
+function normalizeBodyId(id: string | number): string | number {
+  if (typeof id === 'number') return id;
+  if (typeof id !== 'string' || id.trim() === '') return id;
+
+  return isNaN(id as unknown as number) ? id : parseInt(id, 10);
+}
+
 function buildResponse(
   data: unknown,
   includeParam: string | undefined,
@@ -345,24 +369,46 @@ export default class OrmRequest extends Request {
       const fieldsMap = parseFields(query);
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-      // Check for duplicate ID.
+      // GATE 0 -- the POST existence oracle.
       //
       // The duplicate check runs before the filter and `store.find` sees hidden
-      // records, so an unconditional 409 makes POST a complete existence oracle
-      // even though GET /:id is now correctly 404:
+      // records, so POST leaks existence through its STATUS. A previous revision
+      // filtered the collision status (403 when the colliding record is denied,
+      // 409 when it is visible) and that is NOT sufficient, because the status
+      // of a create is a third outcome. With a payload the caller is permitted
+      // to create -- the normative case for a per-tenant filter, and the case an
+      // attacker picks -- all three are distinguishable in ONE request per id:
       //
-      //   GET  /animals/9101        -> 404   "there is no record 9101"
-      //   POST /animals {id:9101}   -> 409   "record 9101 exists"
-      //   POST /animals {id:9199}   -> 403   "record 9199 does not exist"
+      //   POST /animals {id:22,   owner:'gina'} -> 403   a HIDDEN record has this id
+      //   POST /animals {id:9500, owner:'gina'} -> 200   this id is FREE
+      //   POST /animals {id:8,    owner:'gina'} -> 409   a VISIBLE record has this id
       //
-      // Two unauthenticated requests per id enumerate the whole id space. So:
-      // 403 when the colliding record is itself denied -- indistinguishable from
-      // a denied create against a novel id -- and 409 only when the record is
-      // VISIBLE, where the caller can already GET it and 409 discloses nothing
-      // they do not already have.
+      // Filtering only the collision status narrows that to callers who cannot
+      // create a record they are allowed to see. It does not close it.
+      //
+      // It cannot be closed while a caller both chooses the id and learns
+      // whether the create succeeded: a successful create must answer
+      // differently from a refused one. So when a per-record filter is in force
+      // the caller does not get to choose the id at all. The refusal is
+      // UNCONDITIONAL and happens BEFORE any store lookup, so no status, and no
+      // lookup cost, can depend on whether that id exists. 403 -- the same
+      // status as a denied create -- so the two cannot be separated either.
+      //
+      // Scoped to function-style `access` because that is exactly the population
+      // the oracle exists for: with no per-record filter there are no hidden
+      // records, and 409 discloses nothing GET /:id does not already.
+      //
+      // RESIDUAL, stated rather than implied: a caller can still learn that a
+      // collection HAS a per-record filter (403 rather than 409/200 for an
+      // id-bearing POST). That discloses a configuration fact, not a record.
+      // See README `### Known limitations`.
       if (id !== undefined) {
-        const existing = await store.find(model, id);
-        if (existing) return isDenied(filter, existing) ? 403 : 409; // Forbidden / Conflict
+        if (typeof filter === 'function') return 403; // Forbidden
+
+        // `normalizeBodyId`, not the raw value: a string-typed id misses the
+        // store's numeric key, which skipped this check entirely.
+        const existing = await store.find(model, normalizeBodyId(id));
+        if (existing) return 409; // Conflict
       }
 
       const { id: _ignoredId, ...sanitizedAttributes } = attributes || {};
@@ -378,9 +424,21 @@ export default class OrmRequest extends Request {
       }
 
       const recordAttributes = id !== undefined ? { id, ...sanitizedAttributes } : sanitizedAttributes;
+
+      // Slot count BEFORE the write. `createRecord` writes to the store before
+      // the predicate can run, and the rollback below must be able to prove the
+      // slot it removes is one THIS REQUEST created. Identity alone cannot
+      // prove it: when `assignRecordId` lands on an occupied id, `createRecord`
+      // mutates the existing OrmRecord IN PLACE, so `store.get(...) === record`
+      // is true for a record the request did not create. The map's size is the
+      // only O(1) signal that distinguishes an insert from an overwrite.
+      const slotsBefore = (store.get(model) as Map<string | number, unknown> | undefined)?.size ?? 0;
+
       const created = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false, _skipAutoPersist: true });
       const record = isOrmRecord(created) ? created : null;
       if (!record) return 500;
+
+      const createdNewSlot = ((store.get(model) as Map<string | number, unknown> | undefined)?.size ?? 0) > slotsBefore;
 
       // 403 here, NOT 404. The oracle argument does not apply to create: there
       // is no pre-existing record whose existence could leak, the caller
@@ -392,7 +450,27 @@ export default class OrmRequest extends Request {
       // the predicate can run, so returning 403 alone would leave the record
       // behind: a worse bug than the bypass being fixed.
       if (isDenied(filter, record)) {
-        store.remove(model, record.id as string | number, { _skipAutoPersist: true });
+        // ROLL BACK BY IDENTITY, NEVER BY ID. `store.remove(model, record.id)`
+        // on its own is a write primitive keyed by a value the caller may have
+        // supplied: with the raw-id collision bypass above, a denied
+        // `POST {"id":"21"}` answered 403 and DELETED hidden record 21 -- an
+        // unauthenticated deletion primitive across the whole id space, created
+        // by adding a rollback to a lookup that could be skipped.
+        //
+        // Both conditions are required and neither implies the other:
+        //   createdNewSlot -- the store grew, so this request inserted rather
+        //                     than overwrote. Guards `assignRecordId` picking an
+        //                     id that is already taken (it returns
+        //                     last-INSERTED + 1, not max + 1, so a store whose
+        //                     insertion order is not ascending collides) -- see
+        //                     abofs/stonyx-orm#203.
+        //   identity       -- the slot still holds the object we just created,
+        //                     so nothing between createRecord and here replaced
+        //                     it.
+        if (createdNewSlot && store.get(model, record.id as string | number) === record) {
+          store.remove(model, record.id as string | number, { _skipAutoPersist: true });
+        }
+
         return 403;
       }
 
@@ -405,6 +483,13 @@ export default class OrmRequest extends Request {
       // Checked BEFORE any attribute is applied. 404 rather than 403 for the
       // same reason as GET /:id -- 403 would disclose both that the record
       // exists and that this caller specifically is excluded.
+      //
+      // NOT redundant behind GATE 1, and not defence in depth either: GATE 1's
+      // verdict is computed BEFORE the before-hook loop runs, and a before-hook
+      // is a published extension point that can change the answer -- by
+      // mutating the record, or against a predicate that closes over
+      // per-request state. This is the only re-evaluation after that window.
+      // Pinned by assertion 32; deleting it turns a 404 into an applied update.
       if (isDenied(filter, found)) return 404;
       const record = found;
       const { attributes, relationships: rels } = (body?.data || {}) as {
@@ -452,6 +537,9 @@ export default class OrmRequest extends Request {
       // Returning 204 for a denied delete was rejected instead: it falsely
       // reports success for a request that changed nothing.
       if (!record) return 404;
+      // Re-evaluated after the before-hook loop, exactly as in updateHandler --
+      // GATE 1 decided before the hooks ran. Pinned by assertion 33; deleting it
+      // turns a 404 into a destroyed record.
       if (isDenied(filter, record)) return 404;
 
       store.remove(model, getId(params), { _skipAutoPersist: true });
@@ -751,11 +839,37 @@ export default class OrmRequest extends Request {
   }
 
   auth(request: OrmRequest$, state: { [key: string]: unknown }): number | undefined {
-    const access = this.access(request);
+    // A consumer `access()` that throws is a DENIAL, matching `isDenied` one
+    // layer down. Unguarded it propagates to express's default handler, which
+    // answers 500 -- and the documented sample itself can throw
+    // (`request.originalUrl.split(...)` when originalUrl is absent), so the
+    // failure mode is reachable by following the docs.
+    let access: AccessMethod;
+    try {
+      access = this.access(request);
+    } catch {
+      return 403; // Forbidden
+    }
 
     if (!access) return 403;
-    if (Array.isArray(access) && !access.includes(methodAccessMap[request.method])) return 403;
-    if (typeof access === 'function') state.filter = access;
+    if (typeof access === 'function') {
+      state.filter = access;
+      return undefined;
+    }
+    if (access === true) return undefined;
+
+    // `AccessMethod` declares `string` legal and it fell through every branch
+    // above, returning undefined -- i.e. FULL CRUD, no filter. `return 'read'`
+    // is the natural reading of a type that lists `string` first, and it
+    // granted DELETE. A bare string is one permission, not a grant of all four.
+    const permitted = typeof access === 'string' ? [access] : access;
+
+    // Anything that is not a permission array by this point -- an object, a
+    // number, a Symbol -- is a consumer mistake, and the only safe reading of a
+    // shape the contract does not define is a denial. Fail CLOSED.
+    if (!Array.isArray(permitted)) return 403;
+    if (!permitted.includes(methodAccessMap[request.method])) return 403;
+
     return undefined;
   }
 }
