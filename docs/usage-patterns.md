@@ -154,11 +154,18 @@ export default class GlobalAccess {
   models = ['owner', 'animal']; // or '*' for all
 
   access(request) {
-    // Deny specific access
-    if (request.url.endsWith('/owner/angela')) return false;
+    // Deny an entire surface outright → 403
+    if (request.url.startsWith('/admin')) return false;
 
-    // Filter collections
-    if (request.url.endsWith('/owner')) {
+    // Per-record filter. Enforced on EVERY surface that can reach a record —
+    // the collection, GET/PATCH/DELETE by id, and both relationship route
+    // families — not on the collection alone. Match on the url PREFIX so the
+    // predicate is returned for record routes too; endsWith('/owners') would
+    // leave /owners/angela unguarded.
+    //
+    // A rejected record is 404 on record routes (indistinguishable from a
+    // record that does not exist) and 403 on POST.
+    if (request.url.startsWith('/owners')) {
       return record => record.id !== 'angela';
     }
 

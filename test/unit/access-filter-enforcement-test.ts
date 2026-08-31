@@ -45,11 +45,13 @@ import GlobalAccess from '../sample/access/global-access.js';
 
 const { module, test } = QUnit;
 
-// Angela is the owner the shipped fixture hides. Ids are parked well clear of
-// the 1-20 payload range so this file cannot perturb the integration dataset.
-const HIDDEN_ID = 9101;   // owned by angela -> excluded by the fixture filter
-const VISIBLE_ID = 9102;  // owned by gina   -> passes the fixture filter
+// `restricted` is the owner the shipped fixture hides on every animal surface.
+// Ids are parked well clear of the payload range so this file cannot perturb the
+// integration dataset.
+const HIDDEN_ID = 9101;   // owned by `restricted` -> excluded by the fixture filter
+const VISIBLE_ID = 9102;  // owned by gina         -> passes the fixture filter
 const MISSING_ID = 9199;  // never created
+const CREATE_ID = 9103;  // used by the POST assertions
 
 // The real shipped access class. Binding these tests to the fixture rather
 // than to a bespoke inline predicate is deliberate: assertions 1 and 2 are
@@ -81,14 +83,40 @@ async function dispatch(ormRequest, handler, request) {
   return handler(request, state);
 }
 
+// Owners this file had to create itself, so cleanup only removes what it owns.
+const ownedOwners = [];
+
+// The fixture predicate reads `record.owner.id`, so the owner records must
+// exist or `owner` never resolves and the predicate silently passes everything.
+// The integration suite seeds them, but this file must not depend on having run
+// after it -- that is exactly the kind of cross-file coupling that lets a
+// security assertion pass for a reason unrelated to what it claims to test.
+// Pre-existing records are left completely alone.
+function seedOwners() {
+  for (const id of ['restricted', 'gina']) {
+    if (store.get('owner', id)) continue;
+
+    createRecord('owner', { id, gender: 'female', age: 30, pets: [], phoneNumbers: [] }, { serialize: false, _skipAutoPersist: true });
+    ownedOwners.push(id);
+  }
+}
+
 function seed() {
-  createRecord('animal', { id: HIDDEN_ID, type: 1, age: 2, size: 'small', owner: 'angela', traits: [] }, { serialize: false, _skipAutoPersist: true });
+  seedOwners();
+  createRecord('animal', { id: HIDDEN_ID, type: 1, age: 2, size: 'small', owner: 'restricted', traits: [] }, { serialize: false, _skipAutoPersist: true });
   createRecord('animal', { id: VISIBLE_ID, type: 1, age: 3, size: 'small', owner: 'gina', traits: [] }, { serialize: false, _skipAutoPersist: true });
 }
 
 function cleanup() {
-  for (const id of [HIDDEN_ID, VISIBLE_ID, MISSING_ID, 9103]) {
-    store.remove('animal', id, { _skipAutoPersist: true });
+  // Presence-checked: store.remove warns loudly for an absent id, and this
+  // runs before and after every test.
+  for (const id of [HIDDEN_ID, VISIBLE_ID, CREATE_ID]) {
+    if (store.get('animal', id)) store.remove('animal', id, { _skipAutoPersist: true });
+  }
+
+  while (ownedOwners.length) {
+    const id = ownedOwners.pop();
+    if (store.get('owner', id)) store.remove('owner', id, { _skipAutoPersist: true });
   }
 }
 
@@ -99,6 +127,9 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
   hooks.beforeEach(function() {
     originalSqlDb = Orm.instance?.sqlDb;
     originalInitialized = Orm.initialized;
+    // createRecord throws 'ORM is not ready' unless this is set; the same
+    // pattern as test/unit/delete-persist-test.ts.
+    Orm.initialized = true;
     cleanup();
     seed();
   });
@@ -381,11 +412,11 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       const response = await dispatch(ormRequest, handler, makeRequest({
         method: 'POST',
         url: '/animals',
-        body: { data: { type: 'animal', id: 9103, attributes: { type: 1, age: 1, size: 'small', owner: 'angela' } } },
+        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
       }));
 
       assert.strictEqual(response, 403, 'denied create is 403, explicitly not 404 (was: 200)');
-      assert.notOk(store.get('animal', 9103), 'denied create left no record behind (was: persisted)');
+      assert.notOk(store.get('animal', CREATE_ID), 'denied create left no record behind (was: persisted)');
     });
 
     test('[GUARD] assertion 15 — POST passing the filter still succeeds and persists', async function(assert) {
@@ -395,12 +426,12 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       const response = await dispatch(ormRequest, handler, makeRequest({
         method: 'POST',
         url: '/animals',
-        body: { data: { type: 'animal', id: 9103, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
       }));
 
       assert.notStrictEqual(response, 403, 'allowed create is not blocked');
-      assert.strictEqual(String(response.data.id), '9103', 'created record is returned');
-      assert.ok(store.get('animal', 9103), 'allowed create persisted the record');
+      assert.strictEqual(String(response.data.id), String(CREATE_ID), 'created record is returned');
+      assert.ok(store.get('animal', CREATE_ID), 'allowed create persisted the record');
     });
   });
 

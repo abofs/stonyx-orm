@@ -251,6 +251,24 @@ function createFilterPredicate(filters: Filter[]): ((record: { [key: string]: un
   });
 }
 
+/**
+ * A function-style `access` return is a per-record predicate, and it is only
+ * meaningful if every surface that can hand a record to a caller consults it.
+ * Before #190 exactly one of seven did.
+ *
+ * Enforcement is deliberately post-fetch. `access` returns an opaque JS
+ * predicate and `store.findAll(model, conditions)` accepts only an equality
+ * conditions object that the SQL drivers translate to a WHERE clause, so
+ * query-layer enforcement would require a breaking change to the published
+ * `access` contract. That belongs in #197, not in a security patch. Six of the
+ * seven surfaces fetch by primary key anyway, so this costs exactly one row.
+ */
+function isDenied(filter: unknown, record: unknown): boolean {
+  if (typeof filter !== 'function') return false;
+
+  return !(filter as (record: unknown) => boolean)(record);
+}
+
 export default class OrmRequest extends Request {
   model: string;
   access: (request: unknown) => AccessMethod;
@@ -287,9 +305,13 @@ export default class OrmRequest extends Request {
       });
     };
 
-    const getSingleHandler: HandlerFn = async (request) => {
+    const getSingleHandler: HandlerFn = async (request, { filter }) => {
       const record = await store.find(model, getId(request.params)) as OrmRecord | undefined;
       if (!record) return 404;
+      // 404, never 403: the status for "exists but filtered out" must be
+      // identical to "does not exist", or the fix trades an authorization
+      // bypass for a narrower existence oracle.
+      if (isDenied(filter, record)) return 404;
 
       const fieldsMap = parseFields(request.query);
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
@@ -301,7 +323,7 @@ export default class OrmRequest extends Request {
       });
     };
 
-    const createHandler: HandlerFn = async ({ body, query }) => {
+    const createHandler: HandlerFn = async ({ body, query }, { filter }) => {
       const { type, id, attributes, relationships: rels } = (body?.data || {}) as {
         type?: string;
         id?: string | number;
@@ -334,12 +356,30 @@ export default class OrmRequest extends Request {
       const record = isOrmRecord(created) ? created : null;
       if (!record) return 500;
 
+      // 403 here, NOT 404. The oracle argument does not apply to create: there
+      // is no pre-existing record whose existence could leak, the caller
+      // supplied the attributes, and 404 on a mounted collection route is
+      // indistinguishable from "model not mounted" -- a genuinely different
+      // failure a developer needs to diagnose.
+      //
+      // The rollback is not optional. createRecord writes to the store BEFORE
+      // the predicate can run, so returning 403 alone would leave the record
+      // behind: a worse bug than the bypass being fixed.
+      if (isDenied(filter, record)) {
+        store.remove(model, record.id as string | number, { _skipAutoPersist: true });
+        return 403;
+      }
+
       return { data: record.toJSON?.({ fields: modelFields }) };
     };
 
-    const updateHandler: HandlerFn = async ({ body, params }) => {
+    const updateHandler: HandlerFn = async ({ body, params }, { filter }) => {
       const found = await store.find(model, getId(params));
       if (!found || !isOrmRecord(found)) return 404;
+      // Checked BEFORE any attribute is applied. 404 rather than 403 for the
+      // same reason as GET /:id -- 403 would disclose both that the record
+      // exists and that this caller specifically is excluded.
+      if (isDenied(filter, found)) return 404;
       const record = found;
       const { attributes, relationships: rels } = (body?.data || {}) as {
         attributes?: { [key: string]: unknown };
@@ -375,7 +415,19 @@ export default class OrmRequest extends Request {
       return { data: record.toJSON?.() };
     };
 
-    const deleteHandler: HandlerFn = ({ params }) => {
+    const deleteHandler: HandlerFn = async ({ params }, { filter }) => {
+      const record = await store.find(model, getId(params));
+
+      // BEHAVIOUR CHANGE (#190): a DELETE of a record that never existed
+      // returned 204 before this change. It now returns 404, matching the
+      // denied case below. This is deliberate and load-bearing -- if a denied
+      // delete returned 404 while a missing one returned 204, the pair would be
+      // a perfect existence oracle and the whole fix would be worthless.
+      // Returning 204 for a denied delete was rejected instead: it falsely
+      // reports success for a request that changed nothing.
+      if (!record) return 404;
+      if (isDenied(filter, record)) return 404;
+
       store.remove(model, getId(params), { _skipAutoPersist: true });
       return 204;
     };
@@ -449,8 +501,20 @@ export default class OrmRequest extends Request {
       }
 
       // Persist to SQL database for all write operations (create/update/delete)
+      //
+      // A denied or failed handler returns a bare status integer and MUST NOT
+      // reach persist. `response` is passed to sqlDb.persist below, but it is
+      // dropped at the driver boundary: _persistDelete(modelName, context) never
+      // receives it and guards only on context.recordId -- which _withHooks set
+      // above, BEFORE the handler ran. Without this gate a correct 404 still
+      // issues DELETE FROM ... WHERE id = ? on every SQL backend.
+      //
+      // No file-backed test can observe that, because Orm.instance.sqlDb is
+      // null in file/directory mode. See the stubbed-sqlDb assertions in
+      // test/unit/access-filter-enforcement-test.ts.
+      const denied = Number.isInteger(response) && (response as number) >= 400;
       const sqlDb = Orm.instance.sqlDb;
-      if (sqlDb && WRITE_OPERATIONS.has(operation)) {
+      if (sqlDb && WRITE_OPERATIONS.has(operation) && !denied) {
         await sqlDb.persist(operation, this.model, context, response);
       }
 
@@ -497,9 +561,19 @@ export default class OrmRequest extends Request {
       const dasherizedName = camelCaseToKebabCase(relationshipName);
 
       // Related resource route: GET /:id/{relationship}
-      routes[`/:id/${dasherizedName}`] = async (request: OrmRequest$) => {
+      //
+      // These generated routes are not wrapped by _withHooks, which is why they
+      // were the least obvious two of the seven unguarded surfaces in #190.
+      // They are still dispatched by @stonyx/rest-server as
+      // `handler(req, getState(req))`, so `state` -- and therefore the filter
+      // planted by auth() -- has always been available here; it was simply
+      // never declared or read.
+      routes[`/:id/${dasherizedName}`] = async (request: OrmRequest$, { filter }: { [key: string]: unknown } = {}) => {
         const record = await store.find(model, getId(request.params)) as OrmRecord | undefined;
         if (!record) return 404;
+        // Filtering the PARENT: a caller who may not see the record may not see
+        // what it is related to either.
+        if (isDenied(filter, record)) return 404;
 
         const relatedData = record.__relationships[relationshipName];
         const baseUrl = getBaseUrl(request);
@@ -521,9 +595,10 @@ export default class OrmRequest extends Request {
       };
 
       // Relationship linkage route: GET /:id/relationships/{relationship}
-      routes[`/:id/relationships/${dasherizedName}`] = async (request: OrmRequest$) => {
+      routes[`/:id/relationships/${dasherizedName}`] = async (request: OrmRequest$, { filter }: { [key: string]: unknown } = {}) => {
         const record = await store.find(model, getId(request.params)) as OrmRecord | undefined;
         if (!record) return 404;
+        if (isDenied(filter, record)) return 404;
 
         const relatedData = record.__relationships[relationshipName];
         const baseUrl = getBaseUrl(request);
@@ -555,18 +630,20 @@ export default class OrmRequest extends Request {
     }
 
     // Catch-all for invalid relationship names on related resource route
-    routes[`/:id/:relationship`] = async (request: OrmRequest$) => {
+    routes[`/:id/:relationship`] = async (request: OrmRequest$, { filter }: { [key: string]: unknown } = {}) => {
       const record = await store.find(model, getId(request.params));
       if (!record) return 404;
+      if (isDenied(filter, record)) return 404;
 
       // If we reach here, relationship doesn't exist (valid ones were registered above)
       return 404;
     };
 
     // Catch-all for invalid relationship names on relationship linkage route
-    routes[`/:id/relationships/:relationship`] = async (request: OrmRequest$) => {
+    routes[`/:id/relationships/:relationship`] = async (request: OrmRequest$, { filter }: { [key: string]: unknown } = {}) => {
       const record = await store.find(model, getId(request.params));
       if (!record) return 404;
+      if (isDenied(filter, record)) return 404;
 
       return 404;
     };

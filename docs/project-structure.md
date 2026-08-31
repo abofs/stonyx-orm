@@ -248,12 +248,46 @@ export default class GlobalAccess {
   access(request) {
     // Return false → 403 Forbidden
     // Return ['read', 'create', 'update', 'delete'] → allowed methods
-    // Return (record) => boolean → filter function for collections
+    // Return (record) => boolean → per-record filter, applied to every surface
   }
 }
 ```
 
 Method mapping: `GET → 'read'`, `POST → 'create'`, `DELETE → 'delete'`, `PATCH → 'update'`
+
+#### Filter functions
+
+A function return value is a **per-record predicate**, and it is enforced on
+every endpoint that can reach a record — not only on the collection:
+
+| Endpoint | A record the predicate rejects |
+|---|---|
+| `GET /:models` | omitted from the collection |
+| `GET /:models/:id` | `404` |
+| `GET /:models/:id/{relationship}` | `404` |
+| `GET /:models/:id/relationships/{relationship}` | `404` |
+| `PATCH /:models/:id` | `404`, no attribute is applied |
+| `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued |
+| `POST /:models` | `403`, and the record is rolled back out of the store |
+
+Denied record-level requests return **404, not 403**, so that "exists but
+filtered out" is indistinguishable from "does not exist". Returning 403 there
+would confirm the record's existence to a caller who is not allowed to see it.
+`POST` is the exception and returns 403: there is no pre-existing record whose
+existence could leak, and a 404 on a mounted collection route would be
+indistinguishable from "model not mounted".
+
+Because the predicate is enforced on record routes, it must match those urls.
+A predicate returned only for an exact collection url (`url.endsWith('/owners')`)
+leaves every record route unguarded — match on the prefix instead.
+
+Enforcement is post-fetch: the predicate is opaque JavaScript and cannot be
+translated to a `WHERE` clause. Record routes fetch by primary key, so this
+costs one row.
+
+> **Note:** `include` (sideloading) does **not** yet apply the included model's
+> own access filter. Tracked as
+> [#196](https://github.com/abofs/stonyx-orm/issues/196).
 
 ## Configuration & Environment
 

@@ -430,6 +430,14 @@ module('[Integration] ORM', function(hooks) {
           attributes: { type: 'horse', age: 3, size: 'large', owner: 'bob' }
         }
       };
+      // Auto-assigned ids are "the most recently inserted record's id, + 1"
+      // (src/manage-record.ts assignRecordId). Derived rather than hardcoded so
+      // it cannot silently rot: #190 added two fixture animals (21 and 22) as
+      // the access filter's dedicated hidden subject, which shifted this from
+      // 21 to 23. Must be read BEFORE the POST.
+      const lastAnimalId = Array.from(store.get('animal').values()).at(-1).id;
+      const expectedId = lastAnimalId + 1;
+
       const response = await fetch(`${endpoint}/animals`, {
         method: 'post',
         headers: { 'Content-Type': 'application/json' },
@@ -437,7 +445,6 @@ module('[Integration] ORM', function(hooks) {
       });
 
       const { data } = await response.json();
-      const expectedId = 21; // Based on sample data
 
       assert.equal(response.status, 200);
       assert.equal(store.get('animal', expectedId).tag, `bob's large horse`);
@@ -1016,8 +1023,11 @@ module('[Integration] ORM', function(hooks) {
 
     module('Related Resource Routes', function() {
       // Owner -> pets (hasMany)
+      // gina, not angela: the access fixture hides angela on every /owners
+      // surface as of #190, so this would 404 for a reason that has nothing to
+      // do with what the test is checking.
       test('GET /owners/:id/pets returns related animals', async function(assert) {
-        const response = await fetch(`${endpoint}/owners/angela/pets`);
+        const response = await fetch(`${endpoint}/owners/gina/pets`);
         const { data } = await response.json();
 
         assert.equal(response.status, 200, 'returns 200 status');
@@ -1127,7 +1137,7 @@ module('[Integration] ORM', function(hooks) {
     module('Relationship Linkage Routes', function() {
       // Owner -> pets (hasMany)
       test('GET /owners/:id/relationships/pets returns relationship linkage', async function(assert) {
-        const response = await fetch(`${endpoint}/owners/angela/relationships/pets`);
+        const response = await fetch(`${endpoint}/owners/gina/relationships/pets`);
         const { data } = await response.json();
 
         assert.equal(response.status, 200, 'returns 200 status');
@@ -1191,17 +1201,124 @@ module('[Integration] ORM', function(hooks) {
       });
 
       // Invalid relationship name
+      // Must use a VISIBLE owner. Against a filtered owner this would 404
+      // because the parent is hidden, which passes without exercising the
+      // invalid-relationship path at all.
       test('GET /{type}/:id/relationships/{invalid} returns 404', async function(assert) {
-        const response = await fetch(`${endpoint}/owners/angela/relationships/invalid`);
+        const response = await fetch(`${endpoint}/owners/gina/relationships/invalid`);
 
         assert.equal(response.status, 404, 'returns 404 for invalid relationship name');
       });
 
+      // Visible owner, for the same reason as above.
       test('GET /{type}/:id/{invalid} returns 404 for invalid relationship', async function(assert) {
-        const response = await fetch(`${endpoint}/owners/angela/invalid`);
+        const response = await fetch(`${endpoint}/owners/gina/invalid`);
 
         assert.equal(response.status, 404, 'returns 404 for invalid relationship name');
       });
+    });
+  });
+
+  /**
+   * Access filter enforcement over the live HTTP path (#190).
+   *
+   * A function-style `access` filter used to be applied to collection GET and
+   * nowhere else, so a record hidden from GET /animals stayed readable,
+   * updatable and deletable by id, and its relationships were disclosable.
+   *
+   * test/unit/access-filter-enforcement-test.ts is the exhaustive suite and is
+   * the only tier that can exercise the persistence half of the defect, because
+   * it can stub Orm.instance.sqlDb. This module is the end-to-end counterpart:
+   * it proves the guard survives the real express dispatch, real auth() wiring
+   * and real serialization, which handler-level tests cannot.
+   *
+   * `restricted` (animals 21 and 22) is the fixture's dedicated hidden subject.
+   */
+  module('Access Filter Enforcement (#190)', function() {
+    const HIDDEN = 21;      // owned by `restricted` — filtered on every surface
+    const VISIBLE = 13;     // owned by gina — must remain fully reachable
+    const NEVER_EXISTED = 7777;
+
+    test('the filter is live: hidden animals are absent from the collection but present in the store', async function(assert) {
+      const response = await fetch(`${endpoint}/animals`);
+      const { data } = await response.json();
+
+      assert.equal(response.status, 200, 'collection is reachable');
+      assert.ok(store.get('animal', HIDDEN), 'the hidden record really does exist in the store');
+      assert.notOk(data.some(record => Number(record.id) === HIDDEN), 'hidden record is absent from the collection');
+      assert.ok(data.length < store.get('animal').size, `collection is a strict subset (${data.length} of ${store.get('animal').size})`);
+    });
+
+    test('GET /animals/:id is 404 for a hidden record, byte-identical to one that never existed', async function(assert) {
+      const hidden = await fetch(`${endpoint}/animals/${HIDDEN}`);
+      const missing = await fetch(`${endpoint}/animals/${NEVER_EXISTED}`);
+
+      assert.equal(hidden.status, 404, 'hidden record is 404 (was 200 with the full record)');
+      assert.equal(missing.status, 404, 'never-existed record is 404');
+      assert.equal(await hidden.text(), await missing.text(), 'bodies are identical — no existence oracle');
+    });
+
+    test('relationship route families are 404 for a hidden record', async function(assert) {
+      const related = await fetch(`${endpoint}/animals/${HIDDEN}/owner`);
+      const linkage = await fetch(`${endpoint}/animals/${HIDDEN}/relationships/owner`);
+
+      assert.equal(related.status, 404, 'GET /:id/{rel} is 404 (was 200, disclosing the owner)');
+      assert.equal(linkage.status, 404, 'GET /:id/relationships/{rel} is 404 (was 200, disclosing the linkage)');
+    });
+
+    test('PATCH on a hidden record is 404 and mutates nothing', async function(assert) {
+      const before = store.get('animal', HIDDEN).age;
+
+      const response = await fetch(`${endpoint}/animals/${HIDDEN}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', id: HIDDEN, attributes: { age: 999 } } })
+      });
+
+      assert.equal(response.status, 404, 'PATCH is 404 (was 200)');
+      assert.equal(store.get('animal', HIDDEN).age, before, 'age is unchanged (was mutated)');
+    });
+
+    test('POST failing the filter is 403 and leaves no record behind', async function(assert) {
+      const response = await fetch(`${endpoint}/animals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', id: 7801, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } })
+      });
+
+      assert.equal(response.status, 403, 'denied create is 403, deliberately not 404');
+      assert.notOk(store.get('animal', 7801), 'the record was rolled back out of the store');
+    });
+
+    test('a visible record is untouched on every surface (over-blocking guard)', async function(assert) {
+      const single = await fetch(`${endpoint}/animals/${VISIBLE}`);
+      const related = await fetch(`${endpoint}/animals/${VISIBLE}/owner`);
+      const linkage = await fetch(`${endpoint}/animals/${VISIBLE}/relationships/owner`);
+
+      assert.equal(single.status, 200, 'GET /:id still works');
+      assert.equal(related.status, 200, 'GET /:id/{rel} still works');
+      assert.equal(linkage.status, 200, 'GET /:id/relationships/{rel} still works');
+    });
+
+    // Ordered last: it destroys records.
+    test('DELETE is 404 for hidden and for missing, and the hidden record survives', async function(assert) {
+      const hidden = await fetch(`${endpoint}/animals/${HIDDEN}`, { method: 'DELETE' });
+      const missing = await fetch(`${endpoint}/animals/${NEVER_EXISTED}`, { method: 'DELETE' });
+
+      assert.equal(hidden.status, 404, 'denied delete is 404 (was 204)');
+      assert.ok(store.get('animal', HIDDEN), 'the hidden record was NOT destroyed');
+
+      // BEHAVIOUR CHANGE: 204 -> 404. Without it, denied-404 against missing-204
+      // is a perfect existence oracle and the fix would be worthless.
+      assert.equal(missing.status, 404, 'delete of a never-existed record is 404 (BEHAVIOUR CHANGE, was 204)');
+      assert.equal(hidden.status, missing.status, 'the two are indistinguishable');
+    });
+
+    test('an allowed DELETE still works (over-blocking guard)', async function(assert) {
+      const response = await fetch(`${endpoint}/animals/${VISIBLE}`, { method: 'DELETE' });
+
+      assert.equal(response.status, 204, 'allowed delete is still 204');
+      assert.notOk(store.get('animal', VISIBLE), 'the record was removed');
     });
   });
 

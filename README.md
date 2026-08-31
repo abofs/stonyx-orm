@@ -316,11 +316,22 @@ export default class GlobalAccess {
   models = ['owner', 'animal'];
 
   access(request) {
-    if (request.url.endsWith('/owner/angela')) return false;
+    // false → 403 for the whole request
+    if (request.url.startsWith('/admin')) return false;
+
+    // A function is a per-record filter. It is enforced on the collection, on
+    // GET/PATCH/DELETE by id, and on both relationship route families. Match on
+    // the url prefix so record routes get the predicate too. Rejected records
+    // are 404 on record routes and 403 on POST.
+    if (request.url.startsWith('/owners')) return record => record.id !== 'angela';
+
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
+
+> `include` (sideloading) does not yet apply the included model's own access
+> filter — see [#196](https://github.com/abofs/stonyx-orm/issues/196).
 
 ### Include Parameter (Sideloading Relationships)
 
