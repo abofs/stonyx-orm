@@ -456,9 +456,9 @@ property of the function it lives in, if there is one.
 > there is nothing to consult. The chain is **#202 → #196 → #207**.
 >
 > **Nothing in this repository may assert that a hidden record cannot be
-> modified, or that the filter cannot be defeated.** Three consecutive review
-> rounds were blocked on an artifact claiming more than the code delivered; this
-> is the current shape of that claim.
+> modified, or that the filter cannot be defeated.** Three successive reviews of
+> this change were blocked on an artifact claiming more than the code delivered;
+> this is the current shape of that claim.
 
 ## Configuration & Environment
 
