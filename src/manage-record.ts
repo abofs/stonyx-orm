@@ -195,17 +195,52 @@ export function updateRecord(record: OrmRecord, rawData: unknown, userOptions: C
 }
 
 /**
- * gets the next available id based on last record entry.
+ * gets the next available id, based on the HIGHEST id present.
  *
  * In MySQL mode with numeric IDs, assigns a temporary pending ID.
  * MySQL's AUTO_INCREMENT provides the real ID after INSERT.
+ *
+ * ---------------------------------------------------------------------------
+ * WAS: `Array.from(storeMap.values()).at(-1).id + 1` — the LAST INSERTED id,
+ * not the maximum (abofs/stonyx-orm#203). The store is a Map, so insertion
+ * order stops being ascending the moment a record is deleted and recreated, a
+ * db.json is written out of order, a directory-mode store is read back in file
+ * order, or a caller POSTs a high id and then a low one. After that, every
+ * server-assigned id is one that is ALREADY TAKEN — and `createRecord`'s
+ * last-entry-wins branch then overwrites that record IN PLACE and answers 200.
+ * No error, no 409, and the store's size does not change. That is the whole
+ * defect, and it is reachable from a create with NO id at all, which is the
+ * most ordinary write a consumer performs.
+ *
+ * Covered by test/unit/assign-record-id-test.ts. Note for anyone changing this
+ * function: before that file existed, the whole suite scored 951/0 both on the
+ * defect and on a naive `Math.max` fix that introduced a second one. A green
+ * suite is not evidence here; those assertions are.
+ * ---------------------------------------------------------------------------
  */
 function assignRecordId(modelName: string, rawData: { [key: string]: unknown }): void {
-  if (rawData.id) return;
+  // PRESENCE, not truthiness. `0` is a legal value for an `attr('number')` id,
+  // and `if (rawData.id) return` silently reassigned it, handing the caller back
+  // a different record than the one it named (#203).
+  //
+  // `''` is deliberately NOT honoured here and this is not an oversight: it is
+  // the one string that means "no id". `parseInt('')` is `NaN`, a record CAN be
+  // held under the key `NaN`, and orm-request.ts's body-id normalisation relies
+  // on `''` staying absent — otherwise `POST {"id":""}` answers 409 against a
+  // record it never named. Pinned by test/unit/assign-record-id-test.ts (AC6's
+  // BOUNDARY assertions) and by access-filter-enforcement-test.ts assertion 44.
+  // Widening this to `!== undefined` breaks both.
+  if (rawData.id || rawData.id === 0) return;
 
   // In SQL mode with numeric IDs, defer to database auto-increment.
   // Use unique negative integers — they survive the number transform (parseInt preserves negatives)
   // and avoid NaN store-key collisions that string pending IDs caused.
+  //
+  // This early return is ABOVE the max computation on purpose: a pending
+  // negative must never be a candidate for, or be perturbed by, the max path.
+  // Pinned directly (AC5.3) rather than by asserting the max is unaffected —
+  // that assertion could not have failed, because nothing negative ever reaches
+  // the code below.
   if (Orm.instance?.sqlDb && !isStringIdModel(modelName)) {
     rawData.id = -(++pendingIdCounter);
     rawData.__pendingSqlId = true;
@@ -215,15 +250,85 @@ function assignRecordId(modelName: string, rawData: { [key: string]: unknown }):
   const storeMap = store.get(modelName);
   if (!storeMap) throw new Error(`Cannot assign record ID: model "${modelName}" not found in store`);
   const modelStore = Array.from(storeMap.values()).filter(isOrmRecord);
-  const lastRecord = modelStore.at(-1);
-  rawData.id = lastRecord ? (lastRecord.id as number) + 1 : 1;
+
+  // The shape of src/standalone-db.ts:134-137, and it is chosen over
+  // `Math.max(...ids)` for a reason that is measurable rather than stylistic:
+  // a store CAN hold a record under the key `NaN` (`{id: '   '}` is truthy, so
+  // it survives the guard above and NaNs in the number transform — that is the
+  // state access-filter-enforcement-test.ts assertion 44 constructs). `Math.max`
+  // returns `NaN` if any operand is `NaN`, so it would assign `NaN`, land on
+  // that slot and overwrite it — exactly the defect being fixed, in a new
+  // disguise. This reduce cannot: non-numbers are skipped, and `NaN > max` is
+  // `false`. Pinned by AC2.
+  const maxId = modelStore.reduce((max: number, record) => {
+    const recordId = record.id as unknown;
+
+    return typeof recordId === 'number' && recordId > max ? recordId : max;
+  }, 0);
+
+  // THE OCCUPANCY CHECK RUNS ON THE LANDING KEY, NOT ON THE RAW CANDIDATE, and
+  // the difference is a silent data loss rather than a nicety.
+  //
+  // `createRecord` looks the record up under `rawData.id` (:50) but WRITES it
+  // under `record.id` (:69) — the value after the model's declared id transform
+  // has run inside `serialize`. On a string-id model those two differ: the
+  // number `1` is looked up, the record lands under the string `'1'`. A guard
+  // written as `storeMap.has(rawData.id)` therefore checks a key the record will
+  // never occupy, misses an occupied slot and overwrites it — measured: owner
+  // '1' age 55 -> 9, store size unchanged, no error. That is abofs/stonyx-orm
+  // #205's lookup-key/landing-key divergence reappearing inside #203's own fix,
+  // which is why AC4 exists and why `rawData.id` is set to the LANDING key
+  // below: it makes :50 and :69 agree by construction.
+  //
+  // Termination: with an injective id transform at most `storeMap.size`
+  // candidates can be occupied. A NON-injective id type would otherwise spin
+  // forever, so the loop is bounded and exits with a defined error the route can
+  // report instead of hanging the request.
+  //
+  // Resolved ONCE, outside the loop: `getIdType` instantiates the model class,
+  // so resolving it per candidate would put a model construction on every
+  // iteration of a loop that exists to walk past occupied slots.
+  const toStoreKey = storeKeyDeriver(modelName);
+
+  let candidate = maxId + 1;
+  let landingKey = toStoreKey(candidate);
+  let attempts = 0;
+
+  while (storeMap.has(landingKey)) {
+    if (++attempts > storeMap.size) {
+      throw new Error(`Cannot assign record ID: no free id available for model "${modelName}"`);
+    }
+
+    candidate += 1;
+    landingKey = toStoreKey(candidate);
+  }
+
+  rawData.id = landingKey;
 }
 
-function isStringIdModel(modelName: string): boolean {
-  const modelClass = Orm.instance.getRecordClasses(modelName).modelClass as (new (name: string) => { [key: string]: unknown }) | undefined;
-  if (!modelClass) return false;
+/**
+ * Returns the derivation that maps an id VALUE to the store KEY a record
+ * carrying it will actually be filed under — the model's declared id transform,
+ * the same one `serialize` runs at createRecord:68 before the `.set` at :69.
+ */
+function storeKeyDeriver(modelName: string): (value: number) => number | string {
+  const idType = getIdType(modelName);
+  const transform = idType ? Orm.instance?.transforms?.[idType] : undefined;
+
+  if (typeof transform !== 'function') return value => value;
+
+  return value => transform(value) as number | string;
+}
+
+function getIdType(modelName: string): string | undefined {
+  const modelClass = Orm.instance?.getRecordClasses(modelName).modelClass as (new (name: string) => { [key: string]: unknown }) | undefined;
+  if (!modelClass) return undefined;
 
   const model = new modelClass(modelName);
 
-  return (model.id as { type?: string } | undefined)?.type === 'string';
+  return (model.id as { type?: string } | undefined)?.type;
+}
+
+function isStringIdModel(modelName: string): boolean {
+  return getIdType(modelName) === 'string';
 }
