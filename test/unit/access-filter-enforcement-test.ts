@@ -1781,9 +1781,17 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
 
       // The hard `return false` deny is reached through the same channel, and
       // it was walked past the same way.
-      assert.strictEqual(
-        globalAccess.access(makeRequest({ url: 'http://anything.example/owners/archived', mount: '/owners', path: '/archived' })),
-        false, 'and the outright deny still fires on an absolute-form target (was: a full CRUD grant)');
+      for (const path of ['/archived', '/ARCHIVED', '/Archived/2024']) {
+        assert.strictEqual(
+          globalAccess.access(makeRequest({ url: `http://anything.example/owners${path}`, mount: '/owners', path })),
+          false, `the outright deny still fires on an absolute-form target at ${path} (was: a full CRUD grant)`);
+      }
+
+      // The path half is lower-cased for the same reason the mount half is: the
+      // router matched case-insensitively, so a case-SENSITIVE sub-path rule is
+      // stricter than the router and can be stepped around.
+      assert.strictEqual(globalAccess.access(makeRequest({ url: '/owners/ARCHIVED', mount: '/owners', path: '/ARCHIVED' })),
+        false, 'and a case-varied sub-path cannot step around it either');
 
       // FAIL CLOSED. `?? ''` converted an absent request target into a total
       // grant: the empty string matches no collection, so `access()` fell
