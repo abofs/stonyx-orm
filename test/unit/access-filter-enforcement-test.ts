@@ -914,6 +914,449 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
   });
 
   // =========================================================================
+  // GATE 0's other channels, and its boundary (assertions 39-44)
+  //
+  // Round 3 closed the POST existence oracle by refusing a client-supplied `id`
+  // under a function-style filter. Verification then walked round it by moving
+  // the id ONE FIELD, and pinned two of GATE 0's stated properties to nothing:
+  //
+  //   * `createHandler` strips `attributes.id` and then re-admitted a caller id
+  //     eleven lines later through an unfiltered `Object.entries(rels)` loop
+  //     whose `key` is verbatim from the body (assertion 39).
+  //   * `updateHandler`'s ATTRIBUTE loop guards `key === 'id'`; its
+  //     RELATIONSHIPS loop did not (assertion 40) -- and the ATTRIBUTE guard
+  //     that WAS already there turned out to be unkillable too, so 39 and 40
+  //     each sweep BOTH channels rather than only the one that was missing.
+  //   * "the refusal happens BEFORE any store lookup" is the LATENCY half of the
+  //     closure, and moving the refusal after a `store.find` survived at 920/0
+  //     (assertion 41).
+  //   * `id: null` — the boundary of `id !== undefined` (assertion 42).
+  //   * the body-id coercion diverged from the URL surface's, on a hex-shaped
+  //     id (assertion 43) and on whitespace (assertion 44).
+  // =========================================================================
+  module('GATE 0 — the other id channels and the boundary', function() {
+    test('[DEFECT] assertion 39 — a caller id cannot reach createRecord through `relationships` or `attributes`', async function(assert) {
+      // THE BYPASS. `createHandler` deliberately strips `attributes.id`:
+      //
+      //   const { id: _ignoredId, ...sanitizedAttributes } = attributes || {};
+      //
+      // and then wrote every relationship key straight back into that same
+      // object, with `key` taken verbatim from the request body and never
+      // checked. `key === 'id'` therefore put the caller's id into
+      // `recordAttributes` while top-level `id` stayed `undefined` — so GATE 0
+      // never fired, the collision lookup never ran, and `createRecord` took its
+      // last-entry-wins branch. Measured over the real router, unauthenticated:
+      //
+      //   GET  /animals/21                              -> 404  (hidden)
+      //   POST /animals {"id":21, ...}                  -> 403  GATE 0 works
+      //   POST /animals {"relationships":{"id":{"data":{"id":21}}},
+      //                  "attributes":{"owner":"gina"}} -> 200  *** BYPASS ***
+      //   GET  /animals/21                              -> 200  *** de-hidden ***
+      //
+      // The hidden record is overwritten in place and its `owner` reset to a
+      // value the caller chose, which removes it from the filter's scope FOR
+      // GOOD. That is #190 itself, on the create surface, reachable by moving
+      // one field in the JSON body.
+      //
+      // PROVENANCE: the unfiltered key loop is INHERITED — `origin/dev` carries
+      // it verbatim, and on `dev` there is no filter on create at all, so
+      // merging does not regress it. It does NOT reach a deletion: with an
+      // existing id the store does not grow, `createdNewSlot` is false and the
+      // rollback correctly skips. What made it a blocker is that four artifacts
+      // asserted a guarantee it defeats. The general form — the loop accepts ANY
+      // key, not just `id` — is filed as abofs/stonyx-orm#204.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const handler = ormRequest.handlers.post['/'];
+      const getOne = ormRequest.handlers.get['/:id'];
+
+      // Both non-top-level channels. `attributes.id` is stripped on the line
+      // above the relationships loop and has been for longer, but nothing in
+      // this file pinned it either — it was killed only incidentally, by a
+      // pre-existing integration test that is about something else. A guarantee
+      // that rests on two strips should be pinned by assertions that name both.
+      const channelBody = (channel, id, owner) => ({ data: {
+        type: 'animal',
+        ...(channel === 'relationships'
+          ? { relationships: { id: { data: { id } } }, attributes: { type: 1, age: 77, size: 'large', owner } }
+          : { attributes: { id, type: 1, age: 77, size: 'large', owner } }),
+      } });
+
+      const relsPost = (id, owner, channel = 'relationships') => dispatch(ormRequest, handler, makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: channelBody(channel, id, owner),
+      }));
+
+      const hiddenBefore = store.get('animal', HIDDEN_ID);
+      assert.strictEqual(
+        await dispatch(ormRequest, getOne, makeRequest({ url: `/animals/${HIDDEN_ID}`, params: { id: String(HIDDEN_ID) } })),
+        404, 'precondition: the hidden record reads as absent');
+
+      for (const channel of ['relationships', 'attributes']) {
+        for (const owner of ['gina', 'restricted']) {
+          for (const shape of [HIDDEN_ID, String(HIDDEN_ID)]) {
+            const response = await relsPost(shape, owner, channel);
+
+            assert.strictEqual(store.get('animal', HIDDEN_ID), hiddenBefore,
+              `the hidden record still occupies its slot after ${channel}.id=${JSON.stringify(shape)} owner=${owner}`);
+            assert.strictEqual(store.get('animal', HIDDEN_ID).age, 2,
+              `and was NOT overwritten via ${channel} (was: age 77, owner ${owner}, permanently de-hidden)`);
+            assert.notStrictEqual(response?.data?.id, HIDDEN_ID,
+              `and no create landed on the caller-chosen id via ${channel}`);
+          }
+        }
+      }
+
+      assert.strictEqual(
+        await dispatch(ormRequest, getOne, makeRequest({ url: `/animals/${HIDDEN_ID}`, params: { id: String(HIDDEN_ID) } })),
+        404, 'the hidden record still reads as absent afterwards (was: 200 — permanently de-hidden)');
+
+      // The same channel on the UNFILTERED population — the shape `dev` is live
+      // for. GATE 0 does not apply there, so what must hold is that the id is
+      // ignored rather than used: no silent overwrite of the colliding record.
+      const unfiltered = new OrmRequest({ model: 'animal', access: noFilterAccess });
+      const visibleBefore = store.get('animal', VISIBLE_ID);
+
+      for (const channel of ['relationships', 'attributes']) {
+        const keysBefore = animalIds();
+        await dispatch(unfiltered, unfiltered.handlers.post['/'], makeRequest({
+          method: 'POST',
+          url: '/animals',
+          body: { data: {
+            type: 'animal',
+            ...(channel === 'relationships'
+              ? { relationships: { id: { data: { id: VISIBLE_ID } } }, attributes: { type: 1, age: 88, size: 'large', owner: 'gina' } }
+              : { attributes: { id: VISIBLE_ID, type: 1, age: 88, size: 'large', owner: 'gina' } }),
+          } },
+        }));
+
+        assert.strictEqual(store.get('animal', VISIBLE_ID), visibleBefore, `an unfiltered caller cannot re-key a create through ${channel} either`);
+        assert.strictEqual(store.get('animal', VISIBLE_ID).age, 3, `and the colliding record was not overwritten via ${channel} (was: age 88)`);
+
+        for (const key of animalIds()) {
+          if (!keysBefore.includes(key)) store.remove('animal', key, { _skipAutoPersist: true });
+        }
+      }
+    });
+
+    test('[GUARD] assertion 39b — a DECLARED relationship key still reaches the record', async function(assert) {
+      // Proves 39 is not green because the relationships loop stopped working.
+      // Only the `id` key is dropped; `owner` — a real belongsTo — still applies.
+      const unfiltered = new OrmRequest({ model: 'animal', access: noFilterAccess });
+
+      const created = await dispatch(unfiltered, unfiltered.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: {
+          type: 'animal',
+          relationships: { owner: { data: { id: 'gina' } } },
+          attributes: { type: 1, age: 4, size: 'small' },
+        } },
+      }));
+
+      assert.strictEqual(created?.data?.relationships?.owner?.data?.id, 'gina',
+        'the declared relationship was applied through the same loop');
+    });
+
+    test('[DEFECT] assertion 40 — a PATCH cannot re-key a record through `relationships` or `attributes`', async function(assert) {
+      // The same missing key filter, two handlers apart. `updateHandler`'s
+      // ATTRIBUTE loop has `if (key === 'id') continue;`; its RELATIONSHIPS loop
+      // passed `key` straight into `updateRecord`. Measured:
+      //
+      //   PATCH /animals/9102 {"relationships":{"id":{"data":{"id":9101}}}}
+      //     -> 200, and the record held under store key 9102 now reports id 9101
+      //
+      // The store key and the record's own id diverge, so a VISIBLE record ends
+      // up claiming a HIDDEN record's identity — every downstream surface that
+      // reads `record.id` rather than the map key (links, `toJSON`, relationship
+      // linkage) then emits it. Gated by GATE 1 on the addressed record, so it
+      // is not itself a filter bypass; it is store corruption reachable by any
+      // caller who can PATCH anything.
+      //
+      // PROVENANCE: INHERITED — `origin/dev` has the identical loop. Filed with
+      // the create-side channel as abofs/stonyx-orm#204.
+      // BOTH channels, not just the one that was missing a filter. The
+      // attribute loop's `if (key === 'id') continue;` was ALREADY there and
+      // was UNKILLABLE — no test distinguished its presence from its absence,
+      // measured, and it is load-bearing: `Object.hasOwn(record, 'id')` is
+      // `true` on an OrmRecord, so dropping it re-keys the record exactly as the
+      // relationships channel did. A guard that only one of two sibling loops
+      // has, and that nothing pins, is how the second one goes missing.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const channels = [
+        ['relationships', { relationships: { id: { data: { id: HIDDEN_ID } } }, attributes: { age: 12 } }],
+        ['attributes', { attributes: { id: HIDDEN_ID, age: 12 } }],
+      ];
+
+      for (const [channel, data] of channels) {
+        const hiddenBefore = store.get('animal', HIDDEN_ID);
+        store.get('animal', VISIBLE_ID).age = 3;
+
+        const response = await dispatch(ormRequest, ormRequest.handlers.patch['/:id'], makeRequest({
+          method: 'PATCH',
+          url: `/animals/${VISIBLE_ID}`,
+          params: { id: String(VISIBLE_ID) },
+          body: { data },
+        }));
+
+        assert.strictEqual(store.get('animal', VISIBLE_ID).id, VISIBLE_ID,
+          `${channel}: the patched record keeps its own id (was: ${HIDDEN_ID} — the caller re-keyed it)`);
+        assert.strictEqual(response?.data?.id, VISIBLE_ID, `${channel}: and the response reports the real id`);
+        assert.strictEqual(store.get('animal', HIDDEN_ID), hiddenBefore, `${channel}: the hidden record is untouched`);
+        assert.strictEqual(store.get('animal', VISIBLE_ID).age, 12,
+          `${channel}: while the rest of the payload still applied — the loop is filtered, not disabled`);
+      }
+    });
+
+    test('[GUARD] assertion 40b — a DECLARED relationship key still applies on PATCH', async function(assert) {
+      // Counter-guard for 40: proves the relationships loop in updateHandler is
+      // still live, so 40 is not green because the loop stopped applying
+      // anything. Exercised on `/traits`, not `/animals`, because the animal
+      // model carries a custom serializer and `updateRecord` runs the raw-shape
+      // serializer path, under which a flat `{owner: 'x'}` maps to nothing —
+      // measured, not assumed. `trait` has no serializer and a real
+      // `belongsTo('category')`, so the loop's effect is observable there.
+      const ormRequest = new OrmRequest({ model: 'trait', access: noFilterAccess });
+      const TRAIT = 9150;
+      const target = 'physical-9150';
+      const other = 'appearance-9150';
+      // Seeded here rather than borrowed: this file must run standalone, and the
+      // category store is empty until the integration suite has run.
+      for (const id of [target, other]) createRecord('category', { id, name: id }, { serialize: false, _skipAutoPersist: true });
+      createRecord('trait', { id: TRAIT, type: 'habitat', value: 'farm', category: other }, { serialize: false, _skipAutoPersist: true });
+
+      try {
+        await dispatch(ormRequest, ormRequest.handlers.patch['/:id'], makeRequest({
+          method: 'PATCH',
+          url: `/traits/${TRAIT}`,
+          params: { id: String(TRAIT) },
+          body: { data: { relationships: { category: { data: { id: target } } } } },
+        }));
+
+        assert.strictEqual(store.get('trait', TRAIT).category?.id, target,
+          `a declared relationship still resolves and applies through the same loop (was: ${other})`);
+        assert.strictEqual(store.get('trait', TRAIT).id, TRAIT, 'and the record still holds its own id');
+      } finally {
+        store.remove('trait', TRAIT, { _skipAutoPersist: true });
+        for (const id of [target, other]) store.remove('category', id, { _skipAutoPersist: true });
+      }
+    });
+
+    test('[GUARD] assertion 41 — the refusal happens BEFORE any store lookup, not merely with the same status', async function(assert) {
+      // The LATENCY half of the oracle closure. GATE 0's stated guarantee is
+      // that "no status, and no LOOKUP COST, can depend on whether that id
+      // exists" — which is what lets #197 be characterised as a ~0.06ms
+      // post-fetch residual rather than a live timing oracle on POST.
+      //
+      // Status alone cannot pin that: moving the refusal to AFTER a
+      // `store.find(model, normalizeBodyId(id))` and returning the same 403
+      // leaves the whole suite at 920/0, while re-opening a measurable
+      // hit-versus-miss difference on every id-bearing POST. Pinned by
+      // observing the lookup itself rather than by timing it, which would be
+      // flaky. Mutation `V_g0_after_lookup`.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const handler = ormRequest.handlers.post['/'];
+      const findSpy = sinon.spy(store, 'find');
+
+      for (const id of [HIDDEN_ID, VISIBLE_ID, MISSING_ID, String(HIDDEN_ID)]) {
+        findSpy.resetHistory();
+
+        const response = await dispatch(ormRequest, handler, makeRequest({
+          method: 'POST',
+          url: '/animals',
+          body: { data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+        }));
+
+        assert.strictEqual(response, 403, `id=${JSON.stringify(id)} is refused`);
+        assert.strictEqual(findSpy.callCount, 0,
+          `and the refusal issued NO store lookup for id=${JSON.stringify(id)} — ` +
+          'a lookup here reintroduces a hit-vs-miss timing difference behind an identical status');
+      }
+    });
+
+    test('[GUARD] assertion 42 — every FALSY id shape is refused: the boundary of `id !== undefined`', async function(assert) {
+      // GATE 0 tests `id !== undefined`, deliberately — not `!= null`, and not
+      // "truthy". Every falsy shape a body can carry has still NAMED the id
+      // member of the resource object, and each one is its own exemption a
+      // future edit can introduce while the suite stays green:
+      //
+      //   `id !== undefined && id !== null`   -> `V_g0_null`
+      //   `id !== undefined && id !== 0`      -> `V_g0_zero`
+      //
+      // Both skip the refusal AND the collision lookup. `0` matters more than
+      // it looks: it is a legitimate store key (assertion 30 sweeps it), so a
+      // caller who could get past the gate with `{"id":0}` would learn from the
+      // 409-vs-200 whether record 0 exists — the whole oracle, for one id.
+      // `assignRecordId`'s falsy guard then hands the create a server id, which
+      // is why nothing is left behind either way and why only the STATUS can
+      // pin this.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const idsBefore = animalIds();
+
+      for (const id of [null, 0, '0', '', false]) {
+        for (const owner of ['gina', 'restricted']) {
+          const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+            method: 'POST',
+            url: '/animals',
+            body: { data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner } } },
+          }));
+
+          assert.strictEqual(response, 403,
+            `{"id": ${JSON.stringify(id)}, owner: "${owner}"} is refused exactly as a numeric id is ` +
+            '(was: 200 for an allowed payload)');
+        }
+      }
+
+      assert.deepEqual(animalIds(), idsBefore, 'and no record was created by any of them');
+    });
+
+    test('[DEFECT] assertion 43 — the body-id coercion agrees with the URL surface, and rejects rather than truncates', async function(assert) {
+      // WHY THIS IS A DEFECT AND NOT A PREFERENCE. `normalizeBodyId` exists so
+      // the collision lookup uses the key the store actually holds — the whole
+      // point of the round-3 blocker fix. It used `parseInt(id, 10)`, with an
+      // explicit radix, while `getId()` — the coercion the URL surface uses, and
+      // therefore the one that decides which record an id ADDRESSES — uses
+      // `parseInt(id)` with none. The two disagree on a hex-shaped id:
+      //
+      //   GET  /animals/0x2391                   -> record 9105   (getId -> 9105)
+      //   POST /animals {"id":"0x2391"}          -> lookup under 0, a MISS
+      //                                          -> 200, and record 9105 is OVERWRITTEN
+      //
+      // That is the raw-versus-normalised divergence the blocker was, in a
+      // narrower form, reintroduced by the fix for it. The two coercions now
+      // share one function, so they cannot diverge again by editing one of them.
+      //
+      // AND THE DELIBERATE CHOICE, since `Number` was the alternative: `Number`
+      // agrees with `getId` on `'0x2391'` but disagrees on `'1e3'` and `'9105.5'`,
+      // so it trades one divergence for two. `parseInt` BEHIND the existing
+      // `isNaN(Number(id))` gate is what rejects a partially-numeric id instead
+      // of truncating it — `parseInt('9105h')` is `9105`, and truncating a
+      // partially-valid id into a DIFFERENT VALID key is exactly how the
+      // collision lookup was skipped. The gate is what makes that safe, so the
+      // `'9105h'` cell below pins the gate, not the parser.
+      const unfiltered = new OrmRequest({ model: 'animal', access: noFilterAccess });
+      const EXISTING = 9105;
+      createRecord('animal', { id: EXISTING, type: 1, age: 7, size: 'small', owner: 'gina', traits: [] }, { serialize: false, _skipAutoPersist: true });
+
+      // The URL surface is the reference: this is the record `0x2391` addresses.
+      const addressed = await dispatch(unfiltered, unfiltered.handlers.get['/:id'], makeRequest({
+        url: '/animals/0x2391', params: { id: '0x2391' },
+      }));
+      assert.strictEqual(addressed?.data?.id, EXISTING, 'precondition: GET /animals/0x2391 addresses record 9105');
+
+      const post = id => dispatch(unfiltered, unfiltered.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id, attributes: { type: 1, age: 99, size: 'large', owner: 'gina' } } },
+      }));
+
+      // [collides, why]
+      const cases = [
+        [String(EXISTING), true, 'the plain string form of an existing numeric key'],
+        ['0x2391', true, 'the HEX form — the URL surface resolves it to 9105, so the body surface must too (was: parseInt radix 10 -> 0, a MISS, and 9105 was overwritten)'],
+        [` ${EXISTING} `, true, 'whitespace-padded, which both coercions accept'],
+        ['', false, 'empty names no id at all, so it collides with nothing'],
+      ];
+
+      for (const [id, collides, why] of cases) {
+        const keysBefore = animalIds();
+        const response = await post(id);
+
+        if (collides) {
+          assert.strictEqual(response, 409, `POST {"id":${JSON.stringify(id)}} is 409 — ${why}`);
+        } else {
+          assert.notStrictEqual(response, 409, `POST {"id":${JSON.stringify(id)}} is NOT 409 — ${why}`);
+        }
+        assert.strictEqual(store.get('animal', EXISTING).age, 7,
+          `and record ${EXISTING} was not overwritten by {"id":${JSON.stringify(id)}}`);
+
+        for (const key of animalIds()) {
+          if (!keysBefore.includes(key)) store.remove('animal', key, { _skipAutoPersist: true });
+        }
+      }
+
+      // THE RESIDUAL, PINNED RATHER THAN CLAIMED — and it is why the `isNaN`
+      // gate is described above as the load-bearing half.
+      //
+      // `'9105h'` is correctly REJECTED by the lookup: `isNaN` sends it through
+      // as a string, so it is not truncated to 9105 and does not answer a false
+      // 409. But the MODEL's id transform is a bare `parseInt` with no such
+      // gate, so `createRecord` lands the record on 9105 anyway and overwrites
+      // it. The lookup key and the landing key disagree — the same shape as the
+      // round-3 blocker, one layer down.
+      //
+      // NOT FIXED HERE, deliberately, and for the same reason #203 was not: the
+      // id transform reaches every `createRecord` caller in the library, and
+      // changing id coercion for everybody inside an authorization patch is how
+      // a security patch acquires an unrelated regression. `normalizeBodyId`
+      // cannot close it alone either — a model with a STRING id (`owner`,
+      // `category`) needs `isNaN` to pass `'gina'` through, and dropping the
+      // gate to match the numeric transform would make `POST {"id":"gina"}` miss
+      // owner `gina` entirely. Filed as abofs/stonyx-orm#205.
+      //
+      // GATE 0 closes it for the filtered population — any client-supplied id is
+      // 403 — so what remains is a data-integrity defect on UNFILTERED
+      // collections, exactly like #203. Asserting it here means a future change
+      // to either coercion is a red test rather than a silent behaviour change.
+      const truncating = await post('9105h');
+      assert.notStrictEqual(truncating, 409,
+        'POST {"id":"9105h"} is NOT 409 — a partially numeric id is rejected at the LOOKUP, not truncated to 9105');
+      assert.strictEqual(store.get('animal', EXISTING).age, 99,
+        'RESIDUAL (abofs/stonyx-orm#205): the model id transform truncates it anyway, so the write still lands on 9105 — ' +
+        'pinned so that closing #205 turns this assertion red rather than passing silently');
+
+      store.remove('animal', EXISTING, { _skipAutoPersist: true });
+    });
+
+    test('[DEFECT] assertion 44 — `""` means NO id, while `"   "` addresses the slot `getId` says it does', async function(assert) {
+      // `normalizeBodyId` diverges from `getId` in exactly one place, and this
+      // is it. Both halves are killable and neither was pinned:
+      //
+      //   `""`    -> `""`.  It is the only string that means "no id":
+      //             `createRecord` treats it as absent and assigns a server id.
+      //             Coercing it instead gives `parseInt("")` = `NaN`, and a
+      //             record CAN be held under `NaN` — so `POST {"id":""}` would
+      //             answer 409 against a record it never named.
+      //   `"   "` -> `NaN`.  It is truthy, so it survives `assignRecordId`'s
+      //             falsy guard and NaNs in the id transform; `getId` maps it to
+      //             `NaN` too, so it ADDRESSES that slot on every other route.
+      //             The previous `id.trim() === ""` short-circuit made the body
+      //             surface miss a record the URL surface can reach — the same
+      //             class of divergence as the hex case in assertion 43.
+      //
+      // Measured, not assumed: the NaN slot below is created by the first POST.
+      const unfiltered = new OrmRequest({ model: 'animal', access: noFilterAccess });
+      const keysBefore = animalIds();
+      const post = id => dispatch(unfiltered, unfiltered.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+      }));
+
+      try {
+        await post('   ');
+        assert.ok(animalIds().some(key => typeof key === 'number' && Number.isNaN(key)),
+          'precondition: a whitespace id really does land the record under the NaN key');
+
+        assert.strictEqual(await post('   '), 409,
+          'a second `"   "` collides with it, exactly as GET /animals/%20%20%20 would reach it ' +
+          '(was: a MISS, and the NaN-keyed record was silently overwritten)');
+
+        const empty = await post('');
+        assert.notStrictEqual(empty, 409,
+          '`""` names no id, so it never collides — it must not be coerced to NaN and answer 409 ' +
+          'against a record it never named');
+        assert.notOk(animalIds().some(key => key === ''),
+          'and nothing is ever held under `""`, which is why coercing it would address a foreign slot');
+      } finally {
+        for (const key of animalIds()) {
+          if (!keysBefore.includes(key)) store.remove('animal', key, { _skipAutoPersist: true });
+        }
+      }
+    });
+  });
+
+  // =========================================================================
   // Persist-gate boundaries (assertions 24-25)
   //
   // Both were surviving mutants: `>= 400` -> `> 400` on the gate, and dropping

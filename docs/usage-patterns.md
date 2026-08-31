@@ -154,6 +154,11 @@ await Orm.db.save();
 > here; that is not the same as being safe. See README "Matching the url" and
 > [#202](https://github.com/abofs/stonyx-orm/issues/202), which replaces url
 > matching with the model, operation and record.
+>
+> **This file does not ship.** `npm pack` includes `dist`, `src`, `config` and
+> `README.md` only, so a consumer sees the README section and the header of
+> `src/orm-request.ts` — the two copies that must stay complete. Treat this as
+> the working notes, not the delivered warning.
 
 ```javascript
 // Illustrative — the shipped fixture is test/sample/access/global-access.ts,
@@ -218,8 +223,15 @@ export default class GlobalAccess {
     // record that does not exist) and 403 on POST.
     //
     // NOTE: with a filter in force, a POST carrying a client-supplied `id` is
-    // refused with 403 whatever the payload — that is what stops POST being an
-    // id-enumeration oracle. Let the server assign the id.
+    // refused with 403 whatever the payload, and BEFORE any store lookup — that
+    // is what stops POST being an id-enumeration oracle, in status and in
+    // latency. Let the server assign the id.
+    //
+    // "Whatever the payload" is a claim about the `id` member of the resource
+    // object, and it holds only because that is the sole channel a caller id can
+    // arrive on. `attributes.id` and `relationships.id` are both stripped for
+    // that reason. A `relationships` key that is NOT a declared relationship is
+    // still applied — abofs/stonyx-orm#204.
     if (path === owners || path.startsWith(`${owners}/`)) {
       return record => record.id !== 'angela';
     }

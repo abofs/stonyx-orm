@@ -1409,6 +1409,54 @@ module('[Integration] ORM', function(hooks) {
       assert.notOk(store.get('animal', COLLIDE), 'and no denied create left a record behind');
     });
 
+    test('[DEFECT] GATE 0 cannot be walked around by moving the id into `relationships`, over the real router', async function(assert) {
+      // The oracle closure is only as wide as the channels it covers. GATE 0
+      // reads the `id` member of the resource object; `createHandler` also
+      // strips `attributes.id` — and then re-admitted a caller id through the
+      // relationships loop, whose `key` is verbatim from the body and was never
+      // checked. Measured on the reviewed head, unauthenticated, over this
+      // router:
+      //
+      //   GET  /animals/21                                    -> 404  (hidden)
+      //   POST /animals {"id":21, ...}                        -> 403  GATE 0 fires
+      //   POST /animals {"relationships":{"id":{"data":{"id":21}}},
+      //                  "attributes":{"owner":"gina"}}       -> 200  *** BYPASS ***
+      //   GET  /animals/21                                    -> 200  *** de-hidden ***
+      //
+      // It belongs in the integration tier because the claim it falsifies is a
+      // consumer-facing one — README breaking change 3 said "whatever the
+      // payload" — and a consumer meets it over HTTP, not through the handler.
+      const keysBefore = Array.from(store.get('animal').keys());
+      const hiddenBefore = store.get('animal', HIDDEN);
+
+      const before = await fetch(`${endpoint}/animals/${HIDDEN}`);
+      assert.equal(before.status, 404, 'precondition: the hidden record reads as absent');
+
+      const bypass = await fetch(`${endpoint}/animals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: {
+          type: 'animal',
+          relationships: { id: { data: { id: HIDDEN } } },
+          attributes: { type: 1, age: 77, size: 'large', owner: 'gina' },
+        } })
+      });
+
+      assert.strictEqual(store.get('animal', HIDDEN), hiddenBefore, 'the hidden record still occupies its slot');
+      assert.notEqual(store.get('animal', HIDDEN).age, 77,
+        'and was NOT overwritten (was: age 77, owner gina — de-hidden permanently by one moved field)');
+
+      const body = bypass.status === 200 ? await bypass.json() : null;
+      assert.notEqual(Number(body?.data?.id), HIDDEN, 'and no create landed on the caller-chosen id');
+
+      const after = await fetch(`${endpoint}/animals/${HIDDEN}`);
+      assert.equal(after.status, 404, 'the hidden record still reads as absent afterwards (was: 200)');
+
+      for (const key of Array.from(store.get('animal').keys())) {
+        if (!keysBefore.includes(key)) store.remove('animal', key, { _skipAutoPersist: true });
+      }
+    });
+
     test('[GUARD] the refusal is scoped to filtered callers: an unfiltered collection still answers 409', async function(assert) {
       // Proves the assertion above is not green merely because every POST is 403
       // now. `/traits` carries no function-style filter, so the documented

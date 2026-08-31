@@ -1,3 +1,40 @@
+/**
+ * REST request handling and access enforcement for @stonyx/orm.
+ *
+ * ---------------------------------------------------------------------------
+ * THE DOCUMENTED `access()` PATTERN IS A STOPGAP. READ THIS BEFORE RELYING ON IT.
+ * ---------------------------------------------------------------------------
+ * `auth()` below hands your `access(request)` a raw transport artifact and asks
+ * you to re-derive from a URL string what this module already holds
+ * structurally: which model, which operation, which record. The three-line
+ * URL-matching example in README has failed **open** in four distinct ways
+ * during the review of a single change, each found only after the previous was
+ * fixed, by four different people:
+ *
+ *   1. `request.url` is mount-relative under `RestServer.mountRoute`, so a
+ *      prefix match against it is ALWAYS false.
+ *   2. `request.originalUrl` carries the query string, so an anchored equality
+ *      check misses `/owners?filter[age]=30`.
+ *   3. The router is a bare `express()` (`caseSensitive: false`) while a
+ *      hand-written matcher is case-SENSITIVE, so `GET /OwNeRs/angela` walks
+ *      past it. Router-side: abofs/stonyx-rest-server#47.
+ *   4. Under a configured `ORM_REST_ROUTE` a hard-coded `/owners` matches
+ *      nothing -- environment-specifically, which is worse.
+ *
+ * The README sample closes all four. That is NOT the same as being safe; it is
+ * safe against the four variants we happen to have found, and there is no
+ * reason to believe the list is complete.
+ *
+ * THE REAL FIX IS abofs/stonyx-orm#202: `access()` should receive the model, the
+ * operation and the record, so there is no URL to parse and no variant to miss.
+ * Prefer the array shape (`['read']`) or `false` until #202 lands; the
+ * function shape is what requires the URL matching.
+ *
+ * The enforcement gates in this file (GATE 0/1/2, the create rollback, the
+ * per-handler `isDenied` re-checks) are correct independently of that -- they
+ * enforce whatever predicate you return. The stopgap is the part where YOU have
+ * to work out which predicate to return.
+ */
 import { Request } from '@stonyx/rest-server';
 import Orm, { store, createRecord, updateRecord } from '@stonyx/orm';
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
@@ -84,12 +121,45 @@ function getBaseUrl(request: OrmRequest$): string {
   return `${protocol}://${host}`;
 }
 
-function getId(params: { id?: string; [key: string]: unknown }): string | number {
-  const id = params.id;
-  if (!id) return '';
+/**
+ * The ONE coercion from a caller-supplied id string to the key the store holds
+ * it under. Both id-bearing surfaces go through this, and neither has a copy.
+ *
+ * WHY IT IS SHARED RATHER THAN DUPLICATED. `getId()` (URL) and
+ * `normalizeBodyId()` (JSON body) each had their own arithmetic, and they
+ * disagreed: `parseInt(id)` versus `parseInt(id, 10)`. On a hex-shaped id that
+ * is a two-record difference --
+ *
+ *   GET  /animals/0x2391          -> record 9105   (getId    -> parseInt('0x2391')     = 9105)
+ *   POST /animals {"id":"0x2391"} -> lookup under 0 (normalize -> parseInt('0x2391',10) = 0)
+ *                                 -> a MISS, so the duplicate check was skipped and
+ *                                    createRecord OVERWROTE 9105 in place, answering 200
+ *
+ * -- which is the raw-versus-normalised divergence that produced the round-3
+ * blocker, in a narrower form, reintroduced by the fix for it. Two coercions
+ * that must agree cannot be kept in agreement by review; they have to be one
+ * function. Pinned by assertion 43.
+ *
+ * `parseInt` and not `Number`, deliberately. They differ on `'1e3'` (1 vs 1000)
+ * and `'9105.5'` (9105 vs 9105.5), and `getId` -- which decides which record an
+ * id ADDRESSES -- is the reference, so `Number` would trade one divergence for
+ * two. The reason `parseInt` is safe here is the `isNaN` gate in front of it:
+ * `parseInt('9105h')` is `9105`, and truncating a partially-valid id into a
+ * DIFFERENT VALID key is exactly how a collision lookup gets skipped. The gate
+ * rejects it as a string instead, so nothing is ever truncated. That gate, not
+ * the parser, is the load-bearing half -- assertion 43 pins it.
+ */
+function coerceId(id: string): string | number {
   if (isNaN(id as unknown as number)) return id;
 
   return parseInt(id);
+}
+
+function getId(params: { id?: string; [key: string]: unknown }): string | number {
+  const id = params.id;
+  if (!id) return '';
+
+  return coerceId(id);
 }
 
 /**
@@ -108,12 +178,33 @@ function getId(params: { id?: string; [key: string]: unknown }): string | number
  * answered 200; combined with the denied-create rollback added for #190 it
  * became an unauthenticated DELETE of any id. Normalising here is half of that
  * fix -- see the rollback in createHandler for the other half.
+ *
+ * It shares `coerceId` with `getId` so the two surfaces cannot drift apart
+ * again, and differs from `getId` in exactly ONE place, below.
  */
 function normalizeBodyId(id: string | number): string | number {
-  if (typeof id === 'number') return id;
-  if (typeof id !== 'string' || id.trim() === '') return id;
+  // Non-strings pass through untouched: a JSON body id can arrive as a number,
+  // and `getId`'s falsy-flatten must NOT apply to it -- `0` is a legitimate id
+  // and `getId` would turn it into `''`. (assertion 30 sweeps id `0`.)
+  if (typeof id !== 'string') return id;
 
-  return isNaN(id as unknown as number) ? id : parseInt(id, 10);
+  // THE ONE DIVERGENCE FROM `getId`, and it mirrors rather than contradicts it:
+  // `getId` maps a falsy param to `''`, and `''` is the only string a body can
+  // carry that means "no id" -- `createRecord` treats it as absent and assigns a
+  // server id. Coercing it instead would make it address a real slot, because
+  // `parseInt('')` is `NaN` and a record CAN be held under `NaN` (a truthy but
+  // non-numeric id such as `'   '` survives `assignRecordId`'s falsy guard and
+  // then NaNs in the id transform). So `POST {"id":""}` would answer 409 against
+  // an unrelated record it never named. Pinned by assertion 44.
+  //
+  // Note what is deliberately NOT special-cased here any more: whitespace.
+  // `id.trim() === ''` used to short-circuit `'   '` as well, which made the
+  // body surface DISAGREE with the URL surface -- `getId({id:'   '})` is `NaN`,
+  // so `'   '` addresses the NaN slot on every other route while the collision
+  // lookup missed it. Same class of bug as the hex divergence above.
+  if (id === '') return id;
+
+  return coerceId(id);
 }
 
 function buildResponse(
@@ -394,6 +485,25 @@ export default class OrmRequest extends Request {
       // lookup cost, can depend on whether that id exists. 403 -- the same
       // status as a denied create -- so the two cannot be separated either.
       //
+      // BOTH HALVES OF THAT ARE PINNED, because both were once asserted here and
+      // pinned by nothing:
+      //
+      //   status  -- assertion 22 sweeps payload x id x id-type, plus `null`.
+      //   latency -- assertion 41 asserts NO `store.find` is issued on this
+      //              path. Moving the refusal to after a lookup and returning
+      //              the same 403 left the suite green while re-opening a
+      //              hit-versus-miss timing difference on every id-bearing POST,
+      //              which is what would turn #197 from a ~0.06ms post-fetch
+      //              residual into a live timing oracle on create.
+      //
+      // AND THE GUARANTEE IS ONLY AS WIDE AS THE CHANNELS IT COVERS. It reads on
+      // the `id` member of the resource object, so it holds only while that is
+      // the ONLY way a caller id can reach `createRecord`. It was not: the
+      // relationships loop below re-admitted one under `key === "id"` and the
+      // gate never fired. Both strips -- `attributes.id` and `relationships.id`
+      // -- are therefore part of THIS gate, not tidiness, and assertion 39 pins
+      // them. Adding a third channel without a strip re-opens the oracle.
+      //
       // Scoped to function-style `access` because that is exactly the population
       // the oracle exists for: with no per-record filter there are no hidden
       // records, and 409 discloses nothing GET /:id does not already.
@@ -413,9 +523,32 @@ export default class OrmRequest extends Request {
 
       const { id: _ignoredId, ...sanitizedAttributes } = attributes || {};
 
-      // Extract relationship IDs from JSON:API relationships object
+      // Extract relationship IDs from JSON:API relationships object.
+      //
+      // `key` comes VERBATIM from the request body, so `id` is stripped here for
+      // exactly the same reason it is stripped from `attributes` on the line
+      // above -- and it must be, or GATE 0 is walked around by moving one field:
+      //
+      //   POST /animals {"id":21, ...}                    -> 403  GATE 0 fires
+      //   POST /animals {"relationships":{"id":{"data":{"id":21}}},
+      //                  "attributes":{"owner":"gina"}}   -> 200  BYPASS
+      //
+      // Top-level `id` stayed `undefined`, so GATE 0 never fired and the
+      // collision lookup never ran; `createRecord` took its last-entry-wins
+      // branch, overwrote hidden record 21 in place and reset its `owner` to a
+      // value the caller chose -- de-hiding it permanently. That is #190 itself,
+      // on the create surface. Pinned by assertion 39.
+      //
+      // The `id` member of the resource object is now the ONLY channel a caller
+      // id can arrive on, which is what makes GATE 0's guarantee checkable
+      // rather than merely asserted. INHERITED from `dev`, which carries this
+      // loop verbatim; the general form -- the loop accepts any key, not just
+      // `id`, so a body key that is not a declared relationship is still
+      // mass-assigned -- is abofs/stonyx-orm#204.
       if (rels) {
         for (const [key, value] of Object.entries(rels)) {
+          if (key === 'id') continue;
+
           const relData = value?.data;
           if (relData && relData.id !== undefined) {
             (sanitizedAttributes as { [key: string]: unknown })[key] = relData.id;
@@ -466,7 +599,27 @@ export default class OrmRequest extends Request {
         //                     abofs/stonyx-orm#203.
         //   identity       -- the slot still holds the object we just created,
         //                     so nothing between createRecord and here replaced
-        //                     it.
+        //                     it. Deleting this half SURVIVES the suite, and it
+        //                     is kept anyway. WHY IT IS REDUNDANT: there is no
+        //                     `await` anywhere between `slotsBefore` and
+        //                     `store.remove` -- the whole window is synchronous,
+        //                     so it is atomic under Node's event loop; before-
+        //                     `create` hooks run BEFORE the handler
+        //                     (`_withHooks` runs its hook loop ahead of
+        //                     `await handler(...)`), and a consumer predicate
+        //                     inside `isDenied` runs AFTER `createdNewSlot` is
+        //                     computed and cannot flip it. That is a property of
+        //                     THIS function, not of GATE 0 -- an earlier note
+        //                     credited GATE 0, which was both wrong (a caller id
+        //                     reached createRecord through the relationships
+        //                     loop, #204) and the wrong kind of reason: a guard
+        //                     justified on code sixty lines upstream gets
+        //                     silently re-armed when that code moves.
+        //                     SO IT BECOMES REACHABLE IF AN `await` IS
+        //                     INTRODUCED HERE, which is the change a future
+        //                     editor would actually make. See the
+        //                     guards-redundant-by-construction table in
+        //                     docs/project-structure.md.
         if (createdNewSlot && store.get(model, record.id as string | number) === record) {
           store.remove(model, record.id as string | number, { _skipAutoPersist: true });
         }
@@ -513,6 +666,19 @@ export default class OrmRequest extends Request {
       if (rels) {
         const relUpdates: { [key: string]: unknown } = {};
         for (const [key, value] of Object.entries(rels)) {
+          // The same missing key filter as createHandler's, and as the
+          // attribute loop directly above -- which already had it, while this
+          // loop did not. A PATCH carrying
+          // `relationships:{"id":{"data":{"id":9101}}}` reached `updateRecord`
+          // and RE-KEYED the record: the object held under store key 9102 then
+          // reported id 9101, so a visible record claimed a hidden record's
+          // identity on every surface that reads `record.id` rather than the map
+          // key. Gated by GATE 1 on the addressed record, so it is store
+          // corruption rather than a filter bypass -- but it is the same one-line
+          // omission two handlers apart. Pinned by assertion 40; INHERITED from
+          // `dev`; abofs/stonyx-orm#204.
+          if (key === 'id') continue;
+
           const relData = value?.data;
           if (relData && relData.id !== undefined) {
             relUpdates[key] = relData.id;

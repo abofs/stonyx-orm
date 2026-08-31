@@ -368,13 +368,25 @@ The rule: a guard that a mutation cannot kill is either **deleted** (when both
 branches are genuinely equivalent) or **kept and listed here with the condition
 under which it becomes reachable**. It is never left silently unkillable.
 
+And the reachability condition has to name **the change that would break the
+guard**, not the one that happened to establish it. The identity row below
+originally justified itself with "GATE 0 refuses client-supplied ids, so no
+caller-chosen id reaches `createRecord`" — a property owned by *different code*
+sixty lines upstream, and one that was false at the time it was written: a caller
+id reached `createRecord` through the `relationships` loop
+([#204](https://github.com/abofs/stonyx-orm/issues/204)). Justifying a guard on
+someone else's invariant is how it gets deleted by a reviewer who checks that
+invariant, or silently re-armed by an editor who narrows it. Justify it on a
+property of the function it lives in, if there is one.
+
 | Guard | Status | Disposition |
 |---|---|---|
 | `updateHandler` `isDenied` | **killable** — assertion 32 | GATE 1 decides *before* the before-hook loop, and a before-hook can change the verdict (mutating the record, or a predicate over per-request state). This is the only re-evaluation after that window, so it is a real guard, not defence in depth. |
 | `deleteHandler` `isDenied` | **killable** — assertion 33 | Same window. Deleting it destroys the record behind a 204. |
 | catch-all relationship routes (`Md`/`Me`) | deleted | Both branches returned a constant 404, so no distinguishing test could exist. If either route ever stops being a constant 404 it becomes an eighth surface and must filter the parent. |
-| create rollback: `store.get(...) === record` identity check | **survivor, retained** | GATE 0 refuses client-supplied ids under a filter, so no caller-chosen id reaches `createRecord` and nothing can occupy the slot between the create and the rollback. It becomes reachable the moment GATE 0 is narrowed — e.g. to permit ids for a subset of callers — and it is the only thing standing between the rollback and a deletion primitive. Mutating it (inverting the condition) **is** killed by assertion 14; only deleting it survives. |
+| create rollback: `store.get(...) === record` identity check | **survivor, retained** | **There is no `await` anywhere between `slotsBefore`, `createRecord`, `createdNewSlot`, `isDenied` and `store.remove`.** The whole window is synchronous, so it is atomic under Node's event loop and no concurrent request can interleave; before-`create` hooks run *before* the handler (`_withHooks` runs its hook loop ahead of `await handler(...)`), so they are outside it, and a consumer predicate running inside `isDenied` executes *after* `createdNewSlot` is computed and cannot flip it. Nothing can occupy the slot, whoever chose the id. **Becomes reachable if an `await` is introduced between the create and the rollback** — which is what a future editor would actually do. Mutating it (inverting the condition) **is** killed by assertion 14; only deleting it survives. |
 | create rollback: `createdNewSlot` check | **killable** — assertion 31 | `assignRecordId` returns last-INSERTED + 1, not max + 1 ([#203](https://github.com/abofs/stonyx-orm/issues/203)), so a server-assigned id can land on an occupied slot. GATE 0 cannot refuse that request — it supplied no id. |
+| `normalizeBodyId`'s `id === ''` early return | **killable** — assertion 44 | `''` is the only body id that means "no id": `createRecord` treats it as absent and assigns a server id. Coercing it gives `parseInt('') === NaN`, and a record **can** be held under `NaN`, so `POST {"id":""}` would answer 409 against a record it never named. Its whitespace sibling (`id.trim() === ''`) was **deleted** rather than kept: it made the body surface disagree with `getId`, which maps `'   '` to `NaN` and therefore addresses that slot on every other route. |
 
 > **Known gap:** the predicate is evaluated against the record the route is
 > addressed to. It is **not** applied to related or included records — those

@@ -314,10 +314,19 @@ Access classes define models and provide custom filtering/authorization logic.
 > **The URL-matching in this example is a stopgap. Read
 > [Matching the url](#matching-the-url) before copying it.** The same three-line
 > example has failed **open** in four distinct ways during one review, each found
-> only after the previous was fixed. The sample below closes all four; that is
-> not the same as being safe. The real fix is
-> [#202](https://github.com/abofs/stonyx-orm/issues/202) — `access()` should
-> receive the model, the operation and the record, so there is no URL to parse.
+> only after the previous was fixed, by four different people. The sample below
+> closes all four; that is not the same as being safe — it is safe against the
+> four variants that happen to have been found, and there is no reason to believe
+> the list is complete.
+>
+> **The real fix is
+> [#202](https://github.com/abofs/stonyx-orm/issues/202)** — `access()` should
+> receive the model, the operation and the record, so there is no URL to parse
+> and no variant to miss. Until it lands, prefer the array shape (`['read']`) or
+> `false` where you can: the **function** shape is the one that requires URL
+> matching. The same warning is repeated at the top of `src/orm-request.ts`,
+> which ships; the longer write-up in `docs/usage-patterns.md` does **not** ship,
+> so this README and that source header are the two copies a consumer sees.
 
 ```js
 import config from 'stonyx/config';
@@ -510,6 +519,22 @@ as `collectionPrefix()` above does.
 - **Enforcement is post-fetch.** The record is loaded and then tested, which
   leaves a small timing difference between a hidden record and one that never
   existed. Tracked as [#197](https://github.com/abofs/stonyx-orm/issues/197).
+- **A `relationships` key that is not a declared relationship is still applied
+  to the record.** The key comes verbatim from the request body and is checked
+  against nothing except `id`, which is stripped. On a `POST` that makes an
+  undeclared key a mass-assigned attribute; on a `PATCH` it is passed to
+  `updateRecord`. `id` is stripped in both handlers because it defeats breaking
+  change 3 above; the general form is tracked as
+  [#204](https://github.com/abofs/stonyx-orm/issues/204).
+- **A partially numeric `id` in a `POST` body can overwrite a different record
+  on an unfiltered collection.** The duplicate check rejects `"9105h"` as a
+  string, correctly, but the model's id transform truncates it to `9105` and the
+  create lands there. Filtered collections are unaffected — breaking change 3
+  refuses any client-supplied id — so this reaches consumers with **no**
+  function-style filter. Tracked as
+  [#205](https://github.com/abofs/stonyx-orm/issues/205), alongside
+  [#203](https://github.com/abofs/stonyx-orm/issues/203), which is the other way
+  a create can land on an id nobody named.
 
 ### Breaking changes in 0.4.0
 
@@ -529,9 +554,20 @@ they are recorded here.
    destroyed children behind a 404.
 3. **`POST` with a client-supplied `id` returns `403` when a function-style
    `access` filter is in force**, whatever the payload and whether or not the id
-   exists. Only affects function-style `access` users. See
-   [Filter functions](#filter-functions) for why, and let the server assign the
-   id instead. `409`-on-duplicate is unchanged for everyone else.
+   exists, and *before* any store lookup — so neither the status nor the lookup
+   cost can depend on whether that id exists. Only affects function-style
+   `access` users. See [Filter functions](#filter-functions) for why, and let the
+   server assign the id instead. `409`-on-duplicate is unchanged for everyone
+   else.
+
+   "Whatever the payload" is a statement about the **`id` member of the resource
+   object**, and it holds only because that is the sole channel a caller id can
+   arrive on. It was not always: a caller id moved into
+   `relationships: {"id": {"data": {"id": 21}}}` reached `createRecord` past this
+   refusal and overwrote a hidden record in place. Both strips — `attributes.id`
+   and `relationships.id` — are part of this behaviour, not tidiness. A future
+   change that adds a third channel without stripping it re-opens the oracle;
+   see [#204](https://github.com/abofs/stonyx-orm/issues/204).
 4. **Function-style `access` is now enforced on all seven surfaces.** Records
    previously reachable by id despite being filtered from the collection now
    return 404. Only affects function-style `access` users, for whom the old
