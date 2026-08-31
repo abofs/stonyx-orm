@@ -22,13 +22,41 @@ export const raw = {
     { id: 17, type: 'horse', details: { age: 3, c: 'small', x: 'white', location: { type: 'farm', owner: 'angela' }}},
     { id: 18, type: 'horse', details: { age: 7, c: 'large', x: 'tan', location: { type: 'farm', owner: 'gina' }}},
     { id: 19, type: 'horse', details: { age: 1, c: 'small', x: 'golden', location: { type: 'farm', owner: 'bob' }}},
-    { id: 20, type: 'horse', details: { age: 4, c: 'medium', x: 'brown', location: { type: 'farm', owner: 'angela' }}}
+    { id: 20, type: 'horse', details: { age: 4, c: 'medium', x: 'brown', location: { type: 'farm', owner: 'angela' }}},
+
+    // Owned by `restricted` — see the owners note below. These two exist ONLY
+    // to be excluded by the access filter, so no assertion outside the #190
+    // suites should ever see them.
+    { id: 21, type: 'dog', details: { age: 9, c: 'small', x: 'black', location: { type: 'farm', owner: 'restricted' }}},
+    { id: 22, type: 'cat', details: { age: 4, c: 'large', x: 'white', location: { type: 'farm', owner: 'restricted' }}}
   ],
   owners: [
     { name: 'gina', sex: 'female', age: 34, children: 0, favoriteFruit: 'apple' },
     { name: 'michael', sex: 'male', age: 38, children: 3, favoriteColor: 'blue' },
     { name: 'angela', sex: 'female', age: 36, children: 3, favoriteDeveloper: 'Stone' },
-    { name: 'bob', sex: 'male', age: 44, children: 1, favoriteMovie: 'Inception' }
+    { name: 'bob', sex: 'male', age: 44, children: 1, favoriteMovie: 'Inception' },
+
+    /**
+     * A subject that exists to be hidden (#190).
+     *
+     * test/sample/access/global-access.ts excludes this owner AND its animals
+     * on every surface, so nothing here is reachable through the REST API. That
+     * is the point: the access fixture needs a subject of its own rather than
+     * borrowing one the JSON:API mechanics tests depend on.
+     *
+     * Before #190 the fixture had no such subject. Its animals predicate
+     * compared a resolved OrmRecord against a string and excluded 0 of 20, and
+     * it was returned only for exact collection urls, so `state.filter` was
+     * undefined on every record route. A candidate fix for a live authorization
+     * bypass passed all 855 tests. Giving the filter a dedicated subject is what
+     * makes the regression suite capable of failing.
+     *
+     * Because both `restricted` and its animals are filtered out, the dataset
+     * visible through the REST API is byte-identical to what it was before they
+     * were added — every pre-existing count and ordering assertion still means
+     * exactly what it meant.
+     */
+    { name: 'restricted', sex: 'female', age: 30, children: 0, favoriteFruit: 'fig' }
   ]
 }
 
@@ -37,7 +65,8 @@ export const serialized = {
     { id: 'gina', gender: 'female', age: 34, pets: [ 4, 8, 13, 18 ], phoneNumbers: [] },
     { id: 'michael', gender: 'male', age: 38, pets: [ 2, 6, 9, 12, 16 ], phoneNumbers: [] },
     { id: 'angela', gender: 'female', age: 36, pets: [ 1, 3, 7, 10, 11, 15, 17, 20 ], phoneNumbers: [] },
-    { id: 'bob', gender: 'male', age: 44, pets: [ 5, 14, 19 ], phoneNumbers: [] }
+    { id: 'bob', gender: 'male', age: 44, pets: [ 5, 14, 19 ], phoneNumbers: [] },
+    { id: 'restricted', gender: 'female', age: 30, pets: [ 21, 22 ], phoneNumbers: [] }
   ],
   animals: [
     { id: 1, type: 1, age: 2, size: 'small', owner: 'angela', traits: [ 1, 2 ] },
@@ -59,7 +88,9 @@ export const serialized = {
     { id: 17, type: 4, age: 3, size: 'small', owner: 'angela', traits: [ 1, 3 ] },
     { id: 18, type: 4, age: 7, size: 'large', owner: 'gina', traits: [ 1 ] },
     { id: 19, type: 4, age: 1, size: 'small', owner: 'bob', traits: [ 1 ] },
-    { id: 20, type: 4, age: 4, size: 'medium', owner: 'angela', traits: [ 1 ] }
+    { id: 20, type: 4, age: 4, size: 'medium', owner: 'angela', traits: [ 1 ] },
+    { id: 21, type: 1, age: 9, size: 'small', owner: 'restricted', traits: [ 1, 2 ] },
+    { id: 22, type: 2, age: 4, size: 'large', owner: 'restricted', traits: [ 1, 3 ] }
   ],
   traits: [
     { id: 1, type: 'habitat', value: 'farm', category: 'physical' },
