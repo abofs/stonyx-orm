@@ -2,6 +2,124 @@
  * REST request handling and access enforcement for @stonyx/orm.
  *
  * ---------------------------------------------------------------------------
+ * THE `access()` CONTRACT: `access(request, { model, operation })`
+ * ---------------------------------------------------------------------------
+ * `auth()` calls your predicate with TWO arguments. The second is the access
+ * CONTEXT -- the structural facts about the request, which the framework
+ * already holds and which you should read INSTEAD of parsing anything:
+ *
+ *   context.model     The model this route was mounted for, as a model name:
+ *                     kebab-case, exactly as declared under
+ *                     `config.orm.paths.model` and keyed in the store --
+ *                     `'owner'`, `'animal'`, `'phone-number'`. NOT the
+ *                     pluralised, dasherized, mount-prefixed ROUTE name. It is
+ *                     read from the OrmRequest instance, fixed at mount time,
+ *                     and no request can influence it.
+ *
+ *   context.operation The operation being authorised. Exactly one of the four
+ *                     verbs `'read'`, `'create'`, `'update'`, `'delete'` --
+ *                     no second vocabulary ON THIS PATH, and never an HTTP
+ *                     method name like `'GET'`. These are the same four
+ *                     strings the permission-array return shape is written in
+ *                     (`['read', 'create']`), because both come from the one
+ *                     `methodAccessMap` below.
+ *
+ *                     NOT the hook vocabulary. `HookContext.operation`
+ *                     (`src/hooks.ts`, documented under "Hook Context Object"
+ *                     in the README) carries `'list' | 'get' | 'create' |
+ *                     'update' | 'delete'` on an identically-named key of an
+ *                     identically-shaped context object, and the access
+ *                     vocabulary collapses `list` and `get` into `'read'`. For
+ *                     one `GET /animals/1` a hook sees `'get'` and `access()`
+ *                     sees `'read'`, so a predicate cannot tell a collection
+ *                     read from a record read. `AccessOperation` makes
+ *                     `operation === 'get'` a compile error for a TypeScript
+ *                     consumer, because a predicate that stops matching falls
+ *                     through to the permission array -- the misreading is
+ *                     fail-open shaped.
+ *
+ *                     `undefined` when the dispatched method has no entry in
+ *                     that map. Express delivers `HEAD` to the `GET` handler,
+ *                     so this is reachable. It is left undefined rather than
+ *                     defaulted on purpose -- a fabricated `'read'` would turn
+ *                     an unclassified request into an authorised one. Treat
+ *                     `undefined` as "not classified" and deny.
+ *
+ * So a consumer writes `if (model === 'owner' && operation === 'read')`. There
+ * is no string to parse, no variant to miss, and no way to fail open through a
+ * URL shape nobody anticipated.
+ *
+ * WHAT THE CONTEXT DOES NOT TELL YOU: WHICH SURFACE. It names the model and
+ * the verb, not the route. Measured over the live router, six surfaces produce
+ * one identical context:
+ *
+ *     GET /owners                          { model: 'owner', operation: 'read' }
+ *     GET /owners/gina                     { model: 'owner', operation: 'read' }
+ *     GET /owners/gina/pets                { model: 'owner', operation: 'read' }
+ *     GET /owners/gina/relationships/pets  { model: 'owner', operation: 'read' }
+ *     GET /owners/archived                 { model: 'owner', operation: 'read' }
+ *     GET /owners/gina?include=pets        { model: 'owner', operation: 'read' }
+ *
+ * So a rule that depends on the SUB-PATH still needs `request.path` -- which is
+ * mount-relative and query-free, and is the one read of argument one the
+ * warning below sanctions. This repo's own fixture has such a rule: its
+ * `/archived` deny cannot be expressed from the context alone, and a predicate
+ * migrated to context-only would silently drop it, turning a deny into an
+ * allow. The related-resource and `?include=` surfaces serve ANOTHER model's
+ * records under `model: 'owner'`, and the context gives no signal of that
+ * (abofs/stonyx-orm#196).
+ *
+ * `record` IS NOT IN THIS CONTEXT, deliberately. `auth()` runs after route
+ * matching but BEFORE any handler executes (`@stonyx/rest-server`
+ * `src/request.ts:58-60`), so nothing has been fetched yet -- supplying a
+ * record would force a pre-fetch on every request, a second store hit and an
+ * ordering change in the middle of an authorization path. It is also
+ * unnecessary: the FUNCTION return shape already is the per-record hook. Return
+ * `(record) => boolean` and the handlers apply it to every record the request
+ * touches. Auth-time and record-time are separate decision points.
+ *
+ * THE SECOND ARGUMENT IS ADDITIVE. JavaScript ignores extra arguments, so an
+ * existing `access(request)` predicate keeps working exactly as before. The
+ * warning immediately below is therefore still live: `request` is still
+ * argument ONE, and reading it is still how predicates fail open.
+ *
+ * To reach ANOTHER model's predicate -- e.g. to check an animal while servicing
+ * an owners route -- use the boot-time registry:
+ *
+ *     const predicate = Orm.instance.getAccess('animal');
+ *     if (!predicate) return deny;
+ *     const verdict = predicate(request, { model: 'animal', operation: 'read' });
+ *
+ * `undefined` means NO PREDICATE COULD BE RESOLVED for that name -- which
+ * includes the case where the model has an access class that failed to load,
+ * because `setup-rest-server.ts` catches a load failure, warns, and publishes
+ * whatever partial map it had. It does NOT mean the model is unrestricted.
+ * Treat it as DENY, the same way `operation === undefined` is treated above.
+ *
+ * PASSING THE CONTEXT MAKES A MODEL-CORRECT ANSWER POSSIBLE. It does not make
+ * the answer model-correct on its own -- the resolved predicate has to READ it.
+ * Measured against this repo's own shipped access class, on a request express
+ * dispatched to `GET /owners/angela`, asked about ANIMALS:
+ *
+ *     getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
+ *       ->  record => record.id !== 'angela' && record.id !== 'restricted'
+ *
+ * That is the OWNERS filter, and it returns `true` for animal 21 -- the record
+ * hidden on every animal surface. Under a mount that predicate recognises
+ * neither way it is worse: it falls through to
+ * `['read', 'create', 'update', 'delete']`, a full CRUD grant. Either way the
+ * context was supplied and the answer is not the animal answer, and it is wrong
+ * in the GRANTING direction, because that predicate is arity-1 and identifies
+ * its collection from the request. (The first of these is asserted on a live
+ * dispatch by AC9 in test/integration/orm-test.ts.)
+ *
+ * Every predicate in this repo and in every consumer tree is arity-1 on the day
+ * this ships, and the caller has no supported way to tell which kind it got --
+ * the boot-time arity warning that would surface it is abofs/stonyx-orm#213.
+ * So: pass the context, and do not treat a resolved predicate's answer as
+ * model-specific until that predicate has been migrated to read the context.
+ *
+ * ---------------------------------------------------------------------------
  * DO NOT RECONSTRUCT THE REQUEST PATH INSIDE `access()`.
  * ---------------------------------------------------------------------------
  * `auth()` below hands your `access(request)` a raw transport artifact and asks
@@ -66,7 +184,7 @@ import { getBeforeHooks, getAfterHooks } from './hooks.js';
 import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
-import type { OrmRecord } from './types/orm-types.js';
+import type { OrmRecord, AccessContext, AccessFunction, AccessMethod, AccessOperation } from './types/orm-types.js';
 import { isOrmRecord } from './utils.js';
 
 interface OrmRequest$ extends Request {
@@ -94,10 +212,9 @@ interface JsonApiResponse {
   included?: unknown[];
 }
 
-type AccessMethod = string | boolean | string[] | ((record: unknown) => boolean);
 type HandlerFn = (request: OrmRequest$, state: { [key: string]: unknown }) => unknown | Promise<unknown>;
 
-const methodAccessMap: { [key: string]: string } = {
+const methodAccessMap: { [key: string]: AccessOperation } = {
   GET: 'read',
   POST: 'create',
   DELETE: 'delete',
@@ -455,10 +572,10 @@ function isDenied(filter: unknown, record: unknown): boolean {
 
 export default class OrmRequest extends Request {
   model: string;
-  access: (request: unknown) => AccessMethod;
+  access: AccessFunction;
   handlers: { [key: string]: { [key: string]: HandlerFn } };
 
-  constructor({ model, access }: { model: string; access: (request: unknown) => AccessMethod }) {
+  constructor({ model, access }: { model: string; access: AccessFunction }) {
     super(...arguments as unknown as unknown[]);
 
     this.model = model;
@@ -1155,9 +1272,42 @@ export default class OrmRequest extends Request {
     // answers 500 -- and the documented sample itself can throw
     // (`request.originalUrl.split(...)` when originalUrl is absent), so the
     // failure mode is reachable by following the docs.
+    // -------------------------------------------------------------------------
+    // #202 -- hand the consumer the STRUCTURAL facts, not just the transport.
+    //
+    // Both members are already in hand here. `model` is `this.model`, the name
+    // setup-rest-server mounted this route for; `operation` is the SAME
+    // `methodAccessMap` lookup the permission-array branch at the bottom of
+    // this method performs, so the predicate form and the array form cannot
+    // answer differently about the same request.
+    //
+    // NEITHER IS DERIVED FROM THE REQUEST TARGET, and that is the whole point.
+    // Deriving `model` here from `request.baseUrl` (or from the mounted route
+    // name, or from `getPluralName(this.model)`) would move all five fail-open
+    // variants listed in this file's header OUT of the consumer and INTO the
+    // framework, where every consumer inherits them at once. `this.model` is
+    // assigned once at mount time and no request can influence it.
+    //
+    // `operation` is left UNDEFINED for a method with no entry in
+    // `methodAccessMap`, rather than defaulted. Express delivers HEAD to the
+    // GET handler, so an unmapped method really does reach this line; a
+    // `?? 'read'` here would hand the consumer a fabricated authorisation fact
+    // and turn an unclassified request into an authorised one. Undefined is
+    // the honest answer.
+    //
+    // `record` is deliberately absent -- see `AccessContext` in
+    // src/types/orm-types.ts. Nothing is fetched at this point and adding a
+    // lookup here would put a store read in the middle of an authorization
+    // path. The function return shape below IS the per-record hook.
+    // -------------------------------------------------------------------------
+    const context: AccessContext = {
+      model: this.model,
+      operation: methodAccessMap[request.method],
+    };
+
     let access: AccessMethod;
     try {
-      access = this.access(request);
+      access = this.access(request, context);
     } catch (error) {
       // Same reasoning as `isDenied`: fail closed, but say so. An `access()`
       // that throws denies EVERY request to the collection, and a silent 403

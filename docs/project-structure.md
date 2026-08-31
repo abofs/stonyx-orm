@@ -255,6 +255,14 @@ export default class GlobalAccess {
 
 Method mapping: `GET → 'read'`, `POST → 'create'`, `DELETE → 'delete'`, `PATCH → 'update'`
 
+Since [#202](https://github.com/abofs/stonyx-orm/issues/202) `access()` is called
+with a **second** argument — `access(request, { model, operation })` — carrying
+the model name and one of those four verbs. It is additive, so the
+single-argument form above still works; the consumer-facing write-up is
+[The access context](../README.md#the-access-context-second-argument) and
+retiring the URL-derivation guidance from the samples is
+[#213](https://github.com/abofs/stonyx-orm/issues/213).
+
 #### Filter functions
 
 > The consumer-facing version of this section, including the 404-vs-403
@@ -445,15 +453,29 @@ property of the function it lives in, if there is one.
 > and become readable and deletable through `/animals`. Reachable
 > unauthenticated.
 >
-> It is **blocked, not deferred by preference**. Refusing it means checking
-> animal 21 against the **animal** model's predicate while servicing an
-> **owners** route. That is cross-model access resolution, and the contract
-> cannot express it: `access()` never receives the model structurally
-> ([#202](https://github.com/abofs/stonyx-orm/issues/202)) and
-> `setup-rest-server.ts` builds `accessFiles[model]` and then hands each entry
-> to `mountRoute` without keeping the map
-> ([#196](https://github.com/abofs/stonyx-orm/issues/196)), so at request time
-> there is nothing to consult. The chain is **#202 → #196 → #207**.
+> Refusing it means checking animal 21 against the **animal** model's predicate
+> while servicing an **owners** route — cross-model access resolution.
+> [#202](https://github.com/abofs/stonyx-orm/issues/202) has landed and both
+> halves of the mechanism now exist: `access()` receives the model structurally
+> as `context.model`, and `setup-rest-server.ts` publishes the model→predicate
+> map as `Orm.instance.accessFunctions` (resolver: `Orm.instance.getAccess`)
+> instead of discarding it, so there **is** something to consult at request
+> time. Both clauses that previously stood here — "the contract cannot express
+> it" and "there is nothing to consult" — were false as of #202 and are
+> corrected rather than deleted, because this file is where the next reader
+> checks whether the chain is still blocked.
+>
+> **The mechanism exists; the ORM does not yet use it on this path**, so the
+> re-parenting write above is still unrefused. That enforcement is
+> [#196](https://github.com/abofs/stonyx-orm/issues/196) then
+> [#207](https://github.com/abofs/stonyx-orm/issues/207), which were blocked on
+> #202 and are now free to proceed. Two limits on the mechanism they inherit:
+> the resolved predicate answers model-correctly only if it actually **reads**
+> the context, and every predicate in tree is single-argument today (the
+> boot-time arity warning is
+> [#213](https://github.com/abofs/stonyx-orm/issues/213)); and `getAccess()`
+> returning `undefined` means no predicate could be resolved — including a
+> failed load — and must be treated as **deny**.
 >
 > **Nothing in this repository may assert that a hidden record cannot be
 > modified, or that the filter cannot be defeated.** Three successive reviews of
