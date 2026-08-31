@@ -51,7 +51,7 @@ import config from 'stonyx/config';
  * safe against the four variants we happen to have found. The real fix is
  * abofs/stonyx-orm#202: hand `access()` the model, the operation and the record
  * so there is no URL to parse and no variant to miss. The case-insensitive
- * router itself is abofs/stonyx-rest-server#45.
+ * router itself is abofs/stonyx-rest-server#47.
  */
 
 /**
