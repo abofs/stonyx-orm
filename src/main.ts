@@ -25,6 +25,7 @@ import baseTransforms from './transforms.js';
 import Store from './store.js';
 import Serializer from './serializer.js';
 import { setup } from '@stonyx/events';
+import type { AccessFunction } from './types/orm-types.js';
 
 interface OrmOptions {
   dbType?: string;
@@ -68,6 +69,32 @@ export default class Orm {
   views: Record<string, unknown> = {};
   transforms: Record<string, (value: unknown) => unknown> = { ...baseTransforms };
   warnings: Set<string> = new Set();
+
+  /**
+   * Model name -> that model's `access` predicate (abofs/stonyx-orm#202).
+   *
+   * Populated by `setup-rest-server.ts` at boot, from the access classes under
+   * `config.orm.paths.access`, BEFORE any route is mounted -- so it is complete
+   * and reachable before the first request can be served. The mapping is
+   * one-to-one by construction: setup-rest-server throws if two access classes
+   * claim the same model.
+   *
+   * Keys are model names as declared and stored (kebab-case, e.g.
+   * `'phone-number'`), NOT pluralised or mount-prefixed route names.
+   *
+   * WHY THIS EXISTS AS A FIELD. It used to be a function-local in
+   * setup-rest-server that was discarded when that function returned, so at
+   * request time there was no way to get from a model name to that model's
+   * predicate at all. Each `OrmRequest` held only its OWN model's predicate.
+   * That made cross-model authorization -- asking model X's predicate about a
+   * request routed to model Y -- inexpressible, which is the capability
+   * abofs/stonyx-orm#196 and abofs/stonyx-orm#207 are built on.
+   *
+   * Empty when the REST server is disabled, or when no access configuration
+   * could be loaded. Prefer {@link Orm#getAccess} over indexing this directly.
+   */
+  accessFiles: Record<string, AccessFunction> = {};
+
   options!: OrmOptions;
   sqlDb?: SqlDb;
   db?: OrmDB | SqlDb;
@@ -193,6 +220,31 @@ export default class Orm {
 
     Orm.ready = await Promise.all(promises);
     Orm.initialized = true;
+  }
+
+  /**
+   * Resolve a model's `access` predicate by model name (abofs/stonyx-orm#202).
+   *
+   * This is the supported way to reach another model's predicate while
+   * servicing a request routed to a different model. Call it with the model
+   * name and invoke the result with the live request and an explicit context
+   * naming THAT model:
+   *
+   * ```js
+   * const predicate = Orm.instance.getAccess('animal');
+   * const verdict = predicate?.(request, { model: 'animal', operation: 'read' });
+   * ```
+   *
+   * Passing the context is not optional in practice. A predicate that
+   * identifies its collection from the request would otherwise answer about the
+   * collection the request is ADDRESSED TO -- owners -- while being asked about
+   * animals, and per #202's thesis it answers wrong in the granting direction.
+   *
+   * @param modelName - Model name as declared and stored (kebab-case).
+   * @returns The predicate, or `undefined` when the model has no access class.
+   */
+  getAccess(modelName: string): AccessFunction | undefined {
+    return this.accessFiles[modelName];
   }
 
   async startup(): Promise<void> {
