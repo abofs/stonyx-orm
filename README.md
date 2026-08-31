@@ -463,7 +463,7 @@ const verdict = predicate?.(request, { model: 'animal', operation: 'read' });
 ```
 
 `Orm.instance.getAccess(modelName)` returns the predicate, or `undefined` when
-that model has no access class. The raw map is `Orm.instance.accessFiles`, keyed
+that model has no access class. The raw map is `Orm.instance.accessFunctions`, keyed
 by model name; prefer `getAccess()`.
 
 Passing the context explicitly is what makes the answer **model-correct**. A

@@ -20,7 +20,7 @@ interface AccessInstance {
 }
 
 export default async function(route: string, accessPath: string, metaRoute: boolean): Promise<void> {
-  const accessFiles: Record<string, AccessFunction> = {};
+  const accessFunctions: Record<string, AccessFunction> = {};
 
   try {
     await forEachFileImport(accessPath, (accessClass: unknown) => {
@@ -37,9 +37,9 @@ export default async function(route: string, accessPath: string, metaRoute: bool
       for (const model of models === '*' ? availableModels : models) {
         if (model === dbKey) continue;
         if (!store.data.has(model)) throw new Error(`Unable to define access for Invalid Model "${model}". Model does not exist`);
-        if (accessFiles![model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
+        if (accessFunctions![model]) throw new Error(`Access for model "${model}" has already been defined by another access class.`);
 
-        accessFiles![model] = accessInstance.access;
+        accessFunctions![model] = accessInstance.access;
       }
     });
   } catch (error) {
@@ -50,7 +50,7 @@ export default async function(route: string, accessPath: string, metaRoute: bool
   // -------------------------------------------------------------------------
   // #202 -- the registry has to survive this function.
   //
-  // `accessFiles` used to be a function-local that was discarded at the return
+  // `accessFunctions` used to be a function-local that was discarded at the return
   // below, so the only thing that ever saw it was the mount loop. Each mounted
   // OrmRequest then held its OWN model's predicate and nothing held the map, so
   // at request time there was no route from a model NAME to that model's
@@ -68,7 +68,7 @@ export default async function(route: string, accessPath: string, metaRoute: bool
   // set of predicates that is actually enforcing. A guard here that skipped the
   // assignment would let the registry go silently missing, which is precisely
   // the failure #202's AC8 exists to catch.
-  Orm.instance.accessFiles = accessFiles;
+  Orm.instance.accessFunctions = accessFunctions;
 
   await waitForModule('rest-server');
 
@@ -76,7 +76,7 @@ export default async function(route: string, accessPath: string, metaRoute: bool
   const name = route === '/' ? 'index' : (route[0] === '/' ? route.slice(1) : route);
 
   // Configure endpoints for models and views with access configuration
-  for (const [model, access] of Object.entries(accessFiles!)) {
+  for (const [model, access] of Object.entries(accessFunctions!)) {
     const pluralizedModel = getPluralName(model);
     const modelName = name === 'index' ? pluralizedModel : `${name}/${pluralizedModel}`;
     RestServer.instance.mountRoute(OrmRequest, { name: modelName, options: { model, access } });

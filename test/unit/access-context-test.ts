@@ -170,7 +170,7 @@ module('[Unit] access() context argument (#202)', function(hooks) {
       ...VERBS.map(verb => `'${verb}'`),
       'kebab-case',
       'Orm.instance.getAccess(',
-      'Orm.instance.accessFiles',
+      'Orm.instance.accessFunctions',
     ], 'the README access-context section');
 
     assert.ok(section.includes('#### `record` is not in the context'),

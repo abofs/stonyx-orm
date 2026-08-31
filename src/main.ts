@@ -71,7 +71,25 @@ export default class Orm {
   warnings: Set<string> = new Set();
 
   /**
-   * Model name -> that model's `access` predicate (abofs/stonyx-orm#202).
+   * Model name -> the `access` predicate of the access class that CLAIMS that
+   * model (abofs/stonyx-orm#202).
+   *
+   * Not "that model's own predicate". One access class may claim many models
+   * -- `GlobalAccess` in this repo's fixtures declares five, and `models = '*'`
+   * claims every model in the store -- and it declares ONE `access` method, so
+   * the same function object is registered under every one of those keys.
+   * `getAccess('owner') === getAccess('animal')` is `true` there. The
+   * one-to-one guarantee below is key -> function, never function -> model,
+   * and a caller must not read a resolved predicate as being animal-specific.
+   * What makes the ANSWER model-specific is the context the caller passes and
+   * the predicate actually reading it -- see {@link Orm#getAccess}.
+   *
+   * NAMED FOR WHAT IT HOLDS. It was `accessFiles` through review, inherited
+   * from the function-local in `setup-rest-server.ts` where the values came
+   * straight out of `forEachFileImport` and "files" was defensible. The values
+   * are `AccessFunction`s, and the sibling public registries on this class
+   * (`models`, `serializers`, `views`, `transforms`) are all plural nouns of
+   * the thing held. Renamed here because #202 is the last moment it is free.
    *
    * Populated by `setup-rest-server.ts` at boot, from the access classes under
    * `config.orm.paths.access`, BEFORE any route is mounted -- so it is complete
@@ -90,10 +108,13 @@ export default class Orm {
    * request routed to model Y -- inexpressible, which is the capability
    * abofs/stonyx-orm#196 and abofs/stonyx-orm#207 are built on.
    *
-   * Empty when the REST server is disabled, or when no access configuration
-   * could be loaded. Prefer {@link Orm#getAccess} over indexing this directly.
+   * Empty when the REST server is disabled, and PARTIAL when one access file
+   * failed to load (`setup-rest-server.ts` catches, warns and assigns whatever
+   * it had). So a missing key does NOT mean the model has no access class.
+   * Prefer {@link Orm#getAccess} over indexing this directly -- it is guarded
+   * against the prototype chain and this is not.
    */
-  accessFiles: Record<string, AccessFunction> = {};
+  accessFunctions: Record<string, AccessFunction> = {};
 
   options!: OrmOptions;
   sqlDb?: SqlDb;
@@ -240,7 +261,7 @@ export default class Orm {
    * collection the request is ADDRESSED TO -- owners -- while being asked about
    * animals, and per #202's thesis it answers wrong in the granting direction.
    *
-   * OWN PROPERTIES ONLY. A bare `this.accessFiles[modelName]` walks the
+   * OWN PROPERTIES ONLY. A bare `this.accessFunctions[modelName]` walks the
    * prototype chain, so `getAccess('constructor')` resolved `Object` and
    * `getAccess('toString')` resolved `Object.prototype.toString` -- both
    * callable, and the documented `predicate?.(request, ctx)` pattern then
@@ -259,9 +280,9 @@ export default class Orm {
    *   note above. Treat it as deny.
    */
   getAccess(modelName: string): AccessFunction | undefined {
-    if (!Object.hasOwn(this.accessFiles, modelName)) return undefined;
+    if (!Object.hasOwn(this.accessFunctions, modelName)) return undefined;
 
-    return this.accessFiles[modelName];
+    return this.accessFunctions[modelName];
   }
 
   async startup(): Promise<void> {

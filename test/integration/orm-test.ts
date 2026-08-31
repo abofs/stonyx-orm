@@ -1812,7 +1812,7 @@ module('[Integration] ORM', function(hooks) {
       seedAnimal(CTX_HIDDEN, 'restricted', 9);
       seedAnimal(CTX_VISIBLE, 'gina', 5);
 
-      bootAnimalAccess = Orm.instance.accessFiles.animal;
+      bootAnimalAccess = Orm.instance.accessFunctions.animal;
       stackDepth = expressRouter().stack.length;
 
       // The same call setup-rest-server.ts:82 makes, onto the same app.
@@ -1832,7 +1832,7 @@ module('[Integration] ORM', function(hooks) {
     ctxHooks.after(function() {
       // Unmount, so no later module is served by a route this one added.
       expressRouter().stack.length = stackDepth;
-      Orm.instance.accessFiles.animal = bootAnimalAccess;
+      Orm.instance.accessFunctions.animal = bootAnimalAccess;
       authTimeProbe = null;
 
       for (const id of animalIds()) {
@@ -2191,12 +2191,12 @@ module('[Integration] ORM', function(hooks) {
 
     test('AC8 — the model->predicate registry survives boot and is reachable from the live Orm instance', async function(assert) {
       // Asserted against the LIVE `Orm.instance` this suite booted, not a
-      // constructed object. Before this story `accessFiles` was a function-local
+      // constructed object. Before this story the registry was a function-local
       // in setup-rest-server.ts, populated per model, consumed once by the mount
       // loop and discarded when that function returned — `Orm` carried no access
       // registry of any kind, so at request time there was no route from a model
       // NAME to that model's predicate.
-      const registry = Orm.instance.accessFiles;
+      const registry = Orm.instance.accessFunctions;
 
       assert.ok(registry && typeof registry === 'object', 'Orm.instance carries an access registry after a real boot');
       assert.deepEqual(Object.keys(registry).sort(), ['animal', 'category', 'owner', 'phone-number', 'trait'],
@@ -2210,6 +2210,15 @@ module('[Integration] ORM', function(hooks) {
 
       assert.strictEqual(typeof Orm.instance.getAccess('animal'), 'function', 'getAccess resolves a model to its predicate');
       assert.strictEqual(Orm.instance.getAccess('animal'), registry.animal, 'and resolves the very entry in the map');
+
+      // It is a model -> access-CLASS map, not model -> that model's own
+      // predicate. `GlobalAccess` claims five models and declares one `access`
+      // method, so one function object is registered under five keys. Pins the
+      // JSDoc on `Orm#accessFunctions`, because the wrong reading -- "the
+      // resolved predicate is animal-specific" -- is the premise behind the
+      // model-correctness claim this round had to correct.
+      assert.strictEqual(Orm.instance.getAccess('owner'), Orm.instance.getAccess('animal'),
+        'and the owner and animal entries are the SAME function object — one access class claiming five models');
       assert.strictEqual(Orm.instance.getAccess('not-a-model'), undefined, 'and answers undefined for a model with no access class');
 
       // An unguarded index into a plain `{}` walks the prototype chain, so
@@ -2314,9 +2323,9 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(liveHidden.status, 404, 'the migrated predicate is live-enforcing on /ctx-animals');
       assert.equal(liveVisible.status, 200, 'and admitting what it should');
 
-      const restore = Orm.instance.accessFiles.animal;
+      const restore = Orm.instance.accessFunctions.animal;
       try {
-        Orm.instance.accessFiles.animal = urlFreeAnimalAccess;
+        Orm.instance.accessFunctions.animal = urlFreeAnimalAccess;
 
         const resolved = Orm.instance.getAccess('animal');
 
@@ -2344,7 +2353,7 @@ module('[Integration] ORM', function(hooks) {
         assert.strictEqual(resolved(captured), false,
           'without the context there is no model to answer about, and a predicate that cannot identify its subject denies');
       } finally {
-        Orm.instance.accessFiles.animal = restore;
+        Orm.instance.accessFunctions.animal = restore;
       }
 
       assert.strictEqual(Orm.instance.getAccess('animal'), restore, 'the boot registry is left exactly as it was found');
