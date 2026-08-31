@@ -2,6 +2,62 @@
  * REST request handling and access enforcement for @stonyx/orm.
  *
  * ---------------------------------------------------------------------------
+ * THE `access()` CONTRACT: `access(request, { model, operation })`
+ * ---------------------------------------------------------------------------
+ * `auth()` calls your predicate with TWO arguments. The second is the access
+ * CONTEXT -- the structural facts about the request, which the framework
+ * already holds and which you should read INSTEAD of parsing anything:
+ *
+ *   context.model     The model this route was mounted for, as a model name:
+ *                     kebab-case, exactly as declared under
+ *                     `config.orm.paths.model` and keyed in the store --
+ *                     `'owner'`, `'animal'`, `'phone-number'`. NOT the
+ *                     pluralised, dasherized, mount-prefixed ROUTE name. It is
+ *                     read from the OrmRequest instance, fixed at mount time,
+ *                     and no request can influence it.
+ *
+ *   context.operation The operation being authorised. Exactly one of the four
+ *                     verbs `'read'`, `'create'`, `'update'`, `'delete'` --
+ *                     there is no second vocabulary, and it is never an HTTP
+ *                     method name like `'GET'`. These are the same four
+ *                     strings the permission-array return shape is written in
+ *                     (`['read', 'create']`), because both come from the one
+ *                     `methodAccessMap` below.
+ *
+ *                     `undefined` when the dispatched method has no entry in
+ *                     that map. Express delivers `HEAD` to the `GET` handler,
+ *                     so this is reachable. It is left undefined rather than
+ *                     defaulted on purpose -- a fabricated `'read'` would turn
+ *                     an unclassified request into an authorised one. Treat
+ *                     `undefined` as "not classified" and deny.
+ *
+ * So a consumer writes `if (model === 'owner' && operation === 'read')`. There
+ * is no string to parse, no variant to miss, and no way to fail open through a
+ * URL shape nobody anticipated.
+ *
+ * `record` IS NOT IN THIS CONTEXT, deliberately. `auth()` runs after route
+ * matching but BEFORE any handler executes (`@stonyx/rest-server`
+ * `src/request.ts:58-60`), so nothing has been fetched yet -- supplying a
+ * record would force a pre-fetch on every request, a second store hit and an
+ * ordering change in the middle of an authorization path. It is also
+ * unnecessary: the FUNCTION return shape already is the per-record hook. Return
+ * `(record) => boolean` and the handlers apply it to every record the request
+ * touches. Auth-time and record-time are separate decision points.
+ *
+ * THE SECOND ARGUMENT IS ADDITIVE. JavaScript ignores extra arguments, so an
+ * existing `access(request)` predicate keeps working exactly as before. The
+ * warning immediately below is therefore still live: `request` is still
+ * argument ONE, and reading it is still how predicates fail open.
+ *
+ * To reach ANOTHER model's predicate -- e.g. to check an animal while servicing
+ * an owners route -- use the boot-time registry:
+ *
+ *     const predicate = Orm.instance.getAccess('animal');
+ *     const verdict = predicate?.(request, { model: 'animal', operation: 'read' });
+ *
+ * Passing the context explicitly is what makes that answer model-CORRECT.
+ *
+ * ---------------------------------------------------------------------------
  * DO NOT RECONSTRUCT THE REQUEST PATH INSIDE `access()`.
  * ---------------------------------------------------------------------------
  * `auth()` below hands your `access(request)` a raw transport artifact and asks
