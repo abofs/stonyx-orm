@@ -266,7 +266,16 @@ function createFilterPredicate(filters: Filter[]): ((record: { [key: string]: un
 function isDenied(filter: unknown, record: unknown): boolean {
   if (typeof filter !== 'function') return false;
 
-  return !(filter as (record: unknown) => boolean)(record);
+  // A predicate that throws is treated as a denial. Unguarded, a throw escapes
+  // to express's default handler, which answers 500 (with a stack trace outside
+  // NODE_ENV=production) while a missing id still answers 404 -- so a
+  // record-dependent throw re-separates "hidden" from "does not exist" and
+  // hands back the oracle this whole change exists to close.
+  try {
+    return !(filter as (record: unknown) => boolean)(record);
+  } catch {
+    return true;
+  }
 }
 
 export default class OrmRequest extends Request {
@@ -336,8 +345,25 @@ export default class OrmRequest extends Request {
       const fieldsMap = parseFields(query);
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-      // Check for duplicate ID
-      if (id !== undefined && await store.find(model, id)) return 409; // Conflict
+      // Check for duplicate ID.
+      //
+      // The duplicate check runs before the filter and `store.find` sees hidden
+      // records, so an unconditional 409 makes POST a complete existence oracle
+      // even though GET /:id is now correctly 404:
+      //
+      //   GET  /animals/9101        -> 404   "there is no record 9101"
+      //   POST /animals {id:9101}   -> 409   "record 9101 exists"
+      //   POST /animals {id:9199}   -> 403   "record 9199 does not exist"
+      //
+      // Two unauthenticated requests per id enumerate the whole id space. So:
+      // 403 when the colliding record is itself denied -- indistinguishable from
+      // a denied create against a novel id -- and 409 only when the record is
+      // VISIBLE, where the caller can already GET it and 409 discloses nothing
+      // they do not already have.
+      if (id !== undefined) {
+        const existing = await store.find(model, id);
+        if (existing) return isDenied(filter, existing) ? 403 : 409; // Forbidden / Conflict
+      }
 
       const { id: _ignoredId, ...sanitizedAttributes } = attributes || {};
 
@@ -457,9 +483,37 @@ export default class OrmRequest extends Request {
     }
   }
 
-  // Wraps a handler with before/after hook execution
+  // Wraps a handler with before/after hook execution.
+  //
+  // ===========================================================================
+  // TWO AUTHORIZATION GATES, AND EVERY EXECUTOR SITS BEHIND ONE OF THEM (#190)
+  //
+  // The defect this function was fixed for is NOT "a delete persists past a
+  // 404". It is that _withHooks has SEVERAL executors downstream of the
+  // handler, and originally the handler's response gated none of them. Three
+  // exist today:
+  //
+  //   1. sqlDb.persist          -- issues real SQL against the backing store
+  //   2. the after-hook pipeline -- the PUBLISHED consumer extension point;
+  //                                a cascade delete, a webhook, a search-index
+  //                                purge. `context.recordId` and
+  //                                `context.oldState` are populated for it.
+  //   3. Orm.db.save()          -- a full serialize-and-write of the store
+  //
+  // Gating them one at a time is how this keeps regressing, so the rule is:
+  // compute denial ONCE at each point where it becomes knowable, and keep every
+  // executor downstream of a gate. If you add a fourth executor to this
+  // function, it goes below GATE 2 or it is a security bug.
+  //
+  // GATE 1 (pre-handler) is required because before-hooks and `context.oldState`
+  // run/are built BEFORE the handler can consult the filter. Without it a denied
+  // DELETE still handed the hidden record's full contents to consumer code.
+  // GATE 2 (post-handler) covers everything the handler's status can reach.
+  // ===========================================================================
   private _withHooks(operation: string, handler: HandlerFn): HandlerFn {
     return async (request: OrmRequest$, state: { [key: string]: unknown }) => {
+      const { filter } = (state || {}) as { filter?: unknown };
+
       // Build context object for hooks
       const context: HookContext = {
         model: this.model,
@@ -474,6 +528,27 @@ export default class OrmRequest extends Request {
       // Capture old state for operations that modify data
       if (operation === 'update' || operation === 'delete') {
         const existingRecord = await store.find(this.model, getId(request.params)) as OrmRecord | undefined;
+
+        // GATE 1 -- pre-handler. This record fetch already happened for
+        // oldState, so the check is free.
+        //
+        // Returning here rather than letting updateHandler/deleteHandler
+        // produce the same 404 is the point: everything between here and there
+        // is an executor the caller is not authorized to reach.
+        //   - context.oldState is a deep copy of the HIDDEN RECORD'S CONTENTS.
+        //     Building it and handing it to a before-hook discloses exactly what
+        //     the filter exists to hide.
+        //   - context.recordId is populated for delete BEFORE the handler runs,
+        //     which is the same shape as the sqlDb landmine one layer up:
+        //     `afterHook('delete', ctx => cascadeDelete(ctx.recordId))` destroys
+        //     children behind a correct 404.
+        //   - a before-hook may return a value and short-circuit, which would
+        //     otherwise return a response without the filter ever executing.
+        //
+        // 404, not 403, for the same reason as getSingleHandler: the status for
+        // "exists but filtered out" must equal "does not exist".
+        if (existingRecord && isDenied(filter, existingRecord)) return 404;
+
         if (existingRecord) {
           // Deep copy the record's data to preserve old state
           context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
@@ -500,19 +575,26 @@ export default class OrmRequest extends Request {
         context.record = store.get(this.model, getId(request.params));
       }
 
-      // Persist to SQL database for all write operations (create/update/delete)
+      // GATE 2 -- post-handler. A denied or failed handler returns a bare status
+      // integer, and no executor below may run for one.
       //
-      // A denied or failed handler returns a bare status integer and MUST NOT
-      // reach persist. `response` is passed to sqlDb.persist below, but it is
-      // dropped at the driver boundary: _persistDelete(modelName, context) never
-      // receives it and guards only on context.recordId -- which _withHooks set
-      // above, BEFORE the handler ran. Without this gate a correct 404 still
-      // issues DELETE FROM ... WHERE id = ? on every SQL backend.
+      // `>= 400` deliberately covers every failure status, not just the
+      // authorization ones: a 400 (POST with no `type`) and a 409 (duplicate id)
+      // are equally requests in which nothing happened, and a persist or a
+      // cascade hook for one of them is just as wrong.
+      const denied = Number.isInteger(response) && (response as number) >= 400;
+
+      // EXECUTOR 1 -- SQL persistence, for all write operations.
+      //
+      // `response` is passed to sqlDb.persist below, but it is dropped at the
+      // driver boundary: _persistDelete(modelName, context) never receives it
+      // and guards only on context.recordId -- which _withHooks set above,
+      // BEFORE the handler ran. Without this gate a correct 404 still issues
+      // DELETE FROM ... WHERE id = ? on every SQL backend.
       //
       // No file-backed test can observe that, because Orm.instance.sqlDb is
       // null in file/directory mode. See the stubbed-sqlDb assertions in
       // test/unit/access-filter-enforcement-test.ts.
-      const denied = Number.isInteger(response) && (response as number) >= 400;
       const sqlDb = Orm.instance.sqlDb;
       if (sqlDb && WRITE_OPERATIONS.has(operation) && !denied) {
         await sqlDb.persist(operation, this.model, context, response);
@@ -535,13 +617,30 @@ export default class OrmRequest extends Request {
         context.recordId = getId(request.params);
       }
 
-      // Run after hooks sequentially
-      for (const hook of getAfterHooks(operation, this.model)) {
-        await hook(context);
+      // EXECUTOR 2 -- the after-hook pipeline. This is the published consumer
+      // extension point (`afterHook` is exported from @stonyx/orm and from
+      // ./hooks), so it is the executor with the widest possible blast radius:
+      // a cascade delete, a webhook, a token revocation, a search-index purge.
+      //
+      // BEHAVIOUR CHANGE (#190): after-hooks no longer fire for a request that
+      // failed. Previously `afterHook('delete', ...)` ran with a populated
+      // context.recordId on a 404, so a consumer cascade destroyed children for
+      // a request that deleted nothing. Firing a hook named "after<operation>"
+      // for an operation that did not occur is a booby trap, and the denied case
+      // is unreachable-before-#190 while the missing case is inherited debt --
+      // both are closed by the same gate. `context.response` therefore only ever
+      // carries a success status into a hook.
+      if (!denied) {
+        for (const hook of getAfterHooks(operation, this.model)) {
+          await hook(context);
+        }
       }
 
-      // Auto-save DB after write operations when configured
-      if (config.orm.db.autosave === 'onUpdate' && WRITE_OPERATIONS.has(operation)) {
+      // EXECUTOR 3 -- file/directory autosave. Ungated this let an
+      // unauthenticated caller force a full serialize-and-write of the entire
+      // store on every DELETE of any id, with no record touched: amplification
+      // rather than corruption, but the same root cause and the same fix.
+      if (config.orm.db.autosave === 'onUpdate' && WRITE_OPERATIONS.has(operation) && !denied) {
         await (Orm.db as { save(): Promise<void> }).save();
       }
 
@@ -629,24 +728,24 @@ export default class OrmRequest extends Request {
       };
     }
 
-    // Catch-all for invalid relationship names on related resource route
-    routes[`/:id/:relationship`] = async (request: OrmRequest$, { filter }: { [key: string]: unknown } = {}) => {
-      const record = await store.find(model, getId(request.params));
-      if (!record) return 404;
-      if (isDenied(filter, record)) return 404;
-
-      // If we reach here, relationship doesn't exist (valid ones were registered above)
-      return 404;
-    };
-
-    // Catch-all for invalid relationship names on relationship linkage route
-    routes[`/:id/relationships/:relationship`] = async (request: OrmRequest$, { filter }: { [key: string]: unknown } = {}) => {
-      const record = await store.find(model, getId(request.params));
-      if (!record) return 404;
-      if (isDenied(filter, record)) return 404;
-
-      return 404;
-    };
+    // Catch-alls for invalid relationship names. Every valid relationship was
+    // registered above, so reaching either of these means the relationship does
+    // not exist and the answer is 404 regardless of the record.
+    //
+    // These deliberately carry NO access check and no store lookup. An earlier
+    // revision of #190 added `if (isDenied(filter, record)) return 404` here for
+    // symmetry with the seven real surfaces, but both branches returned 404, so
+    // the guard was unobservable by construction -- a mutation deleting it
+    // survived the entire suite because no test that could distinguish it can
+    // exist. Unkillable code in an authorization diff reads as coverage and is
+    // not, so it is gone; skipping the lookup also removes the timing difference
+    // between an existing and a missing parent.
+    //
+    // IF THIS ROUTE EVER RETURNS ANYTHING OTHER THAN A CONSTANT 404, it becomes
+    // the eighth surface and must filter the parent first, exactly like
+    // `/:id/{relationship}` above.
+    routes[`/:id/:relationship`] = async () => 404;
+    routes[`/:id/relationships/:relationship`] = async () => 404;
 
     return routes;
   }
