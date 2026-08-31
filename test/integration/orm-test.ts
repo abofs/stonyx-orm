@@ -2212,6 +2212,25 @@ module('[Integration] ORM', function(hooks) {
       assert.strictEqual(Orm.instance.getAccess('animal'), registry.animal, 'and resolves the very entry in the map');
       assert.strictEqual(Orm.instance.getAccess('not-a-model'), undefined, 'and answers undefined for a model with no access class');
 
+      // An unguarded index into a plain `{}` walks the prototype chain, so
+      // `getAccess('constructor')` resolved `Object` -- callable, and the
+      // documented `predicate?.(request, ctx)` pattern then returned
+      // `Object(request)`, i.e. the request: TRUTHY, and the
+      // `undefined`-means-deny contract bypassed. #207 takes the model name
+      // from the request BODY, so this is the shape that would have made a
+      // one-field body an authorization bypass. Reds when the `Object.hasOwn`
+      // guard at src/main.ts is removed.
+      //
+      // Asserted as a BOOLEAN rather than with `strictEqual(value, undefined)`
+      // on purpose: without the guard the resolved value is `Object` or
+      // `Object.prototype`, and qunit's failure diagnostic tries to dump it,
+      // which wedges the reporter. `ok(x === undefined)` fails loudly and
+      // exits.
+      for (const inherited of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', '__proto__']) {
+        assert.ok(Orm.instance.getAccess(inherited) === undefined,
+          `and resolves nothing for the inherited Object.prototype member "${inherited}" — own properties only`);
+      }
+
       // Reachable is not enough — it has to be the predicate that is ACTUALLY
       // ENFORCING. Both halves are measured on one live dispatch: the request
       // object express built for a real `GET /animals`, and the response that

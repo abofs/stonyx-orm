@@ -240,10 +240,27 @@ export default class Orm {
    * collection the request is ADDRESSED TO -- owners -- while being asked about
    * animals, and per #202's thesis it answers wrong in the granting direction.
    *
+   * OWN PROPERTIES ONLY. A bare `this.accessFiles[modelName]` walks the
+   * prototype chain, so `getAccess('constructor')` resolved `Object` and
+   * `getAccess('toString')` resolved `Object.prototype.toString` -- both
+   * callable, and the documented `predicate?.(request, ctx)` pattern then
+   * returned a TRUTHY value (`Object(request)` is the request), bypassing the
+   * `undefined`-means-deny contract entirely. Nothing in the ORM calls
+   * `getAccess` yet, so it was not exploitable as shipped -- but #207 takes the
+   * model name from the REQUEST BODY (`data.relationships.<key>.data.type`),
+   * which would have made a one-field body an authorization bypass. Guarded
+   * here at the read point rather than by constructing the map with a null
+   * prototype, because the field is public and reassignable and the guard has
+   * to hold whatever object it is holding.
+   *
    * @param modelName - Model name as declared and stored (kebab-case).
-   * @returns The predicate, or `undefined` when the model has no access class.
+   * @returns The predicate, or `undefined` when no predicate could be resolved
+   *   for that name. `undefined` is NOT "this model is unrestricted" -- see the
+   *   note above. Treat it as deny.
    */
   getAccess(modelName: string): AccessFunction | undefined {
+    if (!Object.hasOwn(this.accessFiles, modelName)) return undefined;
+
     return this.accessFiles[modelName];
   }
 
