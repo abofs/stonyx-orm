@@ -1641,6 +1641,80 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(response.status, 204, 'allowed delete is still 204');
       assert.notOk(store.get('animal', VISIBLE), 'the record was removed');
     });
+
+  // ===========================================================================
+  // #202 — access(request, { model, operation }) AND the model->predicate
+  // registry surviving boot.
+  //
+  // SCAFFOLD ONLY at this commit: every assertion below is a QUnit.todo stub.
+  // The tier each AC runs at is fixed by the refinement (issue #202,
+  // "Refinement — revised (Sprint 83)", §6/§7) and is NOT the implementer's
+  // choice: anything that depends on request shape runs over the LIVE express
+  // router, because test/unit/access-filter-enforcement-test.ts's `makeRequest`
+  // fabricates `baseUrl`/`path` itself and variant 5 survived four review
+  // rounds inside that harness.
+  //
+  // AC4 (unit half) and AC6 (static) live in
+  // test/unit/access-context-test.ts — they do not depend on the router.
+  // ===========================================================================
+  module('Access Context and Registry (#202)', function(ctxHooks) {
+    QUnit.todo('AC1 — a URL-free predicate enforces access on all seven surfaces, over the live router', function(assert) {
+      // TODO: mount a route whose access predicate reads NO field of `request`
+      // and keys only on `context.model`, then drive all seven surfaces
+      // (README.md:408-416) against it.
+      assert.ok(false, 'not implemented');
+    });
+
+    QUnit.todo('AC1 — none of the five fail-open variants changes the outcome for a URL-free predicate', function(assert) {
+      // TODO: mount-relative, query string, case, ORM_REST_ROUTE prefix,
+      // absolute-form request-target (raw socket).
+      assert.ok(false, 'not implemented');
+    });
+
+    QUnit.todo('AC2 — operation is one of read/create/update/delete and no second vocabulary', function(assert) {
+      // TODO: the SAME string through the array form and the predicate form
+      // must yield the same decision, over the live router.
+      assert.ok(false, 'not implemented');
+    });
+
+    QUnit.todo('AC3 — an existing single-argument predicate is unchanged by the new second argument', function(assert) {
+      // TODO: argument ONE must still be the request. Per variant 1 a predicate
+      // that can no longer match falls through to a full CRUD grant, so this is
+      // the AC that stops the "safer" breaking form from being a fail-open.
+      assert.ok(false, 'not implemented');
+    });
+
+    QUnit.todo('AC4 — no store read is introduced at auth time by a full request through the live router', function(assert) {
+      // TODO: store-read spy over a real dispatch.
+      assert.ok(false, 'not implemented');
+    });
+
+    QUnit.todo('AC5 — the context never fabricates an operation for a method express delivers but methodAccessMap does not map', function(assert) {
+      // TODO: HEAD is the ONLY such method (PUT 404s at the router because
+      // OrmRequest registers only get/patch/post/delete). It must be DELIVERED
+      // by express to the GET handler.
+      assert.ok(false, 'not implemented');
+    });
+
+    QUnit.todo('AC7 — negative control: a denying predicate still denies through the new path', function(assert) {
+      // TODO: false / unrecognised-shape branches still deny on every surface.
+      assert.ok(false, 'not implemented');
+    });
+
+    QUnit.todo('AC8 — the model->predicate registry survives boot and is reachable from the live Orm instance', function(assert) {
+      // TODO: assert on Orm.instance after a REAL boot, not a constructed object.
+      assert.ok(false, 'not implemented');
+    });
+
+    QUnit.todo('AC9 — another model predicate is reachable AND model-correct while servicing a request routed to a different model', function(assert) {
+      // TODO: capture the request object express actually produced during a
+      // real GET /owners/:id, resolve the ANIMAL predicate from the registry,
+      // invoke it with { model: 'animal', operation: 'read' } and that live
+      // request, and assert it answers about ANIMALS while baseUrl reads
+      // '/owners'. That contrast IS the assertion.
+      assert.ok(false, 'not implemented');
+    });
+  });
   });
 
   /**
