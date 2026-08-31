@@ -122,7 +122,7 @@ import { getBeforeHooks, getAfterHooks } from './hooks.js';
 import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
-import type { OrmRecord, AccessContext, AccessFunction, AccessMethod } from './types/orm-types.js';
+import type { OrmRecord, AccessContext, AccessFunction, AccessMethod, AccessOperation } from './types/orm-types.js';
 import { isOrmRecord } from './utils.js';
 
 interface OrmRequest$ extends Request {
@@ -152,7 +152,7 @@ interface JsonApiResponse {
 
 type HandlerFn = (request: OrmRequest$, state: { [key: string]: unknown }) => unknown | Promise<unknown>;
 
-const methodAccessMap: { [key: string]: string } = {
+const methodAccessMap: { [key: string]: AccessOperation } = {
   GET: 'read',
   POST: 'create',
   DELETE: 'delete',
