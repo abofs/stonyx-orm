@@ -40,6 +40,15 @@
 import QUnit from 'qunit';
 import sinon from 'sinon';
 import Orm, { createRecord, store } from '@stonyx/orm';
+// beforeHook/afterHook are imported from the SOURCE module, not from
+// '@stonyx/orm'. The dist entry point carries its own hook registry, and
+// src/orm-request.ts -- the unit under test here -- reads the source one, so a
+// hook registered through the package export is invisible to it and every
+// assertion below would go vacuously green. (The integration tier registers
+// through the package export, because there the whole app is the dist build.)
+import { beforeHook, afterHook } from '../../src/hooks.js';
+import { setupIntegrationTests } from 'stonyx/test-helpers';
+import config from 'stonyx/config';
 import OrmRequest from '../../src/orm-request.js';
 import GlobalAccess from '../sample/access/global-access.js';
 
@@ -121,6 +130,13 @@ function cleanup() {
 }
 
 module('[Unit] access filter enforced on every handler (#190)', function(hooks) {
+  // Boots the app the same way every integration module does. Without it this
+  // file passes only when some earlier file happened to complete ORM init, and
+  // 6 of its assertions -- including BOTH fixture preconditions and every
+  // read-surface [DEFECT] assertion -- fail when it is run alone. A security
+  // file that cannot run standalone is one reordering away from proving nothing.
+  setupIntegrationTests(hooks);
+
   let originalSqlDb;
   let originalInitialized;
 
@@ -135,10 +151,20 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
   });
 
   hooks.afterEach(function() {
-    cleanup();
+    // Restore FIRST, and clean up in a `finally`. cleanup() can throw, and when
+    // it did while the restore sat below it the `{ persist }`-only sqlDb stub
+    // survived into every later file, which then died with
+    // `this._sqlDb.findRecord is not a function` -- pointing at entirely the
+    // wrong test. test/unit/delete-persist-test.ts:19 restores first for exactly
+    // this reason; this file previously inverted it.
     if (Orm.instance) Orm.instance.sqlDb = originalSqlDb;
-    Orm.initialized = originalInitialized;
     sinon.restore();
+
+    try {
+      cleanup();
+    } finally {
+      Orm.initialized = originalInitialized;
+    }
   });
 
   // =========================================================================
@@ -157,11 +183,18 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       const record = access(makeRequest({ url: `/animals/${HIDDEN_ID}` }));
       const related = access(makeRequest({ url: `/animals/${HIDDEN_ID}/owner` }));
       const linkage = access(makeRequest({ url: `/animals/${HIDDEN_ID}/relationships/owner` }));
+      // The /owners half of the fixture repair. Without this line, reverting
+      // global-access.ts:44 to endsWith('/owners') -- i.e. reintroducing
+      // fixture defect #1 on the owners half verbatim -- leaves the suite green.
+      const ownerCollection = access(makeRequest({ url: '/owners' }));
+      const ownerRecord = access(makeRequest({ url: '/owners/restricted' }));
 
       assert.strictEqual(typeof collection, 'function', 'collection url yields a filter');
       assert.strictEqual(typeof record, 'function', 'record url yields a filter (was: permission array, so state.filter was undefined)');
       assert.strictEqual(typeof related, 'function', 'related-resource url yields a filter');
       assert.strictEqual(typeof linkage, 'function', 'relationship-linkage url yields a filter');
+      assert.strictEqual(typeof ownerCollection, 'function', 'owners collection url yields a filter');
+      assert.strictEqual(typeof ownerRecord, 'function', 'owners RECORD url yields a filter (was: permission array)');
     });
 
     test('[DEFECT] assertion 2 — the collection filter is not inert', async function(assert) {
@@ -352,11 +385,17 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
         '(naive fix measured: operation=delete recordId=1 response=404 -> DELETE FROM ... WHERE id = 1)');
     });
 
-    test('[GUARD] assertion 12 — a DENIED patch issues no update persist', async function(assert) {
-      // Hazard guard. This path is inert on dev TODAY, but only by coincidence
-      // of an unrelated guard: persist IS called for a denied update, and
-      // _persistUpdate merely returns early because context.record was never
-      // set. Pinned so that coincidence cannot quietly stop holding.
+    test('[DEFECT] assertion 12 — a DENIED patch issues no update persist at all', async function(assert) {
+      // WHAT THIS PINS, EXACTLY: a denied update does not reach sqlDb.persist.
+      //
+      // WHAT IT DOES NOT PIN: anything about _persistUpdate's own internal
+      // guard. This tier stubs Orm.instance.sqlDb wholesale, so the driver body
+      // never executes and no assertion here can observe it. An earlier revision
+      // qualified the filter below with `&& call.args[2]?.record` and claimed to
+      // pin that guard; measured, the qualifier did the opposite -- it filtered
+      // the offending call straight out of the array, so removing `!denied` from
+      // the source gate left this assertion GREEN. Counting every `update`
+      // persist call, qualified by nothing, is what makes it capable of failing.
       const ormRequest = new OrmRequest({ model: 'animal', access });
       const handler = ormRequest.handlers.patch['/:id'];
 
@@ -367,10 +406,10 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
         body: { data: { type: 'animal', attributes: { age: 999 } } },
       }));
 
-      const updateCalls = persistStub.getCalls().filter(call => call.args[0] === 'update' && call.args[2]?.record);
+      const updateCalls = persistStub.getCalls().filter(call => call.args[0] === 'update');
 
       assert.strictEqual(response, 404, 'denied patch returns 404');
-      assert.strictEqual(updateCalls.length, 0, 'no update persist carrying a populated context.record');
+      assert.strictEqual(updateCalls.length, 0, 'a denied patch makes no update persist call whatsoever');
     });
 
     test('[GUARD] assertion 13 — an ALLOWED delete DOES reach persist', async function(assert) {
@@ -436,6 +475,294 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
   });
 
   // =========================================================================
+  // Executors downstream of the gate (assertions 17-21)
+  //
+  // THE REFRAMING. The defect is not "a delete persists past a 404". It is that
+  // _withHooks has SEVERAL executors downstream of the handler and originally
+  // the response gated none of them. sqlDb.persist (11-13) was the first one
+  // found; these pin the other two, and the pre-handler gate that keeps
+  // before-hooks and context.oldState from running at all.
+  //
+  // Every one of these is a [DEFECT]: measured firing at 2101335 (the previous
+  // head of this branch) over live HTTP, with the record surviving behind a
+  // correct 404.
+  // =========================================================================
+  module('write executors on a denied request', function(execHooks) {
+    let fired;
+    let unsubscribes;
+
+    execHooks.beforeEach(function() {
+      fired = [];
+      unsubscribes = [];
+    });
+
+    execHooks.afterEach(function() {
+      while (unsubscribes.length) unsubscribes.pop()();
+    });
+
+    function record(phase, operation) {
+      unsubscribes.push(
+        (phase === 'before' ? beforeHook : afterHook)(operation, 'animal', context => {
+          fired.push({
+            phase,
+            operation,
+            recordId: context.recordId,
+            oldState: context.oldState,
+            response: context.response,
+          });
+        })
+      );
+    }
+
+    test('[DEFECT] assertion 17 — a DENIED delete fires no delete hook, and hands no oldState to consumer code', async function(assert) {
+      record('before', 'delete');
+      record('after', 'delete');
+
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const response = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+        method: 'DELETE',
+        url: `/animals/${HIDDEN_ID}`,
+        params: { id: String(HIDDEN_ID) },
+      }));
+
+      assert.strictEqual(response, 404, 'denied delete returns 404');
+      assert.ok(store.get('animal', HIDDEN_ID), 'the hidden record survives');
+      assert.strictEqual(fired.length, 0,
+        'no delete hook fired (was: before+after both fired with recordId=' + HIDDEN_ID + ', so ' +
+        "afterHook('delete', ctx => cascadeDelete(ctx.recordId)) destroys children behind a 404)");
+      assert.notOk(fired.some(f => f.oldState), 'no hook received the hidden record’s contents as oldState');
+    });
+
+    test('[GUARD] assertion 18 — an ALLOWED delete still fires exactly one before and one after hook', async function(assert) {
+      // Proves 17 can fail in the opposite direction: that it is not green
+      // merely because hooks never fire at all in this harness.
+      record('before', 'delete');
+      record('after', 'delete');
+
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const response = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+        method: 'DELETE',
+        url: `/animals/${VISIBLE_ID}`,
+        params: { id: String(VISIBLE_ID) },
+      }));
+
+      assert.strictEqual(response, 204, 'allowed delete returns 204');
+      assert.strictEqual(fired.filter(f => f.phase === 'before').length, 1, 'exactly one beforeDelete');
+      assert.strictEqual(fired.filter(f => f.phase === 'after').length, 1, 'exactly one afterDelete');
+      assert.strictEqual(String(fired[0].recordId), String(VISIBLE_ID), 'the hook received the record id');
+    });
+
+    test('[DEFECT] assertion 19 — a DENIED patch fires no update hook', async function(assert) {
+      record('before', 'update');
+      record('after', 'update');
+
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const response = await dispatch(ormRequest, ormRequest.handlers.patch['/:id'], makeRequest({
+        method: 'PATCH',
+        url: `/animals/${HIDDEN_ID}`,
+        params: { id: String(HIDDEN_ID) },
+        body: { data: { type: 'animal', attributes: { age: 999 } } },
+      }));
+
+      assert.strictEqual(response, 404, 'denied patch returns 404');
+      assert.strictEqual(fired.length, 0, 'no update hook fired (was: before+after, with oldState populated)');
+    });
+
+    test('[DEFECT] assertion 20 — a before-hook cannot short-circuit past the gate on a denied write', async function(assert) {
+      // Before-hooks run BEFORE the handler and may halt by returning a value,
+      // so without a PRE-handler gate a consumer read-through cache or audit
+      // shim answers a request the filter would have refused. GATE 1 is what
+      // makes this unreachable rather than merely unlikely.
+      unsubscribes.push(beforeHook('delete', 'animal', () => 204));
+
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const denied = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+        method: 'DELETE',
+        url: `/animals/${HIDDEN_ID}`,
+        params: { id: String(HIDDEN_ID) },
+      }));
+      const allowed = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+        method: 'DELETE',
+        url: `/animals/${VISIBLE_ID}`,
+        params: { id: String(VISIBLE_ID) },
+      }));
+
+      assert.strictEqual(denied, 404, 'the halting before-hook did not run for a denied record (was: 204)');
+      assert.ok(store.get('animal', HIDDEN_ID), 'hidden record survives');
+      assert.strictEqual(allowed, 204, 'the halting before-hook still runs for a visible record');
+      assert.ok(store.get('animal', VISIBLE_ID), 'and still halts the operation, so the visible record survives too');
+    });
+
+    test('[DEFECT] assertion 21 — a DENIED write triggers no autosave, an allowed one does', async function(assert) {
+      // autosave lives 29 lines below the persist gate in the same function.
+      // Ungated, an unauthenticated caller forces a full serialize-and-write of
+      // the entire store on DELETE of any id, with no record touched.
+      const originalAutosave = config.orm.db.autosave;
+      const saveStub = sinon.stub(Orm.instance.db, 'save').resolves();
+      config.orm.db.autosave = 'onUpdate';
+
+      try {
+        const ormRequest = new OrmRequest({ model: 'animal', access });
+        const handler = ormRequest.handlers.delete['/:id'];
+
+        const denied = await dispatch(ormRequest, handler, makeRequest({ method: 'DELETE', url: `/animals/${HIDDEN_ID}`, params: { id: String(HIDDEN_ID) } }));
+        assert.strictEqual(denied, 404, 'denied delete returns 404');
+        assert.strictEqual(saveStub.callCount, 0, 'denied delete triggered no Orm.db.save() (was: 1)');
+
+        const missing = await dispatch(ormRequest, handler, makeRequest({ method: 'DELETE', url: `/animals/${MISSING_ID}`, params: { id: String(MISSING_ID) } }));
+        assert.strictEqual(missing, 404, 'missing delete returns 404');
+        assert.strictEqual(saveStub.callCount, 0, 'delete of a record that never existed triggered no save either (was: 1)');
+
+        const allowed = await dispatch(ormRequest, handler, makeRequest({ method: 'DELETE', url: `/animals/${VISIBLE_ID}`, params: { id: String(VISIBLE_ID) } }));
+        assert.strictEqual(allowed, 204, 'allowed delete returns 204');
+        assert.strictEqual(saveStub.callCount, 1, 'an ALLOWED delete still autosaves exactly once');
+      } finally {
+        config.orm.db.autosave = originalAutosave;
+        saveStub.restore();
+      }
+    });
+  });
+
+  // =========================================================================
+  // The create collision oracle (assertions 22-23)
+  //
+  // createHandler's duplicate-id check runs BEFORE the filter and store.find
+  // sees hidden records, so an unconditional 409 made POST a complete existence
+  // oracle even with GET /:id correctly answering 404. Refinement's D1 ruling
+  // justified 403-on-POST with "there is no pre-existing record whose existence
+  // could leak"; a POST that COLLIDES has one.
+  // =========================================================================
+  module('create collision', function() {
+    test('[DEFECT] assertion 22 — POST colliding with a HIDDEN id is indistinguishable from POST against an id that never existed', async function(assert) {
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const handler = ormRequest.handlers.post['/'];
+
+      const post = id => dispatch(ormRequest, handler, makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+      }));
+
+      const collidesWithHidden = await post(HIDDEN_ID);
+      const neverExisted = await post(MISSING_ID);
+
+      assert.strictEqual(collidesWithHidden, 403, 'colliding with a hidden id is 403 (was: 409 — "record exists")');
+      assert.strictEqual(neverExisted, 403, 'a never-existed id is 403');
+      assert.strictEqual(collidesWithHidden, neverExisted,
+        'the two are equal — two unauthenticated requests per id no longer enumerate the id space');
+      assert.ok(store.get('animal', HIDDEN_ID), 'the colliding record was not touched');
+      assert.notOk(store.get('animal', MISSING_ID), 'the denied create left nothing behind');
+    });
+
+    test('[GUARD] assertion 23 — POST colliding with a VISIBLE id is still 409', async function(assert) {
+      // 409 discloses nothing the caller cannot already learn from GET /:id, so
+      // the conflict status is preserved exactly where it is safe. This also
+      // proves assertion 22 is not green merely because every POST is 403.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+
+      const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id: VISIBLE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+      }));
+
+      assert.strictEqual(response, 409, 'colliding with a visible record is still 409');
+      assert.strictEqual(store.get('animal', VISIBLE_ID).age, 3, 'the existing visible record is unchanged');
+    });
+  });
+
+  // =========================================================================
+  // Persist-gate boundaries (assertions 24-25)
+  //
+  // Both were surviving mutants: `>= 400` -> `> 400` on the gate, and dropping
+  // `{ _skipAutoPersist: true }` from the create rollback.
+  // =========================================================================
+  module('persist gate boundaries (stubbed sqlDb)', function(boundaryHooks) {
+    let persistStub;
+
+    boundaryHooks.beforeEach(function() {
+      persistStub = sinon.stub().resolves();
+      Orm.initialized = true;
+      Orm.instance.sqlDb = { persist: persistStub };
+    });
+
+    test('[GUARD] assertion 24 — the gate is `>= 400`: a 400 and a 409 write reach persist no more than a 403 does', async function(assert) {
+      // Pins the boundary of the gate itself. `>= 400` -> `> 400` survived the
+      // whole suite before this, because nothing asserted that a merely FAILED
+      // write is kept away from persist — only a denied one.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const handler = ormRequest.handlers.post['/'];
+
+      const badRequest = await dispatch(ormRequest, handler, makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { attributes: { age: 1 } } }, // no `type` -> 400
+      }));
+      assert.strictEqual(badRequest, 400, 'a POST with no type is 400');
+
+      const conflict = await dispatch(ormRequest, handler, makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id: VISIBLE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+      }));
+      assert.strictEqual(conflict, 409, 'a POST colliding with a visible record is 409');
+
+      assert.strictEqual(persistStub.getCalls().filter(call => call.args[0] === 'create').length, 0,
+        'neither the 400 nor the 409 reached persist');
+    });
+
+    test('[DEFECT] assertion 25 — the denied-create rollback does not issue a SQL delete for a row that was never written', async function(assert) {
+      // createRecord writes to the store before the predicate can run, so the
+      // handler rolls back with store.remove(..., { _skipAutoPersist: true }).
+      // Without that flag store.remove fires sqlDb.persist('delete', ...) itself
+      // (src/store.ts:181) — a DELETE against a row no INSERT ever created.
+      // Assertion 14 pins the rollback but runs in the tier where sqlDb is null,
+      // so the only part of it that touches SQL was the untested part.
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+
+      const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+      }));
+
+      assert.strictEqual(response, 403, 'denied create is 403');
+      assert.notOk(store.get('animal', CREATE_ID), 'the record was rolled back out of the store');
+      assert.strictEqual(persistStub.getCalls().filter(call => call.args[0] === 'delete').length, 0,
+        'the rollback issued no delete persist');
+      assert.strictEqual(persistStub.getCalls().filter(call => call.args[0] === 'create').length, 0,
+        'and the denied create issued no create persist');
+    });
+  });
+
+  // =========================================================================
+  // A throwing predicate (assertion 26)
+  // =========================================================================
+  module('predicate failure mode', function() {
+    test('[GUARD] assertion 26 — a predicate that throws fails CLOSED, and cannot be used as an oracle', async function(assert) {
+      // Unguarded, a throw escapes to express's default handler, which answers
+      // 500 (with a stack trace outside NODE_ENV=production) while a missing id
+      // still answers 404 — so a record-dependent throw re-separates "hidden"
+      // from "does not exist".
+      const throwsOnHidden = () => rec => {
+        if (String(rec.id) === String(HIDDEN_ID)) throw new Error('predicate blew up');
+        return true;
+      };
+      const ormRequest = new OrmRequest({ model: 'animal', access: throwsOnHidden });
+      const handler = ormRequest.handlers.get['/:id'];
+
+      const thrown = await dispatch(ormRequest, handler, makeRequest({ url: `/animals/${HIDDEN_ID}`, params: { id: String(HIDDEN_ID) } }));
+      const missing = await dispatch(ormRequest, handler, makeRequest({ url: `/animals/${MISSING_ID}`, params: { id: String(MISSING_ID) } }));
+
+      assert.strictEqual(thrown, 404, 'a throwing predicate denies rather than propagating (was: uncaught, so express answered 500)');
+      assert.strictEqual(thrown, missing, 'and is indistinguishable from a record that never existed');
+
+      const visible = await dispatch(ormRequest, handler, makeRequest({ url: `/animals/${VISIBLE_ID}`, params: { id: String(VISIBLE_ID) } }));
+      assert.strictEqual(String(visible.data.id), String(VISIBLE_ID), 'a record the predicate does not throw on is unaffected');
+    });
+  });
+
+  // =========================================================================
   // Non-regression of the other access shapes (assertion 16)
   //
   // GUARDS. These pin the two access shapes this change does not touch, and
@@ -485,6 +812,18 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
         body: { data: { type: 'animal', attributes: { age: 7 } } },
       }));
       assert.notStrictEqual(patched, 404, 'PATCH unaffected when no filter is present');
+
+      // AC 16 says seven surfaces; collection GET and POST are the two the
+      // earlier revision of this assertion left out.
+      const collection = await dispatch(ormRequest, ormRequest.handlers.get['/'], makeRequest({ url: '/animals' }));
+      assert.ok(collection.data.some(r => String(r.id) === String(HIDDEN_ID)), 'collection GET unaffected when no filter is present');
+
+      const created = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+      }));
+      assert.strictEqual(String(created.data.id), String(CREATE_ID), 'POST of a would-be-denied record succeeds when no filter is present');
 
       const deleted = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
         method: 'DELETE',

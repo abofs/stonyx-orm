@@ -430,13 +430,21 @@ module('[Integration] ORM', function(hooks) {
           attributes: { type: 'horse', age: 3, size: 'large', owner: 'bob' }
         }
       };
-      // Auto-assigned ids are "the most recently inserted record's id, + 1"
-      // (src/manage-record.ts assignRecordId). Derived rather than hardcoded so
-      // it cannot silently rot: #190 added two fixture animals (21 and 22) as
-      // the access filter's dedicated hidden subject, which shifted this from
-      // 21 to 23. Must be read BEFORE the POST.
-      const lastAnimalId = Array.from(store.get('animal').values()).at(-1).id;
-      const expectedId = lastAnimalId + 1;
+      // The auto-assigned id is a LITERAL, deliberately. #190 added two fixture
+      // animals (21 and 22) as the access filter's dedicated hidden subject,
+      // which shifted this from 21 to 23; an earlier revision responded by
+      // deriving it with `store.get('animal').values().at(-1).id + 1`, which is
+      // assignRecordId's rule copied verbatim (src/manage-record.ts:218-219) and
+      // therefore tautological. If insertion order ever stops guaranteeing the
+      // maximum id is last, assignRecordId returns a COLLIDING id, createRecord
+      // takes its "last entry wins" branch and overwrites an existing animal —
+      // and a derived expectation computes the same colliding id and passes,
+      // having just watched a POST destroy a record. Two assertions that fail
+      // for two different reasons: the predecessor is where we think it is, and
+      // the new id is what the product rule says it should be.
+      const EXPECTED_ID = 23;
+      assert.equal(Array.from(store.get('animal').values()).at(-1).id, EXPECTED_ID - 1,
+        'the last animal in the store is the expected predecessor before the POST');
 
       const response = await fetch(`${endpoint}/animals`, {
         method: 'post',
@@ -447,9 +455,9 @@ module('[Integration] ORM', function(hooks) {
       const { data } = await response.json();
 
       assert.equal(response.status, 200);
-      assert.equal(store.get('animal', expectedId).tag, `bob's large horse`);
+      assert.equal(store.get('animal', EXPECTED_ID).tag, `bob's large horse`);
       assert.equal(data.type, 'animal');
-      assert.equal(data.id, expectedId);
+      assert.equal(data.id, EXPECTED_ID);
       assert.ok(data.attributes);
     });
 
@@ -1234,12 +1242,33 @@ module('[Integration] ORM', function(hooks) {
    *
    * `restricted` (animals 21 and 22) is the fixture's dedicated hidden subject.
    */
-  module('Access Filter Enforcement (#190)', function() {
+  module('Access Filter Enforcement (#190)', function(accessHooks) {
     const HIDDEN = 21;      // owned by `restricted` — filtered on every surface
-    const VISIBLE = 13;     // owned by gina — must remain fully reachable
+    const VISIBLE = 7802;   // owned by gina — seeded by this module, destroyed by this module
     const NEVER_EXISTED = 7777;
+    const COLLIDE = 7803;   // never created; used by the create-collision assertions
 
-    test('the filter is live: hidden animals are absent from the collection but present in the store', async function(assert) {
+    // This module OWNS its subjects. An earlier revision used shared fixture
+    // animal 13 as the visible subject and then deleted it in the last test, so
+    // the module mutated global state that `JSON API Links` and the entire
+    // `Hooks` module run against with no re-seed — and it declared no
+    // hooks.before, unlike every sibling module in this file, so it inherited
+    // whatever the previous module left behind. The next test added downstream
+    // that assumes 20 animals or gina's four pets would have failed for a reason
+    // a hundred lines away.
+    accessHooks.before(function() {
+      if (!store.get('animal', VISIBLE)) {
+        createRecord('animal', { id: VISIBLE, type: 1, age: 5, size: 'small', owner: 'gina', traits: [] }, { serialize: false, _skipAutoPersist: true });
+      }
+    });
+
+    accessHooks.after(function() {
+      for (const id of [VISIBLE, COLLIDE]) {
+        if (store.get('animal', id)) store.remove('animal', id, { _skipAutoPersist: true });
+      }
+    });
+
+    test('[DEFECT] the filter is live: hidden animals are absent from the collection but present in the store', async function(assert) {
       const response = await fetch(`${endpoint}/animals`);
       const { data } = await response.json();
 
@@ -1249,7 +1278,7 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(data.length < store.get('animal').size, `collection is a strict subset (${data.length} of ${store.get('animal').size})`);
     });
 
-    test('GET /animals/:id is 404 for a hidden record, byte-identical to one that never existed', async function(assert) {
+    test('[DEFECT] GET /animals/:id is 404 for a hidden record, byte-identical to one that never existed', async function(assert) {
       const hidden = await fetch(`${endpoint}/animals/${HIDDEN}`);
       const missing = await fetch(`${endpoint}/animals/${NEVER_EXISTED}`);
 
@@ -1258,7 +1287,7 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(await hidden.text(), await missing.text(), 'bodies are identical — no existence oracle');
     });
 
-    test('relationship route families are 404 for a hidden record', async function(assert) {
+    test('[DEFECT] relationship route families are 404 for a hidden record', async function(assert) {
       const related = await fetch(`${endpoint}/animals/${HIDDEN}/owner`);
       const linkage = await fetch(`${endpoint}/animals/${HIDDEN}/relationships/owner`);
 
@@ -1266,7 +1295,7 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(linkage.status, 404, 'GET /:id/relationships/{rel} is 404 (was 200, disclosing the linkage)');
     });
 
-    test('PATCH on a hidden record is 404 and mutates nothing', async function(assert) {
+    test('[DEFECT] PATCH on a hidden record is 404 and mutates nothing', async function(assert) {
       const before = store.get('animal', HIDDEN).age;
 
       const response = await fetch(`${endpoint}/animals/${HIDDEN}`, {
@@ -1279,7 +1308,7 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(store.get('animal', HIDDEN).age, before, 'age is unchanged (was mutated)');
     });
 
-    test('POST failing the filter is 403 and leaves no record behind', async function(assert) {
+    test('[DEFECT] POST failing the filter is 403 and leaves no record behind', async function(assert) {
       const response = await fetch(`${endpoint}/animals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1290,7 +1319,7 @@ module('[Integration] ORM', function(hooks) {
       assert.notOk(store.get('animal', 7801), 'the record was rolled back out of the store');
     });
 
-    test('a visible record is untouched on every surface (over-blocking guard)', async function(assert) {
+    test('[GUARD] a visible record is untouched on every surface (over-blocking)', async function(assert) {
       const single = await fetch(`${endpoint}/animals/${VISIBLE}`);
       const related = await fetch(`${endpoint}/animals/${VISIBLE}/owner`);
       const linkage = await fetch(`${endpoint}/animals/${VISIBLE}/relationships/owner`);
@@ -1301,7 +1330,7 @@ module('[Integration] ORM', function(hooks) {
     });
 
     // Ordered last: it destroys records.
-    test('DELETE is 404 for hidden and for missing, and the hidden record survives', async function(assert) {
+    test('[DEFECT] DELETE is 404 for hidden and for missing, and the hidden record survives', async function(assert) {
       const hidden = await fetch(`${endpoint}/animals/${HIDDEN}`, { method: 'DELETE' });
       const missing = await fetch(`${endpoint}/animals/${NEVER_EXISTED}`, { method: 'DELETE' });
 
@@ -1314,7 +1343,106 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(hidden.status, missing.status, 'the two are indistinguishable');
     });
 
-    test('an allowed DELETE still works (over-blocking guard)', async function(assert) {
+    test('[DEFECT] POST colliding with a HIDDEN id is indistinguishable from POST against an id that never existed', async function(assert) {
+      // createHandler's duplicate-id check runs BEFORE the filter and store.find
+      // sees hidden records, so an unconditional 409 left POST a complete
+      // existence oracle even with GET /:id correctly answering 404:
+      //   GET /animals/21 -> 404, POST {id:21} -> 409, POST {id:novel} -> 403.
+      // Two unauthenticated requests per id enumerated the whole id space.
+      const post = id => fetch(`${endpoint}/animals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', id, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } })
+      });
+
+      const readHidden = await fetch(`${endpoint}/animals/${HIDDEN}`);
+      const collides = await post(HIDDEN);
+      const novel = await post(COLLIDE);
+
+      assert.equal(readHidden.status, 404, 'GET on the hidden record says it does not exist');
+      assert.equal(collides.status, 403, 'POST colliding with it says the same thing (was 409 — "record exists")');
+      assert.equal(novel.status, 403, 'POST against an id that really does not exist is 403');
+      assert.equal(collides.status, novel.status, 'the two are indistinguishable — the oracle is closed');
+      assert.ok(store.get('animal', HIDDEN), 'the colliding hidden record was not touched');
+      assert.notOk(store.get('animal', COLLIDE), 'the denied create left nothing behind');
+    });
+
+    test('[GUARD] POST colliding with a VISIBLE id is still 409', async function(assert) {
+      // 409 discloses nothing a caller cannot already learn from GET /:id, so it
+      // is preserved exactly where it is safe. Also proves the assertion above
+      // is not green merely because every POST is 403.
+      const response = await fetch(`${endpoint}/animals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { type: 'animal', id: VISIBLE, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } })
+      });
+
+      assert.equal(response.status, 409, 'colliding with a visible record is still 409');
+      assert.equal(store.get('animal', VISIBLE).age, 5, 'the existing visible record is unchanged');
+    });
+
+    test('[DEFECT] a denied write runs no consumer hook, over the real dispatch', async function(assert) {
+      // The published extension point. Measured firing at 2101335: a denied
+      // DELETE returned 404, the record survived, sqlDb.persist was correctly
+      // skipped — and beforeDelete/afterDelete still fired with
+      // context.recordId = 21 and context.oldState carrying the hidden record's
+      // full contents. `afterHook('delete', ctx => cascadeDelete(ctx.recordId))`
+      // destroys children behind a correct 404.
+      // NOTE: every callback below has a BLOCK body on purpose. A before-hook
+      // that returns anything other than undefined halts the operation and
+      // becomes the response, and `Array.prototype.push` returns a number — so a
+      // concise-body `ctx => fired.push(...)` silently turns into
+      // "halt and respond with 1", which the rest server answers as a 500.
+      const fired = [];
+      const unsubscribes = [
+        beforeHook('delete', 'animal', ctx => { fired.push({ phase: 'before', op: 'delete', id: ctx.recordId, oldState: ctx.oldState }); }),
+        afterHook('delete', 'animal', ctx => { fired.push({ phase: 'after', op: 'delete', id: ctx.recordId, oldState: ctx.oldState }); }),
+        beforeHook('update', 'animal', ctx => { fired.push({ phase: 'before', op: 'update', oldState: ctx.oldState }); }),
+        afterHook('update', 'animal', ctx => { fired.push({ phase: 'after', op: 'update', oldState: ctx.oldState }); }),
+      ];
+
+      try {
+        const deleted = await fetch(`${endpoint}/animals/${HIDDEN}`, { method: 'DELETE' });
+        const patched = await fetch(`${endpoint}/animals/${HIDDEN}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: { type: 'animal', id: HIDDEN, attributes: { age: 999 } } })
+        });
+
+        assert.equal(deleted.status, 404, 'denied delete is 404');
+        assert.equal(patched.status, 404, 'denied patch is 404');
+        assert.ok(store.get('animal', HIDDEN), 'the hidden record survives');
+        assert.equal(fired.length, 0, 'no hook fired for either denied write (was: 4)');
+        assert.notOk(fired.some(f => f.oldState), 'no hook received the hidden record contents as oldState');
+      } finally {
+        unsubscribes.forEach(unsubscribe => unsubscribe());
+      }
+    });
+
+    test('[GUARD] an ALLOWED write still runs its hooks, over the real dispatch', async function(assert) {
+      // Proves the assertion above can fail in the opposite direction.
+      const fired = [];
+      const unsubscribes = [
+        beforeHook('update', 'animal', () => { fired.push('before'); }),
+        afterHook('update', 'animal', ctx => { fired.push(ctx.response ? 'after' : 'after-no-response'); }),
+      ];
+
+      try {
+        const response = await fetch(`${endpoint}/animals/${VISIBLE}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: { type: 'animal', id: VISIBLE, attributes: { age: 6 } } })
+        });
+
+        assert.equal(response.status, 200, 'allowed patch succeeds');
+        assert.deepEqual(fired, ['before', 'after'], 'both hooks fired exactly once, with a response in context');
+      } finally {
+        unsubscribes.forEach(unsubscribe => unsubscribe());
+        store.get('animal', VISIBLE).age = 5;
+      }
+    });
+
+    test('[GUARD] an allowed DELETE still works (over-blocking)', async function(assert) {
       const response = await fetch(`${endpoint}/animals/${VISIBLE}`, { method: 'DELETE' });
 
       assert.equal(response.status, 204, 'allowed delete is still 204');

@@ -53,10 +53,17 @@ export default class GlobalAccess {
     //
     // `record.owner` resolves to an OrmRecord, not to the owner's id string —
     // comparing it directly against a string is the bug that made this predicate
-    // inert. The `?? record.owner` fallback covers the create path, where the
-    // predicate can see a raw attribute value before the relationship resolves.
+    // inert.
+    //
+    // Deliberately NO `?? record.owner` fallback. Accepting the raw-string shape
+    // as well as the resolved shape is exactly the mismatch that blinded this
+    // fixture in the first place: if record resolution ever regresses on any
+    // surface, a tolerant predicate absorbs it silently and the guarantee two
+    // paragraphs up stops holding. `record.owner?.id` on an unresolved record is
+    // `undefined`, which fails the comparison, which turns this file red — which
+    // is the whole point of binding the unit suite to the shipped fixture.
     if (url.startsWith('/animals')) {
-      return record => (record.owner?.id ?? record.owner) !== 'restricted';
+      return record => record.owner?.id !== 'restricted';
     }
 
     // Allows full access to all calls that don't match any of the above conditions
