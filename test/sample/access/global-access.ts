@@ -25,7 +25,17 @@ export default class GlobalAccess {
 
   // Custom logic here
   access(request) {
-    const { originalUrl: url } = request; // destructure originalUrl from express request object
+    // `originalUrl`, not `url`. RestServer.mountRoute mounts each model as an
+    // Express sub-app, so `request.url` arrives here with the mount path
+    // STRIPPED — `GET /owners/angela` is `url === '/angela'` — and a prefix
+    // match against it is always false. That is the shape of failure this whole
+    // fixture exists to make visible: a security control that silently does
+    // nothing while every test passes.
+    //
+    // The query string is stripped as well: `originalUrl` carries it, so an
+    // anchored match against the raw value misses `/animals?filter[age]=2` and
+    // that collection would come back unfiltered.
+    const path = request.originalUrl.split('?')[0];
 
     // Returning a function plugs it in as a per-record filter.
     //
@@ -41,7 +51,10 @@ export default class GlobalAccess {
     //
     // `angela` is hidden from the owners collection exactly as she was before
     // this change; `restricted` is the dedicated subject described below.
-    if (url.startsWith('/owners')) {
+    // Anchored, so it cannot also catch a sibling collection like
+    // `/owners-archive` — matching more than intended is safe here and is not
+    // in someone else's schema.
+    if (path === '/owners' || path.startsWith('/owners/')) {
       return record => record.id !== 'angela' && record.id !== 'restricted';
     }
 
@@ -62,7 +75,7 @@ export default class GlobalAccess {
     // paragraphs up stops holding. `record.owner?.id` on an unresolved record is
     // `undefined`, which fails the comparison, which turns this file red — which
     // is the whole point of binding the unit suite to the shipped fixture.
-    if (url.startsWith('/animals')) {
+    if (path === '/animals' || path.startsWith('/animals/')) {
       return record => record.owner?.id !== 'restricted';
     }
 

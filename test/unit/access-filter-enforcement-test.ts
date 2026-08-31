@@ -188,6 +188,13 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // fixture defect #1 on the owners half verbatim -- leaves the suite green.
       const ownerCollection = access(makeRequest({ url: '/owners' }));
       const ownerRecord = access(makeRequest({ url: '/owners/restricted' }));
+      // `originalUrl` carries the query string. The fixture anchors its match
+      // (so it cannot catch a sibling collection like /animals-archive), and an
+      // anchored match against the RAW value would miss this url entirely and
+      // return the permission array — i.e. a filtered collection query would
+      // come back unfiltered. Fails open, silently, on exactly the surface the
+      // original bypass lived on.
+      const queried = access(makeRequest({ url: '/animals?filter[age]=2' }));
 
       assert.strictEqual(typeof collection, 'function', 'collection url yields a filter');
       assert.strictEqual(typeof record, 'function', 'record url yields a filter (was: permission array, so state.filter was undefined)');
@@ -195,6 +202,7 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       assert.strictEqual(typeof linkage, 'function', 'relationship-linkage url yields a filter');
       assert.strictEqual(typeof ownerCollection, 'function', 'owners collection url yields a filter');
       assert.strictEqual(typeof ownerRecord, 'function', 'owners RECORD url yields a filter (was: permission array)');
+      assert.strictEqual(typeof queried, 'function', 'a collection url WITH A QUERY STRING yields a filter');
     });
 
     test('[DEFECT] assertion 2 — the collection filter is not inert', async function(assert) {
@@ -357,6 +365,14 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
   // backend. In directory/file mode Orm.instance.sqlDb is null, so the natural
   // regression test passes while production data is destroyed. A stubbed sqlDb
   // is therefore mandatory, not stylistic.
+  //
+  // WHAT ENFORCES 11 AND 12 TODAY. Both still fail against dev source, so they
+  // remain [DEFECT] evidence. But since the pre-handler gate landed, a denied
+  // update or delete returns 404 before the persist call is reached at all, so
+  // removing `!denied` from the persist gate no longer turns either of them red
+  // — that mutation is killed by assertions 24 and 25 instead, on the create
+  // and missing-delete paths the pre-handler gate cannot cover. Stated here
+  // rather than left for the next reader to measure.
   // =========================================================================
   module('persistence layer (stubbed sqlDb)', function(persistHooks) {
     let persistStub;
@@ -593,6 +609,66 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       assert.ok(store.get('animal', VISIBLE_ID), 'and still halts the operation, so the visible record survives too');
     });
 
+    test('[DEFECT] assertion 27 — a FAILED create and a missing delete fire no after-hook either', async function(assert) {
+      // GATE 1 short-circuits denied updates and deletes before the after-hook
+      // loop is reached, so this assertion is what makes GATE 2's own after-hook
+      // gate observable. Measured: without it, `if (!denied)` can be deleted
+      // from the after-hook loop and the entire suite stays green.
+      //
+      // The three cases below are the ones GATE 1 cannot cover:
+      //   create  -- the record does not exist until the handler builds it, so
+      //              denial is only knowable afterwards
+      //   missing -- the delete of a record that never existed; inherited debt,
+      //              closed by the same gate
+      //   400     -- a malformed write, in which nothing happened either
+      record('after', 'create');
+      record('after', 'delete');
+
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+
+      const denied = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'restricted' } } },
+      }));
+      assert.strictEqual(denied, 403, 'denied create is 403');
+      assert.strictEqual(fired.length, 0, 'a denied create fires no afterCreate hook (was: 1, with response=403)');
+
+      const malformed = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { attributes: { age: 1 } } },
+      }));
+      assert.strictEqual(malformed, 400, 'a POST with no type is 400');
+      assert.strictEqual(fired.length, 0, 'and fires no afterCreate hook');
+
+      const missing = await dispatch(ormRequest, ormRequest.handlers.delete['/:id'], makeRequest({
+        method: 'DELETE',
+        url: `/animals/${MISSING_ID}`,
+        params: { id: String(MISSING_ID) },
+      }));
+      assert.strictEqual(missing, 404, 'delete of a record that never existed is 404');
+      assert.strictEqual(fired.length, 0,
+        'and fires no afterDelete hook (was: 1, with recordId=' + MISSING_ID + ' — inherited debt, ' +
+        'and the reason a cascade could fire for an id the caller merely guessed)');
+    });
+
+    test('[GUARD] assertion 28 — an ALLOWED create still fires its after-hook', async function(assert) {
+      // Proves 27 can fail in the opposite direction.
+      record('after', 'create');
+
+      const ormRequest = new OrmRequest({ model: 'animal', access });
+      const response = await dispatch(ormRequest, ormRequest.handlers.post['/'], makeRequest({
+        method: 'POST',
+        url: '/animals',
+        body: { data: { type: 'animal', id: CREATE_ID, attributes: { type: 1, age: 1, size: 'small', owner: 'gina' } } },
+      }));
+
+      assert.strictEqual(String(response.data.id), String(CREATE_ID), 'allowed create succeeds');
+      assert.strictEqual(fired.length, 1, 'exactly one afterCreate hook fired');
+      assert.ok(fired[0].response, 'and it carries a response in context');
+    });
+
     test('[DEFECT] assertion 21 — a DENIED write triggers no autosave, an allowed one does', async function(assert) {
       // autosave lives 29 lines below the persist gate in the same function.
       // Ungated, an unauthenticated caller forces a full serialize-and-write of
@@ -739,7 +815,7 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
   // A throwing predicate (assertion 26)
   // =========================================================================
   module('predicate failure mode', function() {
-    test('[GUARD] assertion 26 — a predicate that throws fails CLOSED, and cannot be used as an oracle', async function(assert) {
+    test('[DEFECT] assertion 26 — a predicate that throws fails CLOSED, and cannot be used as an oracle', async function(assert) {
       // Unguarded, a throw escapes to express's default handler, which answers
       // 500 (with a stack trace outside NODE_ENV=production) while a missing id
       // still answers 404 — so a record-dependent throw re-separates "hidden"
