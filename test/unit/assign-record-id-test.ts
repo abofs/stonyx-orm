@@ -120,6 +120,34 @@ function seedAnimal(id, age) {
   return createRecord('animal', { id, type: 1, age, size: 'small', traits: [] }, { serialize: false, _skipAutoPersist: true });
 }
 
+// `owner` is the shipped STRING-id model (`id = attr('string')`,
+// test/sample/models/owner.ts) and is the only one in the fixture, so AC3 and
+// AC4 have to use it. They also have to control its contents exactly: AC4's
+// whole point is that the store holds the LANDING key and nothing else, and the
+// integration fixture seeds real owners into the same map.
+//
+// Snapshot-clear-restore rather than `store.get('owner')?.clear()` (which is
+// what test/unit/create-record-test.ts does, destructively): every owner this
+// file did not create is put back byte-for-byte in a `finally`, so an assertion
+// that throws cannot leak an emptied owner store into every later file.
+function withIsolatedOwnerStore(fn) {
+  const owners = store.get('owner') as Map<string | number, unknown>;
+  const snapshot = new Map(owners);
+
+  owners.clear();
+
+  try {
+    return fn();
+  } finally {
+    owners.clear();
+    for (const [key, value] of snapshot) owners.set(key, value);
+  }
+}
+
+function seedOwner(id, age) {
+  return createRecord('owner', { id, gender: 'female', age, pets: [], phoneNumbers: [] }, { serialize: false, _skipAutoPersist: true });
+}
+
 module('[Unit] assignRecordId — server-assigned id selection (#203)', function(hooks) {
   // Boots the app the same way every integration module does. Without it
   // `createRecord` throws 'ORM is not ready' and the model classes are not
@@ -278,18 +306,211 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
   });
 
   test('[GUARD] AC3 — a no-id create on a string-id model still gets a usable id', function(assert) {
-    assert.ok(true, 'SCAFFOLD — assertions land in the next commit');
+    // LABELLED [GUARD] DELIBERATELY, AND THE LABEL IS LOAD-BEARING. This is
+    // GREEN on unfixed dev: `assignRecordId` concatenates, so it hands back
+    // `'bob1'`, which satisfies every assertion below. It proves NOTHING about
+    // #203.
+    //
+    // What it guards is the defect the FIX introduces. Measured: a naive
+    // `Math.max` over mixed ids yields `NaN`, the string transform
+    // (transforms.ts:7 -> `String(value)`) turns it into the literal `'NaN'`,
+    // and a second no-id create then collides with it. Nothing in the shipped
+    // suite catches that — test/unit/create-record-test.ts:13 makes exactly
+    // this call and asserts only `record.gender === undefined`, which is why
+    // the naive fix scored 951/951.
+    //
+    // The AC pins the INVARIANT, not the value: `'bob1'` and `'1'` both pass,
+    // `'NaN'` does not. Consumers relying on the old concatenated value are
+    // called out in the PR body — no shipped test pins it.
+    withIsolatedOwnerStore(() => {
+      seedOwner('gina', 30);
+      seedOwner('bob', 40);
+
+      const owners = store.get('owner');
+      const keysBefore = Array.from(owners.keys());
+      const sizeBefore = owners.size;
+      const created = createRecord('owner', { gender: 'male', age: 50, pets: [], phoneNumbers: [] }, { serialize: false, _skipAutoPersist: true });
+
+      // AC3.1
+      assert.strictEqual(owners.size, sizeBefore + 1, 'the store grew by exactly one');
+
+      // AC3.2 — the assertion a Math.max fix turns red.
+      assert.strictEqual(typeof created.id, 'string', 'the assigned id is a string, as the model declares');
+      assert.notStrictEqual(created.id, '', 'and it is not empty');
+      assert.notStrictEqual(created.id, 'NaN',
+        'and it is not the literal "NaN" (a Math.max over mixed ids yields NaN, which String() renders as "NaN")');
+      assert.notOk(keysBefore.includes(created.id), 'and it is not an id the store already held');
+
+      // AC3.3
+      assert.strictEqual(store.get('owner', 'gina').age, 30, 'owner gina is unchanged');
+      assert.strictEqual(store.get('owner', 'bob').age, 40, 'owner bob is unchanged');
+    });
   });
 
   test('[GUARD] AC4 — the occupancy guard is evaluated on the LANDING key', function(assert) {
-    assert.ok(true, 'SCAFFOLD — assertions land in the next commit');
+    // LABELLED [GUARD], and this is the seam the story exists to keep closed.
+    //
+    // GREEN on unfixed dev by coincidence: `'1' + 1` is `'11'`, which happens
+    // to miss. It is red under a fix that computes the max correctly but writes
+    // its occupancy guard against the RAW assigned value:
+    //
+    //     if (storeMap.has(rawData.id)) ...        // checks the NUMBER 1
+    //     ...                                      // record lands under '1'
+    //
+    // `StandaloneDB` (src/standalone-db.ts:130-146) is the working reference
+    // for max selection and NaN-safety, but it has no model or id-type concept
+    // at all, so its reduce maps every string id to 0 and its `maxId + 1` is
+    // the NUMBER 1 — which on a string-id model lands under the STRING key
+    // '1'. Transplanting it whole reproduces exactly this.
+    //
+    // Measured under that raw-value guard: owner '1' age 55 -> 9, store size
+    // unchanged, HTTP 200, no error. That is #205's lookup-key / landing-key
+    // divergence reappearing INSIDE #203's own fix. #203 and #205 are sequenced
+    // apart deliberately; this assertion is what keeps them apart.
+    withIsolatedOwnerStore(() => {
+      seedOwner('1', 55);
+
+      const owners = store.get('owner');
+      const sizeBefore = owners.size;
+      assert.strictEqual(sizeBefore, 1, 'precondition: the owner store holds exactly the landing key "1"');
+      assert.strictEqual(store.get('owner', '1').age, 55, 'precondition: and that record has a known age');
+
+      let refusal;
+      let created;
+      try {
+        created = createRecord('owner', { gender: 'male', age: 9, pets: [], phoneNumbers: [] }, { serialize: false, _skipAutoPersist: true });
+      } catch (error) {
+        refusal = error;
+      }
+
+      // AC4.1 — the assertion that fails silently under a raw-value guard.
+      assert.strictEqual(store.get('owner', '1').age, 55,
+        'the pre-existing owner "1" was NOT overwritten (was, under a raw-value guard: age 55 -> 9, silently, with a 200)');
+      assert.strictEqual(store.get('owner', '1').gender, 'female', 'and its other attributes are intact too');
+
+      // AC4.2 — either outcome is acceptable; SILENCE is not. This branch also
+      // records which policy the fix chose, so a later change of policy is a
+      // deliberate edit to this assertion rather than an unnoticed drift.
+      if (refusal) {
+        assert.strictEqual(owners.size, sizeBefore, 'REFUSAL POLICY: the create was refused with a defined error and nothing was written');
+      } else {
+        assert.strictEqual(owners.size, sizeBefore + 1, 'NEXT-FREE-KEY POLICY: the create landed on a free key and the store grew by exactly one');
+        assert.notStrictEqual(created.id, '1', 'and it did not land on the occupied key');
+      }
+    });
   });
 
   test('AC5 — negative controls: the existing contracts survive', function(assert) {
-    assert.ok(true, 'SCAFFOLD — assertions land in the next commit');
+    // -- AC5.1: a legitimate create still gets a fresh id AND grows the store.
+    //
+    // Without this the whole story is satisfiable by refusing every
+    // server-assigned create and creating nothing. Passes on dev, passes under
+    // a naive max, RED under a refuse-all fix.
+    const ASC_LOW = 9620;
+    const ASC_HIGH = 9621;
+    seedAnimal(ASC_LOW, 1);
+    seedAnimal(ASC_HIGH, 2);
+
+    const ascSizeBefore = store.get('animal').size;
+    const ascMaxBefore = maxNumericAnimalKey();
+    const fresh = createRecord('animal', { type: 1, age: 3, size: 'small', traits: [] }, { serialize: false, _skipAutoPersist: true });
+
+    assert.strictEqual(fresh.id, ascMaxBefore + 1, 'AC5.1 — an ASCENDING store still yields max + 1 (9622)');
+    assert.strictEqual(store.get('animal').size, ascSizeBefore + 1, 'AC5.1 — and the store grew by exactly one');
+    cleanup();
+
+    // -- AC5.2: a CLIENT-SUPPLIED duplicate still performs last-entry-wins.
+    //
+    // KILLING MUTATION: transplant src/standalone-db.ts:143-146's BLANKET
+    // duplicate refusal into createRecord:52-55. It is the right shape for
+    // StandaloneDB and the wrong shape here — `createRecord` deliberately
+    // updates on a client-supplied duplicate, and
+    // test/unit/create-record-test.ts:24-34 pins that contract. Any duplicate
+    // refusal this fix adds must be scoped to SERVER-ASSIGNED ids only; this
+    // assertion and that file both go red otherwise.
+    const DUP = 9630;
+    const first = seedAnimal(DUP, 1);
+    const dupSizeBefore = store.get('animal').size;
+    const second = createRecord('animal', { id: DUP, type: 1, age: 77, size: 'small', traits: [] }, { serialize: false, _skipAutoPersist: true });
+
+    assert.strictEqual(first, second, 'AC5.2 — a client-supplied duplicate returns the SAME record object');
+    assert.strictEqual(second.age, 77, 'AC5.2 — and its attributes were updated to the latest values');
+    assert.strictEqual(store.get('animal').size, dupSizeBefore, 'AC5.2 — and no second store entry was created');
+    cleanup();
+
+    // -- AC5.3: SQL-mode pending negatives, pinned NON-VACUOUSLY.
+    //
+    // As the criterion was originally written it could not fail:
+    // `assignRecordId` returns at manage-record.ts:209-213 for a numeric-id
+    // model in SQL mode, BEFORE any max is computed, so a pending negative can
+    // never reach the max path at all. A test asserting "the max is not
+    // perturbed by negatives" would be a check that could not fail.
+    //
+    // So this pins THE EARLY RETURN ITSELF. The store is seeded with a HIGHER
+    // max first, so a positive `maxId + 1` is a distinguishable outcome.
+    //
+    // KILLING MUTATION: delete or reorder the :209-213 early return — the id
+    // becomes maxId + 1 (9641), positive, and both assertions go red.
+    seedAnimal(9640, 1);
+
+    const originalSqlDb = Orm.instance.sqlDb;
+    try {
+      Orm.instance.sqlDb = { persist: () => Promise.resolve() };
+
+      const rawData = { type: 1, age: 1, size: 'small', traits: [] };
+      const pending = createRecord('animal', rawData, { serialize: false, _skipAutoPersist: true });
+
+      assert.ok((pending.id as number) < 0,
+        `AC5.3 — in SQL mode a numeric-id model gets a NEGATIVE pending id, deferring to AUTO_INCREMENT (got ${pending.id})`);
+      assert.strictEqual(rawData.__pendingSqlId, true, 'AC5.3 — and it is flagged __pendingSqlId for the adapter');
+
+      // Negative ids must survive the number transform — that is exactly why
+      // manage-record.ts:206-208 uses them instead of string pending ids, and
+      // it is what the "transforms.number is out of scope" boundary protects.
+      assert.strictEqual(store.get('animal', pending.id as number), pending,
+        'AC5.3 — and the negative id survives the number transform intact, so the record is reachable under it (manage-record.ts:206-208)');
+
+      store.remove('animal', pending.id as number, { _skipAutoPersist: true });
+    } finally {
+      Orm.instance.sqlDb = originalSqlDb;
+    }
   });
 
   test('[DEFECT] AC6 — an explicit id: 0 is honoured and not reassigned', function(assert) {
-    assert.ok(true, 'SCAFFOLD — assertions land in the next commit');
+    // manage-record.ts:204 guards on FALSINESS, not on presence:
+    //
+    //     if (rawData.id) return;
+    //
+    // `0` is a legal value for an `attr('number')` id, so a caller that supplies
+    // it gets a DIFFERENT record back — measured on dev, the create landed on a
+    // server-assigned id in the 9600 band and key 0 was absent from the store.
+    //
+    // KILLING MUTATION: restore `if (rawData.id) return;` at :204.
+    //
+    // BOUNDARY, and it is not incidental: `''` must STILL be treated as absent.
+    // access-filter-enforcement-test.ts assertion 44 pins `''` as the only
+    // string that means "no id" — coercing it instead gives `parseInt('')` =
+    // NaN, and a record CAN be held under NaN, so `POST {"id":""}` would answer
+    // 409 against a record it never named. Widening this guard to plain
+    // presence (`!== undefined`) breaks that. Asserted below so the boundary is
+    // pinned here rather than only in another file.
+    assert.notOk(store.get('animal').has(0), 'precondition: the animal store does not already hold key 0');
+
+    const created = createRecord('animal', { id: 0, type: 1, age: 8, size: 'small', traits: [] }, { serialize: false, _skipAutoPersist: true });
+
+    // AC6.1
+    assert.strictEqual(store.get('animal', 0), created, 'the record landed under store key 0');
+    // AC6.2
+    assert.strictEqual(created.id, 0, 'and no other id was assigned to it');
+
+    store.remove('animal', 0, { _skipAutoPersist: true });
+
+    // The `''` boundary, in the same test so it cannot drift away from the guard
+    // it constrains.
+    const sizeBeforeEmpty = store.get('animal').size;
+    const emptyId = createRecord('animal', { id: '', type: 1, age: 9, size: 'small', traits: [] }, { serialize: false, _skipAutoPersist: true });
+
+    assert.notStrictEqual(emptyId.id, '', 'BOUNDARY — `""` still means NO id and is still server-assigned (assertion 44 depends on this)');
+    assert.strictEqual(store.get('animal').size, sizeBeforeEmpty + 1, 'BOUNDARY — and that create inserted rather than overwrote');
   });
 });
