@@ -315,15 +315,24 @@ Access classes define models and provide custom filtering/authorization logic.
 > [Identifying the collection](#identifying-the-collection) before copying this.**
 > Every attempt to identify the collection by parsing the request target has
 > failed **open** — five distinct variants of this same example, each found only
-> after the previous was fixed, by five different people. The sample below does
-> not parse anything: it reads `request.baseUrl`, the mount Express actually
-> matched.
+> after the previous was fixed, by five different people. That section is now a
+> record of what not to do, not a matching recipe: the sample below reads `model`
+> from [the access context](#the-access-context-second-argument) and never looks
+> at the mount at all, so all five variants are **unconstructible** against it
+> rather than merely handled.
 >
 > That is still a stopgap. **The real fix is
 > [#202](https://github.com/abofs/stonyx-orm/issues/202)** — `access()` should
 > receive the model, the operation and the record, so there is nothing to
 > identify. Until it lands, prefer the array shape (`['read']`) or `false` where
 > you can: the **function** shape is the one that requires any matching at all.
+>
+> The one read of argument **one** that survives is `request.path`, for the
+> `/archived` sub-path deny — and it has to. The context names which model and
+> which verb, not which route, so that deny **cannot be expressed from the
+> context alone** and a context-only rewrite would silently turn it into an
+> allow.
+>
 > The same warning is repeated at the top of `src/orm-request.ts`, which ships;
 > the longer write-up in `docs/usage-patterns.md` does **not** ship, so this
 > README and that source header are the two copies a consumer sees.
@@ -337,27 +346,39 @@ Access classes define models and provide custom filtering/authorization logic.
 export default class GlobalAccess {
   models = ['owner', 'animal'];
 
-  access(request) {
-    // `request.baseUrl` is the mount Express matched — `/owners`, or
-    // `/api/owners` under ORM_REST_ROUTE=/api. Never parse `originalUrl`: it is
-    // the raw request target and can be absolute-form.
-    const mount = request.baseUrl;
+  access(request, { model, operation }) {
+    // `model` is the model this route was mounted for. It is assigned once, at
+    // mount time, and no request can influence it — not a mount prefix, not a
+    // query string, not a case-varied path, not an absolute-form request
+    // target. Nothing below parses anything, so none of the five fail-open
+    // variants recorded in the header is constructible against this predicate
+    // any more; they are history, not rules to follow.
+    //
+    // `operation` is destructured to name the whole contract at the point of
+    // use. This sample's rules are per-model and per-sub-path rather than
+    // per-verb, so it does not branch on it; the permission array at the bottom
+    // is where the verb is answered.
 
-    // FAIL CLOSED. If Express did not tell us what it matched we are not behind
-    // the mount we think we are, and an unidentifiable request denies rather
-    // than falling through to the CRUD grant at the bottom.
-    if (typeof mount !== 'string' || mount === '') return false;
+    // FAIL CLOSED. `model` is absent for any caller that resolved this
+    // predicate without supplying the context, and a request this function
+    // cannot identify DENIES rather than falling through to the CRUD grant at
+    // the bottom. An unidentifiable input must never be the permissive path.
+    if (typeof model !== 'string' || model === '') return false;
 
-    // Lower-cased because the router matched case-INSENSITIVELY, and a matcher
-    // stricter than the router that dispatched the request can be stepped
-    // around. The PATH only — record ids stay at their real case below.
-    const collection = mount.toLowerCase();
+    if (model === 'owner') {
+      // The context names WHICH MODEL and WHICH VERB — not which route. Six
+      // distinct owner surfaces produce one identical context, so a rule that
+      // depends on the SUB-PATH still needs argument one. `request.path` is
+      // mount-relative and query-free, and it is the one read of the raw
+      // request the README sanctions. Lower-cased because the router matched
+      // case-insensitively, so a case-sensitive rule here would be stricter
+      // than the router and could be stepped around. false → 403 for the whole
+      // request.
+      //
+      // THIS DENY CANNOT BE EXPRESSED FROM THE CONTEXT ALONE. Migrating it away
+      // does not remove a rule, it turns a deny into an ALLOW, silently.
+      const path = String(request.path ?? '').toLowerCase();
 
-    // `request.path` is mount-relative and query-free, so sub-path rules need no
-    // prefix arithmetic either. false → 403 for the whole request.
-    const path = String(request.path ?? '').toLowerCase();
-
-    if (collection.endsWith('/owners')) {
       if (path === '/archived' || path.startsWith('/archived/')) return false;
 
       // Returning a function plugs it in as a per-record filter, and it is
@@ -373,7 +394,7 @@ export default class GlobalAccess {
     // inert. Deliberately NO `?? record.owner` fallback: accepting the raw
     // shape as well as the resolved one would absorb a resolution regression
     // silently, which is exactly what blinded this fixture before.
-    if (collection.endsWith('/animals')) return record => record.owner?.id !== 'restricted';
+    if (model === 'animal') return record => record.owner?.id !== 'restricted';
 
     // Allows full access to all calls that don't match any of the above conditions
     return ['read', 'create', 'update', 'delete'];
