@@ -967,11 +967,29 @@ per-record filter. An input you cannot identify must **deny**.
   ([#232](https://github.com/abofs/stonyx-orm/issues/232)). This is
   **membership**: the related resource is the route's *primary* data, so the
   filter decides whether it is served at all, not merely which ids a document
-  may name. A denied `hasMany` member is **dropped from the array** — the result
-  is shaped exactly like a genuinely empty relationship, `links` intact, no
-  `errors` member, same status. A denied `belongsTo` target answers **`200` with
+  may name. A denied `hasMany` member is **dropped from the array** and nothing
+  in the relationship marks the drop: `links` intact, no `errors` member, same
+  status, and an array of survivors shaped exactly like one from a parent that
+  only ever had those members. A denied `belongsTo` target answers **`200` with
   `data: null`**, byte-identical to a target that is genuinely absent, for the
-  same reason. Nothing on either family errors and no status changes — the
+  same reason.
+
+  **That is a claim about the relationship, not about the document, and the gap
+  is measurable in this repo's own fixture.** `owner` declares a computed
+  `totalPets` returning `this.pets.length`, which reads the **store** and is
+  never filtered. Measured on this branch, unauthenticated, at zero query
+  parameters: `GET /owners/gina` answers `attributes.totalPets: 5` while its
+  `relationships.pets.data` names **four** ids, and both relationship routes
+  serve the same four. The relationship discloses nothing; the document it
+  arrives in discloses that exactly one child was withheld. Do not read
+  "indistinguishable" as a property of the response — it is a property of the
+  relationship member alone. The other channels in the same class are
+  [#245](https://github.com/abofs/stonyx-orm/issues/245) (computed attributes,
+  which is the one measured above),
+  [#233](https://github.com/abofs/stonyx-orm/issues/233) (`included`
+  membership) and [#246](https://github.com/abofs/stonyx-orm/issues/246) (the
+  absence of `attributes.<fk>` on a `POST` response), all open. **Audit your
+  computed properties before you treat a dropped member as unobservable.** Nothing on either family errors and no status changes — the
   status on these routes belongs to the **parent**, and `data` carries the
   answer about the related record. The `/relationships/` family built its `{type, id}` by
   hand rather than through `toJSON()`, which is why the linkage filter shipped in

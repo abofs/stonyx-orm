@@ -339,12 +339,32 @@ GET /animals/1/owner                  // denied belongsTo target -> 200, data: n
 GET /traits/2/tag                     // a model NO access class claims -> 200, data: null
 ```
 
-A denied `hasMany` member is **dropped**, so the result is shaped exactly like a
-genuinely empty relationship. A denied `belongsTo` target is **200 with
-`data: null`**, byte-identical to a target that is genuinely absent. The status
-on these routes belongs to the **parent** — 404 there means the parent is
-missing or hidden — so `data`, and not the status, carries the answer about the
-related record.
+A denied `hasMany` member is **dropped**, and nothing in the relationship marks
+the drop: same status, `links` intact, no `errors` member, and an array of
+survivors shaped exactly like one from a parent that only ever had those
+members. A denied `belongsTo` target is **200 with `data: null`**,
+byte-identical to a target that is genuinely absent. The status on these routes
+belongs to the **parent** — 404 there means the parent is missing or hidden — so
+`data`, and not the status, carries the answer about the related record.
+
+**Read that as a claim about the relationship, not about the document.** The
+sample `owner` model declares `get totalPets() { return this.pets.length; }`,
+which reads the store and is never filtered. Measured, unauthenticated, zero
+query parameters:
+
+```
+GET /owners/gina   ->  attributes.totalPets: 5
+                       relationships.pets.data: [8, 13, 24, 4]   (four)
+GET /owners/gina/pets                 ->  four records
+GET /owners/gina/relationships/pets   ->  the same four
+```
+
+The relationship discloses nothing and the document discloses that one child was
+withheld. That channel is [#245](https://github.com/abofs/stonyx-orm/issues/245);
+`included` membership is [#233](https://github.com/abofs/stonyx-orm/issues/233)
+and the `POST` `attributes.<fk>` absence is
+[#246](https://github.com/abofs/stonyx-orm/issues/246). All three are open. Audit
+your computed properties before treating a dropped member as unobservable.
 
 An earlier revision answered `404` for a denied `belongsTo` target, and it was
 measured as an oracle before it shipped. Unauthenticated, zero query parameters,
