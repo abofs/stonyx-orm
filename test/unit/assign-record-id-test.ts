@@ -60,54 +60,66 @@
 // `dev` numbering throughout, including inside a shipped assertion MESSAGE, so
 // the baseline is stated once here and used everywhere.
 //
-//   mutation                                             | red            | green
-//   ------------------------------------------------------|----------------|--------
-//   A  manage-record.ts:265 — revert selection to
-//      `Array.from(storeMap.values()).at(-1).id + 1`      | AC1, AC2       | rest
-//   B  utils.ts `maxNumericId` -> `Math.max(0, ...ids)`   | AC2, AC3       | rest
-//   C  manage-record.ts:337-345 — occupancy guard on the
-//      RAW candidate instead of the landing key           | AC4            | rest
-//   D  manage-record.ts:250-254 — delete the SQL
-//      pending-negative early return                      | AC5 (5.3)      | rest
-//   E  manage-record.ts:52-56 — blanket duplicate
-//      refusal in createRecord                            | AC5 (5.2)      | rest
-//   F  manage-record.ts:239 — restore
-//      `if (rawData.id) return;`                          | AC6            | rest
-//   G  manage-record.ts — refuse EVERY server-assigned
-//      create                                             | AC1,2,3,5,6,7,9| AC4, AC8
-//   H  manage-record.ts:342-345 — delete the
-//      restart-from-1 block                               | AC7            | rest
-//   I  manage-record.ts:389 — weaken the walk bound to
-//      `if (++attempts > 0)`                              | AC4, AC8       | rest
-//   J  manage-record.ts:389 — delete the walk bound       | AC8 **HANGS**  | —
-//   K  manage-record.ts:319-321 — bare-number candidate
-//      for a string-keyed model (`value => value`)        | AC3            | rest
-//   L  manage-record.ts:437-449 — delete the `catch`
-//      retry in `storeKeyDeriver`                         | AC9            | rest
-//   M  orm-request.ts:788-799 — delete the `createRecord`
-//      try/catch that answers 409                         | AC8 (route)    | rest
+//   mutation                                                | red              | green
+//   ---------------------------------------------------------|------------------|--------
+//   A   manage-record.ts:265 — revert the WHOLE selection to
+//       `at(-1).id + 1`, i.e. `dev`                          | 1,2,3,6,7,8,9    | 4, 5
+//   A2  revert only `maxNumericId`, KEEP the walk            | 2,3,8,9          | 1,4,5,6,7
+//   B   utils.ts `maxNumericId` -> `Math.max(0, ...ids)`     | 2,3,8,9          | 1,4,5,6,7
+//   C   manage-record.ts:389 — occupancy guard on the RAW
+//       candidate: `storeMap.has(toCandidate(candidate))`    | 4,8,9            | rest
+//   D   manage-record.ts:250-254 — disable the SQL
+//       pending-negative early return                        | 5 (5.3, got 9641)| rest
+//   E   manage-record.ts:52-56 — blanket duplicate refusal   | 5 (5.2)          | rest
+//   F   manage-record.ts:239 — `if (rawData.id) return;`     | 6                | rest
+//   G   refuse EVERY server-assigned create                  | 1,2,3,5,6,7,8,9  | 4
+//   H   manage-record.ts:342-345 — delete the restart-from-1 | 7                | rest
+//   I   manage-record.ts:389 — weaken the bound to
+//       `if (++attempts > 0)`                                | 7,8,9            | rest
+//   J   manage-record.ts:389 — delete the bound              | 8 **HANGS**      | —
+//   K   manage-record.ts:319-321 — bare-number candidate for
+//       a string-keyed model (`value => value`)              | 3,8,9            | rest
+//   L   manage-record.ts:447 — delete the `catch` retry in
+//       `storeKeyDeriver`                                    | 4,9              | rest
+//   M   orm-request.ts:785-798 — delete the `createRecord`
+//       try/catch that answers 409                           | 8 (route)        | rest
 //
-// Four rows are worth reading twice:
+// EVERY AC HAS AT LEAST ONE KILLING MUTATION, and no mutation kills all nine:
 //
-//   B is the naive fix. It leaves AC1 green — the max IS correct — and is
-//   caught only by AC2 and AC3. Before this file existed it scored 951/0.
+//   AC1 <- A, G          AC4 <- C, L          AC7 <- A, G, H, I
+//   AC2 <- A, A2, B, G   AC5 <- D, E, G       AC8 <- A, A2, B, C, G, I, K, M
+//   AC3 <- A, A2, B, G, K  AC6 <- A, F, G     AC9 <- A, A2, B, C, G, I, K, L
+//
+// Six rows are worth reading twice:
+//
+//   A2 vs A. Reverting ONLY the max computation leaves AC1 GREEN — the walk
+//   steps past the occupied slot and repairs a wrong max. AC2 is the only
+//   assertion that pins the max COMPUTATION itself. A is the full `dev` revert
+//   and is what turns AC1 red.
+//
+//   B is the naive fix. It is caught by AC2 and AC3, and it leaves AC1 green
+//   for the same reason A2 does. Before this file existed it scored 951/0.
 //
 //   B was ALSO mis-recorded here for one review round as turning AC5 red. It
-//   does not: AC5 alone under B is green, and its redness was a CASCADE from
-//   AC2's aborted cleanup leaking a `NaN`-keyed record that the old range-based
-//   `cleanup()` structurally could not sweep. `cleanup()` is now snapshot-based
-//   and every intra-test removal is in a `finally`, which is the actual fix; the
-//   row is corrected rather than annotated.
+//   does not, and never did: AC5 alone under B is green. Its redness was a
+//   CASCADE from AC2's aborted cleanup leaking a `NaN`-keyed record that the old
+//   range-based `cleanup()` structurally could not sweep. `cleanup()` is now
+//   snapshot-based and every intra-test removal is in a `finally`, which is the
+//   actual fix; the row is corrected rather than annotated.
 //
 //   G leaves AC4 GREEN, and that is by design: AC4 accepts "refused with a
 //   defined error" as well as "landed on a free key", because either is an
 //   acceptable collision policy and silence is the only unacceptable one. AC5.1
 //   is the control that catches refuse-all, which is exactly why it exists.
 //
+//   I leaves AC4 green too, for the same reason, which is why AC8.1 exists: the
+//   bound's THRESHOLD is a separate property from its existence, and AC4 cannot
+//   see it.
+//
 //   J manifests as a HANG, not a red. That is information the next reader needs
 //   before applying it: an unbounded walk over a non-injective id transform
-//   spins forever inside a synchronous store walk. It is listed because "no
-//   mutation kills this" and "the killing mutation hangs" are different facts.
+//   spins forever inside a synchronous store walk. "No mutation kills this" and
+//   "the killing mutation hangs" are different facts and this file states which.
 // ---------------------------------------------------------------------------
 //
 import QUnit from 'qunit';
