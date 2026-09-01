@@ -925,15 +925,67 @@ per-record filter. An input you cannot identify must **deny**.
   operation and which record the request addresses. The five variants above are
   the five ways that has been observed to fail open so far. Tracked as
   [#202](https://github.com/abofs/stonyx-orm/issues/202).
-- **Related and included records are not filtered.** The predicate is evaluated
-  against the record the route is *addressed to*. `GET /animals/1/owner`,
-  `GET /animals/1/relationships/owner` and `?include=owner` all serialize the
-  related record without resolving that model's own access class, so a filter on
-  `/owners` does not hide an owner reached through `/animals`. Tracked as
-  [#196](https://github.com/abofs/stonyx-orm/issues/196), which covers
-  `include=`, related-resource routes and relationship-linkage routes. This is
-  **membership** — whether the related resource is served at all — and it is a
-  different question from which ids a document may *name*, immediately below.
+- **The two relationship route families now resolve the *related* model's own
+  access class — `GET /:models/:id/{relationship}` and
+  `GET /:models/:id/relationships/{relationship}`**
+  ([#232](https://github.com/abofs/stonyx-orm/issues/232)). This is
+  **membership**: the related resource is the route's *primary* data, so the
+  filter decides whether it is served at all, not merely which ids a document
+  may name. A denied `hasMany` member is **dropped from the array** — the result
+  is shaped exactly like a genuinely empty relationship, `links` intact, no
+  `errors` member, same status. A denied `belongsTo` target answers **404**, the
+  same status the route already answered for a denied parent and for a parent
+  that does not exist. The `/relationships/` family built its `{type, id}` by
+  hand rather than through `toJSON()`, which is why the linkage filter shipped in
+  [#234](https://github.com/abofs/stonyx-orm/issues/234) did not reach it.
+
+  Before this, both families served a record hidden on every one of its own
+  surfaces, in full, from another model's route, at **zero query parameters**.
+  The severe case is a model **claimed by no access class**: `getAccess()`
+  returns `undefined`, no route is mounted for it at all, and it was still
+  readable as a related resource — a collection the consumer deliberately never
+  exposed.
+
+  **Residual on the `belongsTo` shape, stated rather than left to be found:** a
+  denied target answers 404 while a genuinely *absent* one answers 200 with
+  `data: null`, so those two cases are distinguishable. That asymmetry is
+  inherited — a denied *parent* has always answered 404 while an existing parent
+  with an empty relationship answers 200 — and changing it is a change to this
+  module's whole spelling of denial, not to these two routes.
+
+  **Per-record denies for a related resource are not expressible.** A predicate resolved for a
+  related resource on these routes receives `recordId: null` and a `request`
+  whose `params` name a record of a **different model**. So the inputs it has
+  are the model name, the operation and the request — and **a rule that needs to
+  know *which* related record it is being asked about cannot be written**.
+  Model-level denies (`return false` for a model) work. Request-level denies (a
+  rule reading a header, a tenant, the method) work. The per-record **filter**
+  shape works too — `access()` may return a function, and that function receives
+  the whole record, id included. What does not work is branching on the record's
+  identity *before* returning, because `access()` is not told it.
+
+  This is not an oversight and it is not closed here. The verdict is resolved
+  **once per type**, cached, before any record has been examined — a `hasMany`
+  related-resource route returns many records of one type, so seeding `recordId`
+  from a record would let the first one decide the context for all of them. The
+  rule the framework holds to is: **`recordId` may name a record only where the
+  route addresses exactly one record of the model being asked about.** That is
+  true for `GET /owners/{id}`, false for linkage, and false for a `hasMany`
+  related-resource route.
+
+- **`?include=` records are still not filtered — the relationship routes now
+  are.** *Re-specified by [#232](https://github.com/abofs/stonyx-orm/issues/232);
+  the sentence this replaces said all three surfaces were unfiltered, and two of
+  them no longer are.* `GET /animals/1/owner` and
+  `GET /animals/1/relationships/owner` resolve the related model's own access
+  class (see the bullet above). **`?include=owner` still does not**: it
+  serializes the related record without resolving that class, so a filter on
+  `/owners` does not hide an owner reached through `?include=` on `/animals`.
+  Tracked as [#233](https://github.com/abofs/stonyx-orm/issues/233), the
+  remaining child of [#196](https://github.com/abofs/stonyx-orm/issues/196).
+  This is **membership** — whether the related resource is served at all — and
+  it is a different question from which ids a document may *name*, immediately
+  below.
 - **Relationship linkage is filtered on every request-bound surface that
   serializes a record — the reads, the two writes, and `included`.** A
   document's `relationships.*.data` used to publish the id of every related

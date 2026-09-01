@@ -319,6 +319,42 @@ export default class GlobalAccess {
 }
 ```
 
+
+### What #232 changed, and the limit it leaves
+
+Both relationship route families resolve the **related** model's own access
+class ([#232](https://github.com/abofs/stonyx-orm/issues/232)):
+
+```javascript
+// The related resource is this route's PRIMARY data, so the filter decides
+// MEMBERSHIP, not just which ids a document may name.
+GET /owners/gina/pets                 // hidden children dropped from the array
+GET /owners/gina/relationships/pets   // same, on the hand-built linkage
+GET /animals/1/owner                  // denied belongsTo target -> 404
+GET /traits/2/tag                     // a model NO access class claims -> 404
+```
+
+A denied `hasMany` member is **dropped**, so the result is shaped exactly like a
+genuinely empty relationship. A denied `belongsTo` target is **404** — which is
+distinguishable from a genuinely absent one (200 with `data: null`); that
+asymmetry is inherited from how this module has always spelled a denied parent.
+
+**Per-record denies for a related resource are not expressible.** On these routes a predicate is
+handed `recordId: null` and a `request` whose `params` name a record of a
+**different model**. Model-level denies work; request-level denies work; the
+per-record **filter** shape works (`access()` may return a function, and it
+receives the whole record). What cannot be written is a rule that branches on
+*which* related record is being asked about before returning, because `access()`
+is not told.
+
+The reason is structural rather than an omission: the verdict is resolved **once
+per type** and cached before any record is examined, and a `hasMany`
+related-resource route returns many records of one type — so seeding `recordId`
+from a record would let the first one answer for all of them. The framework's
+rule is that **`recordId` may name a record only where the route addresses
+exactly one record of the model being asked about.**
+
+
 ## 8. REST API (Auto-generated)
 
 ```javascript
