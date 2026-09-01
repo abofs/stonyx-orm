@@ -641,7 +641,7 @@ a write to a *different* collection can still re-parent one. See
 | `GET /:models/:id/relationships/{relationship}` | `404` — same |
 | `PATCH /:models/:id` | `404`, no attribute is applied |
 | `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued |
-| `POST /:models` | `403`, and a record **this request inserted** is rolled back — see [Known limitations](#known-limitations) for the case where it did not insert one |
+| `POST /:models` | `403`, and a record **this request inserted** is rolled back — see [Known limitations](#known-limitations) for why the rollback is conditional |
 
 **Denied record-level requests return 404, not 403.** This is deliberate and it
 is the property most easily "improved" away. 403 would confirm that the record
@@ -675,9 +675,64 @@ chooses the id and learns whether the create succeeded — so under a filter the
 caller does not choose the id. The refusal happens before any store lookup, so
 neither the status nor the response time depends on whether the id exists.
 
-Let the server assign the id and read it back from the response. Callers with no
-function-style filter are unaffected: `409` on a duplicate id and `200` on a free
-one both behave exactly as before.
+Let the server assign the id and read it back from the response — and read it
+back rather than predicting it, because the value it returns is documented but
+not stable across model kinds: a numeric-id model gets `max + 1` (or, at the
+numeric ceiling, the lowest free integer), and a string-id model gets
+`<model>-<n>`. See breaking change 8.
+
+**What a server-assigned id is not.** It is not a secret. On a string-id
+collection it is dense and enumerable from `1`, where previously it inherited
+whatever entropy the last-inserted id happened to carry — a UUID-seeded store
+answered a UUID-derived key. If a collection has **no** `access` config its
+record-level routes are ungated, so the id was the only thing standing between
+an unauthenticated caller and `GET`/`PATCH`/`DELETE` on a record. That was never
+a control and must not become one; configure `access`.
+
+**And the id itself is an occupancy signal — on both model kinds.**
+`assignRecordId` reads the whole store, not the caller's filtered view — it
+never sees `state.filter` — so the id it returns is a function of records the
+caller may not be permitted to read. **This applies to numeric-id collections
+as well as string-id ones**, and the conditions differ, so read both:
+
+- **String-id collections, always.** The assigned `n` is the smallest positive
+  integer whose landing key is free, which tells the caller that every key
+  below it is taken, hidden or not.
+- **Numeric-id collections, once one record sits at the numeric ceiling.** The
+  normal answer is `max + 1`, which discloses only the maximum. But `max + 1`
+  is not representable at or above 2^53, so the walk restarts from `1` (see
+  breaking change 8) and the assigned id becomes the smallest free integer —
+  the same occupancy predicate, now over arbitrary low keys. Each subsequent
+  no-id `POST` names the next free one, so a caller can enumerate the holes in
+  a range it cannot read.
+
+**A ceiling record reaches a filter-protected collection even though `POST`
+refuses caller ids on one.** Breaking change 3 makes
+`POST /animals {"id": 9007199254740992}` answer `403`, but the same id lands
+through a *relationship write on another collection* —
+`POST /owners` carrying `attributes: { pets: [{ "id": 9007199254740992 }] }`
+creates the animal under that key
+([#207](https://github.com/abofs/stonyx-orm/issues/207), the same channel the
+**Known limitations** re-parenting note describes). So the precondition is
+reachable by an unauthenticated caller on exactly the collections `access`
+exists to protect. Measured on the sample fixture, with every animal hidden by
+the `/animals` predicate and keys 4 and 7 deleted:
+
+```
+GET  /animals                                       -> 200  []      (nothing visible)
+GET  /animals/4                                     -> 404          (free — indistinguishable from hidden)
+POST /animals {"id":4}                              -> 403          (breaking change 3)
+POST /owners  {... pets:[{"id":9007199254740992}]}  -> 200          (#207 plants the ceiling record)
+POST /animals (no id)                               -> 200  id=4    <- names a hole in the hidden range
+POST /animals (no id)                               -> 200  id=7    <- and the other one
+POST /animals (no id)                               -> 200  id=13
+POST /animals (no id)                               -> 200  id=14
+```
+
+Closing this requires the assignment to be filter-aware, which is a change to
+the `access` contract rather than a fix; it is stated here rather than left to
+be discovered. Callers with no function-style filter are unaffected — there are
+no hidden records to disclose.
 
 ### Identifying the collection
 
@@ -842,9 +897,10 @@ per-record filter. An input you cannot identify must **deny**.
   transform output differs from its lookup key is the same defect. Filtered
   collections are unaffected — breaking change 3 refuses any client-supplied id
   — so this reaches consumers with **no** function-style filter. Tracked as
-  [#205](https://github.com/abofs/stonyx-orm/issues/205), alongside
-  [#203](https://github.com/abofs/stonyx-orm/issues/203), which is the other way
-  a create can land on an id nobody named.
+  [#205](https://github.com/abofs/stonyx-orm/issues/205). Its sibling
+  [#203](https://github.com/abofs/stonyx-orm/issues/203) — a **server-assigned**
+  id landing on an occupied slot — is **fixed**; see breaking change 8. #205 is
+  the client-supplied half and is still open.
 - **`context.record` is `undefined` for an after-`create` hook when a string-id
   model is given a numeric-looking id.** The post-create lookup uses the same id
   coercion as every other surface, which resolves `'9107'` to the number `9107`,
@@ -854,15 +910,18 @@ per-record filter. An input you cannot identify must **deny**.
   [#209](https://github.com/abofs/stonyx-orm/issues/209).
 - **A denied `POST` rolls back only a record it *inserted*.** The rollback
   requires the store to have grown, because removing by id alone is a write
-  primitive keyed by a caller-supplied value. When `assignRecordId` lands a
-  **server-assigned** id on an occupied slot
-  ([#203](https://github.com/abofs/stonyx-orm/issues/203) — it returns
-  last-*inserted* + 1, not max + 1, so a store whose insertion order is not
-  ascending collides), `createRecord` updates that record **in place**: the map
-  does not grow, the rollback correctly declines to remove a record this request
-  did not create, and the `403` leaves the caller's attributes on someone else's
-  record. Narrow — it needs a non-ascending insertion order — but it is the
-  reachability condition, so it is stated rather than implied.
+  primitive keyed by a caller-supplied value. **The reachability condition this
+  bullet used to state is gone**: it was
+  [#203](https://github.com/abofs/stonyx-orm/issues/203) — `assignRecordId`
+  returned last-*inserted* + 1, so a server-assigned id could land on an
+  occupied slot and `createRecord` would update it in place — and #203 is fixed
+  (breaking change 8). A server-assigned create can no longer overwrite, so on a
+  collection whose only id channel is `createHandler` this guard has no
+  observable effect today. It is kept because a caller-supplied id reaching
+  `createRecord` from another route — a relationship write,
+  [#207](https://github.com/abofs/stonyx-orm/issues/207) — puts the condition
+  back, and without the guard a denied `403` would delete a record the request
+  did not create.
 
 ### Breaking changes
 
@@ -922,6 +981,64 @@ they are recorded here.
    record in place. **This one reaches consumers with no filter at all** — the
    population breaking changes 3 and 4 explicitly exempt. If you were relying on
    a hex-shaped or whitespace-padded id creating a second record, it never did.
+
+8. **Server-assigned ids change value on string-id models, numeric ids stop
+   being monotonic at the numeric ceiling, and the create route gains a
+   `409`.** Three consumer-visible changes from
+   [#203](https://github.com/abofs/stonyx-orm/issues/203).
+
+   **The value.** A `POST` with no `id` against a model declaring
+   `id = attr('string')` previously produced the *last-inserted* id with `1`
+   concatenated onto it — an owner store holding `['gina', 'bob']` answered
+   `'bob1'`. It now answers `'owner-1'`: the model name, a hyphen, and the
+   lowest positive integer whose landing key is free. **No test in this repo
+   pinned the old value**, so a consumer relying on it gets no failing test, no
+   deprecation and no other signal — which is why it is recorded here. Numeric
+   id models (`id = attr('number')`, the default) are unaffected in shape: they
+   still get an integer, but it is now the **maximum** existing id plus one
+   rather than the last-inserted id plus one, which is the defect #203 is about.
+   They are **not** unaffected in *sequence* — see the monotonicity half below.
+
+   The value is deliberately **not** numeric-looking, and that is not cosmetic.
+   Every id-bearing surface resolves a numeric-looking string id to a **number**
+   (`GET /owners/1` looks up `1`), while a string-id model files its records
+   under the **string** key `'1'`. A server-assigned `'1'` would therefore be a
+   record that was created successfully and could not be fetched, updated or
+   deleted by id, and whose after-`create` hook received
+   `context.record === undefined`
+   ([#209](https://github.com/abofs/stonyx-orm/issues/209)).
+
+   **Numeric ids are no longer monotonic, and deleted ids can be re-issued.**
+   The precondition is narrow but it is reachable, and there is no signal when
+   it is met: **one record filed at or above 2^53** (`9007199254740992`). `max
+   + 1` is not representable there, so assignment restarts from `1` and walks
+   up to the lowest free key — which means the id of a *deleted* record is
+   handed to the next `POST`. Both `dev` and every prior release were strictly
+   monotonic and never re-issued a numeric id, so a consumer that relied on
+   that — audit rows, cursors, cached authorization decisions, external
+   references keyed on the id — now has a stale reference that silently points
+   at a **different record, created by a different caller**, rather than at a
+   deleted one. Nothing fails; the reference simply resolves to the wrong
+   record.
+
+   The restart is deliberate and is not itself optional: without it, one record
+   at the ceiling made every subsequent server-assigned create on that
+   collection fail permanently. Re-use is the cost of keeping the collection
+   writable. **If you need monotonic ids, assign them yourself** rather than
+   letting the server assign, and note that a ceiling record can be planted by
+   an unauthenticated caller — see *And the id itself is an occupancy signal*
+   under [Filter functions](#filter-functions) for the reachability path.
+   String-id models are unaffected by this half: their keys are
+   `<model>-<n>` and were never monotonic over an integer sequence.
+
+   **The status.** `POST /{collection}` can now answer `409` for a reason other
+   than a duplicate id: the server could not derive a free id. That requires a
+   **non-injective** id transform — one that maps distinct candidates onto the
+   same store key, such as `boolean`, or anything you registered on
+   `Orm.instance.transforms` and named as an id type. It is a configuration
+   fault rather than a request fault; the message is logged through
+   `stonyx/log`. Previously this case threw out of the handler and express
+   answered `500` with a stack trace.
 
 ### Include Parameter (Sideloading Relationships)
 
