@@ -4244,13 +4244,19 @@ module('[Integration] ORM', function(hooks) {
   // ---------------------------------------------------------------------------
   // WHAT THIS MODULE DELIBERATELY DOES NOT TOUCH
   // ---------------------------------------------------------------------------
-  //   - `GET /:models/:id/relationships/{relationship}` (orm-request.ts:1390)
-  //     builds its `{type, id}` linkage BY HAND and never calls `toJSON`, so it
-  //     never sees a filter. It is red today and it is
-  //     abofs/stonyx-orm#232's -- its primary data IS linkage, which makes
-  //     filtering it a MEMBERSHIP decision. X2 pins it unchanged. Wiring it
-  //     here measures 993/2 and turns `orm-test.ts:1199` red, which is #232's
-  //     own reproduction.
+  //   - `GET /:models/:id/relationships/{relationship}` builds its
+  //     `{type, id}` linkage BY HAND and never calls `toJSON`, so the `linkage`
+  //     OPTION cannot reach it. It is abofs/stonyx-orm#232's -- its primary
+  //     data IS linkage, which makes filtering it a MEMBERSHIP decision -- and
+  //     PR #247 is in flight against it in this sprint. X2 therefore pins the
+  //     OWNERSHIP BOUNDARY, not the route's current answer; see its comment.
+  //     Wiring #235's filter in there measures 1009/2 against this branch's
+  //     1011/0 baseline, and turns
+  //     `GET /animals/:id/relationships/owner returns relationship linkage`
+  //     red, which is #232's own reproduction. (An earlier revision said
+  //     993/2 -- that is 995, the DEV baseline, from a branch where X2 does
+  //     not exist. Counts here are quoted with their baseline for that
+  //     reason.)
   //   - WHETHER a resource enters `included` at all is membership, and it is
   //     abofs/stonyx-orm#233's. X1 pins #233's reproduction (a hidden owner IS
   //     still a member) green, so that this story cannot satisfy #233's
@@ -4717,29 +4723,74 @@ module('[Integration] ORM', function(hooks) {
         'the hidden owner is STILL a member of included — that is #233, not this story');
     });
 
-    test('[GUARD] #235 X2 — the relationships-linkage route is #232’s and is untouched', async function(assert) {
-      // OUT OF SCOPE, DELIBERATELY. `orm-request.ts:1390` builds its
-      // `{type, id}` linkage BY HAND and never calls `toJSON`, so it never sees
-      // a filter. It is NOT in #224 §2a's seven-site inventory, its primary
-      // data IS linkage (making it a MEMBERSHIP decision), and #232's own
-      // inversion budget already names the assertion at the
-      // `GET /animals/:id/relationships/owner` test above.
+    test('[GUARD] #235 X2 — #235’s mechanism does not reach the relationships-linkage route, which is #232’s', async function(assert) {
+      // OUT OF SCOPE, DELIBERATELY. `_generateRelationshipRoutes`'
+      // relationships-linkage branch builds its `{type, id}` BY HAND and never
+      // calls `toJSON`, so the `linkage` OPTION cannot reach it. It is NOT in
+      // #224 §2a's seven-site inventory, and its primary data IS linkage, which
+      // makes filtering it a MEMBERSHIP decision rather than a linkage one.
       //
-      // MUTATION THAT KILLS IT: wire `createLinkageFilter` into
-      // `_generateRelationshipRoutes`' relationships-linkage branch. Measured:
-      // the suite goes to 993/2 and that test -- #232's reproduction -- goes
-      // red with it.
+      // ---------------------------------------------------------------------
+      // RE-SPECIFIED. THE ORIGINAL PINNED THE ROUTE'S ANSWER AND THAT WAS AN
+      // OUT-OF-SCOPE PIN ON A SIBLING'S TERRITORY, IN THE SAME SPRINT.
+      // ---------------------------------------------------------------------
+      // What it was, recorded rather than deleted, with the measurement that
+      // justified it:
+      //
+      //     assert.strictEqual(status, 200);
+      //     assert.deepEqual(body.data, { type: 'owner', id: 'angela' },
+      //       'the relationships-linkage route still publishes the hidden id
+      //        — that is #232, not this story');
+      //
+      //   Measured against this branch's 1011/0 baseline: wiring
+      //   `createLinkageFilter` into the belongsTo branch of that route takes
+      //   the suite to 1009/2, reddening this guard and
+      //   `GET /animals/:id/relationships/owner returns relationship linkage`
+      //   -- #232's own reproduction. (Three artifacts first recorded that as
+      //   993/2 and the PR body as 1003/2. 993+2 = 995 is the DEV baseline,
+      //   from a branch where this guard does not exist.)
+      //
+      // WHY IT HAD TO GO. abofs/stonyx-orm#232 lands this sprint as PR #247
+      // and CHANGES this route: a denied belongsTo target answers 404 there.
+      // An assertion that the route still answers 200 with angela's id is an
+      // assertion that #232 has not landed -- so #235 would have reddened its
+      // sibling's correct change. Pinning a neighbour's CURRENT STATE is not a
+      // scope boundary; it is a claim on their territory that expires the
+      // moment they do their job.
+      //
+      // WHAT IT PINS INSTEAD: the boundary itself, which does not expire.
+      // #235's mechanism is a LINKAGE FILTER, and applied here it has one
+      // recognisable signature -- the linkage is emptied IN PLACE: 200 with
+      // `data: null`, byte-identical to a genuinely-absent belongsTo. #232's
+      // mechanism is a MEMBERSHIP decision and does not produce that shape: it
+      // either refuses to serve the target (404) or leaves it published (200
+      // with the id). So `200 AND data === null` is the signature of #235
+      // having reached a route that is not its own, and it is the one outcome
+      // forbidden here. This passes before #247, passes after #247, and reds
+      // for the mutation below either way.
+      //
+      // MUTATION THAT KILLS IT: wire `createLinkageFilter` into that branch so
+      // the linkage is emptied rather than withheld -- 1009/2 against 1011/0,
+      // measured.
+      //
+      // AND MEASURED THE OTHER WAY, which is the half a scope guard usually
+      // skips: with PR #247's ACTUAL change applied instead (`if
+      // (!isLinkable(relatedData)) return 404;` on this branch), this guard
+      // stays GREEN and the suite is 1008/3 -- the three reds all #232's own
+      // to re-specify. The assertion this replaced went RED there, 1007/4. So
+      // the old one would have reddened a sibling's correct change and the new
+      // one does not, while both catch the mutation this guard exists for.
       const { status, body } = await getJson('/animals/1/relationships/owner');
 
-      assert.strictEqual(status, 200);
-      assert.deepEqual(body.data, { type: 'owner', id: 'angela' },
-        'the relationships-linkage route still publishes the hidden id — that is #232, not this story');
+      assert.notOk(status === 200 && body.data === null,
+        'the relationships-linkage route does not answer with an EMPTIED linkage — that shape is #235’s mechanism on #232’s route');
 
       // Stated as an inequality against the surface this story DID close, so a
-      // reader can see the boundary rather than infer it.
+      // reader can see the boundary rather than infer it. This half is #235's
+      // own territory and is unconditional.
       const document = await getJson('/animals/1');
       assert.strictEqual(document.body.data.relationships.owner.data, null,
-        'while the document surface next door does not — the two are different questions');
+        'while the document surface next door DOES empty it — the two are different questions, answered by different mechanisms');
     });
 
     test('[DEFECT] #235 C1 — one linkage filter per handler invocation, one verdict per type', async function(assert) {

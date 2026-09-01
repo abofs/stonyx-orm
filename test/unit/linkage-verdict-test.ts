@@ -703,7 +703,18 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     const start = readme.indexOf('### Known limitations');
     assert.ok(start > -1, 'precondition: the section exists');
 
-    const section = readme.slice(start, readme.indexOf('\n## ', start));
+    // WINDOW TIGHTENED BY #235's FIX ROUND, and it was hiding a real hole.
+    // This sliced to the next `## ` heading, which is ~480 lines below the
+    // section and swallowed `### Consumer Contracts` whole -- so every
+    // `section.includes(<surface>)` below could be satisfied by the Consumer
+    // Contracts prose rather than by this section, and this section could
+    // under-state its coverage without reddening anything. Sliced to the next
+    // `### ` instead, the window is the section. Consumer Contracts is pinned
+    // separately by `#234 AC8c` below, which is where a claim made THERE
+    // belongs.
+    const section = readme.slice(start, readme.indexOf('\n### ', start));
+    assert.ok(section.length > 0 && !section.includes('### Consumer Contracts'),
+      'precondition: the window is Known limitations alone, not the sections below it');
 
     // RE-SPECIFIED BY abofs/stonyx-orm#235, NOT LOOSENED. This pinned the
     // sentence "filtered on the four request-bound READ surfaces", which #235
@@ -735,10 +746,10 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     // handlers -- is #235, which appeared nowhere in this repository. A reader
     // who follows the only link given lands on membership and is never told
     // that a PERMITTED record still publishes hidden ids.
-    // Scoped to the linkage BULLET, not to `section`. The section slice runs to
-    // the next `## ` heading, which is ~480 lines away and swallows the
-    // `?include=` documentation -- so a section-wide `/issues\/235/` is
-    // satisfied by a cross-reference elsewhere and does not pin this bullet.
+    // Scoped to the linkage BULLET, not to `section`. Even narrowed to this
+    // section the window carries the `?include=` documentation, so a
+    // section-wide `/issues\/235/` is satisfied by a cross-reference elsewhere
+    // in it and does not pin this bullet.
     // Measured: it survived the mutation that put #233 back on the `included`
     // exclusion and stripped the link off the POST/PATCH one.
     const bulletStart = section.indexOf('- **Relationship linkage is filtered on every request-bound surface that');
@@ -749,22 +760,48 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     // This used to pin "both of these are DEFERRED to #235", counting two
     // `issues/235` links in the exclusion list. #235 has landed, so the same
     // two surfaces now have to be attributed as COVERED and #235 has to be
-    // gone from the exclusion list entirely -- which is a strictly harder
-    // thing to satisfy than the count it replaces, because leaving either
-    // bullet where it was would fail both halves.
+    // gone from the exclusion list entirely.
+    //
+    // "STRICTLY HARDER TO SATISFY" WAS CLAIMED FOR THIS RE-SPECIFICATION AND
+    // IT WAS NOT TRUE LINE BY LINE, which is corrected here rather than left
+    // standing. The replacement raised the assertion COUNT, and a higher count
+    // read as a stronger pin. One of the replacements was strictly weaker: the
+    // old #233 assertion bound the issue LINK ADJACENTLY to the claim
+    // (`/#233](.../233) owns whether a/`), and the first re-specification
+    // replaced it with two INDEPENDENT presence checks -- one that #233 is
+    // linked somewhere in the exclusion list, one that the membership wording
+    // appears somewhere in the bullet. Measured on the branch before this fix
+    // round: swapping the #232 and #233 links between the two exclusion
+    // bullets -- so that the README said #232 owns `included` membership and
+    // #233 owns the relationships route -- SURVIVED, 17/0. Half the second
+    // regex was dead on top of that (`grep -Fc "owns whether a" README.md`
+    // returned 0). Adjacency is restored below, in the same grammatical shape
+    // for BOTH siblings, so the swap is caught in either direction.
     assert.strictEqual((bullet.match(/issues\/235/g) || []).length, 1,
       '#235 is cited once, on the sentence saying which surfaces ARE filtered');
 
-    const notYetCovered = bullet.slice(bullet.indexOf('**Not yet covered'));
-    assert.ok(notYetCovered.length > 0, 'precondition: the exclusion list is findable inside the bullet');
+    // PRECONDITION MADE KILLABLE. This was `bullet.slice(bullet.indexOf(…))`
+    // followed by `length > 0`: when the marker is ABSENT, `indexOf` returns
+    // -1, `slice(-1)` returns the bullet's LAST CHARACTER, and the length check
+    // passes on it. It could not fail, so it certified nothing about the three
+    // assertions below that depend on the slice being the exclusion list.
+    // Measured: deleting the `**Not yet covered` marker left it green.
+    const exclusionsStart = bullet.indexOf('**Not yet covered');
+    assert.ok(exclusionsStart > -1, 'precondition: the exclusion list is findable inside the bullet');
+    const notYetCovered = bullet.slice(exclusionsStart);
+
     assert.notOk(/issues\/235/.test(notYetCovered),
       'and #235 no longer appears among the exclusions — it is closed, not deferred');
-    assert.ok(/issues\/232/.test(notYetCovered),
-      'the relationships-linkage route is still excluded, attributed to #232');
-    assert.ok(/#233\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/233\)/.test(notYetCovered),
-      'and #233 is kept for what it actually owns: whether a resource appears in `included` at all');
-    assert.ok(/owns whether a\s+resource appears in `included`|appears in `included` at all/.test(bullet),
-      'stated as membership rather than as linkage, so the two are not conflated');
+
+    // ADJACENCY, RESTORED, AND SYMMETRIC ACROSS THE TWO SIBLINGS. Each link
+    // must sit immediately against the claim it owns, in the same grammatical
+    // shape, so that swapping the two links reds BOTH -- which two independent
+    // presence checks did not. This is the assertion the swap mutation
+    // survived at 17/0 before it was restored.
+    assert.ok(/#232\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/232\) owns the\s+relationships-linkage route/.test(notYetCovered),
+      '#232 is bound to the route it owns, adjacently — not merely linked somewhere nearby');
+    assert.ok(/#233\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/233\) owns whether a\s+related resource appears in `included`/.test(notYetCovered),
+      'and #233 is bound to what IT owns — membership in `included`, not linkage — adjacently');
 
     // The write surfaces are named as COVERED, and the one thing an
     // implementer is most likely to get wrong about them is stated: the ask is
@@ -773,6 +810,22 @@ module('[Unit] #234 linkage verdict', function(hooks) {
       'the write surfaces are named in the covered list');
     assert.ok(/`operation` is `'read'` even on a\s+write route/.test(bullet),
       'and the section says the related model is asked about a READ even on a write route');
+
+    // AND THE MEASURED CONSEQUENCE SURVIVES THE FIX. `#234 AC8`'s own removed
+    // assertion said it: "the POST/PATCH exclusion states its CONSEQUENCE
+    // rather than naming the handlers". #235's first draft deleted that
+    // assertion and replaced it with the route-name presence check directly
+    // above -- which is exactly the substitution the removed message called
+    // insufficient -- and the measurement went out of the README with it
+    // (`grep -c 'PATCH /animals/1' README.md`: 1 on dev, 0 on the branch).
+    // A surface listed as covered with no record of what it cost leaves a
+    // reader unable to tell what was wrong and a reviewer unable to tell
+    // whether the fix addressed it. Restored, and now pinned to the commit it
+    // was measured on so it cannot decay into a false claim about `dev`.
+    assert.ok(/`GET \/animals\/1` returned `owner\.data: null` while `PATCH \/animals\/1`\s+returned \*\*200 naming angela\*\*/.test(bullet),
+      'the write-surface entry states its measured CONSEQUENCE, not just the handler names');
+    assert.ok(/dev @ 8dda5d6/.test(bullet),
+      'and attributes that measurement to the commit it was taken on');
 
     // The security claim this section is not permitted to make unqualified.
     // `docs/project-structure.md` carries the standing rule; the measured
@@ -792,6 +845,64 @@ module('[Unit] #234 linkage verdict', function(hooks) {
       'the README has a Consumer Contracts section (grep -i "consumer contract" returned nothing repo-wide)');
     assert.ok(readme.includes('createLinkageFilter'),
       'which names the exported factory rather than inviting a second reading of access()');
+  });
+
+  test('[GUARD] #234 AC8c — Consumer Contracts names the surfaces the framework owns, and does not under-state them', async function(assert) {
+    // WHY THIS TEST EXISTS: `#234 AC8` above justified re-specifying its own
+    // README pin with the words "Preserving the old literal would have pinned
+    // a sentence that under-states the coverage and, worse, tells a reader
+    // their `POST` response is still leaking" -- and then failed to prevent
+    // exactly that. `### Consumer Contracts` opened with "**The framework owns
+    // this on four surfaces. You own it everywhere else.**" followed by an
+    // enumeration of the four READS, and #235 filters `POST`, `PATCH` and
+    // `included` too. AC8 has no assertion about that sentence at all: its own
+    // window was `### Known limitations` to the next `## `, which -- measured
+    // -- ran 883 -> 1421 and SWALLOWED this section, so the sentence sat
+    // inside AC8's slice while nothing in AC8 read it. The guard was written
+    // against the harm it then failed to prevent. AC8's window is now the
+    // section it names, and the claim made HERE is pinned HERE.
+    //
+    // TAMPER TESTED: restoring the exact "owns this on four surfaces" sentence
+    // in place of the enumeration, and restoring it as a heading ABOVE an
+    // otherwise-correct enumeration -- the narrow restatement, which the
+    // positive assertions alone do not catch.
+    const readme = await readFile(new URL('../../README.md', import.meta.url), 'utf8');
+    const start = readme.indexOf('### Consumer Contracts');
+    assert.ok(start > -1, 'precondition: the Consumer Contracts section exists');
+
+    const section = readme.slice(start, readme.indexOf('\n### ', start + 4));
+    assert.ok(section.length > 0 && !section.includes('### Breaking changes'),
+      'precondition: the window is Consumer Contracts alone');
+
+    // SCOPED TO THE CLAUSE THAT CARRIED THE FALSE COUNT, not to a family of
+    // phrasings -- same limit the sibling guards in
+    // test/unit/write-linkage-scope-test.ts state for their absence checks. A
+    // reworded under-statement would pass this one; the enumeration below is
+    // what catches the ordinary case.
+    assert.notOk(/owns this on four surfaces/.test(section),
+      'the section no longer claims the framework owns linkage on FOUR surfaces');
+
+    for (const surface of ['`GET /:models`', '`GET /:models/:id`', '`GET /:models/:id/{relationship}`', '`POST /:models`', '`PATCH /:models/:id`', '`included`']) {
+      assert.ok(section.includes(surface), `and names ${surface} among the ones it does own`);
+    }
+
+    // ADJACENCY: the ownership claim has to be bound to the enumeration that
+    // qualifies it. Two independent presence checks would let a four-surfaces
+    // heading sit above a six-surface list, which is the narrow restatement
+    // this test was asked to catch.
+    assert.ok(/resolves a verdict for you on every request-bound surface that\s+serializes a record through `toJSON\(\)`\. You own it everywhere else\.\*\*\s+Those surfaces are/.test(section),
+      'the ownership sentence is bound to the surface list, so a bare count cannot be restated above it');
+
+    // AND THE ROUTE THIS PR DOES NOT OWN IS ATTRIBUTED, NOT ANSWERED. #232 /
+    // PR #247 lands in the same sprint and changes this route. A sentence here
+    // that either claims or denies coverage of it is false in one of the two
+    // merge orders, so this section states the OWNER and refers the reader on.
+    assert.ok(section.includes('`GET /:models/:id/relationships/{relationship}` is not on that list'),
+      'the relationships-linkage route is excluded from the toJSON-owned list explicitly');
+    assert.ok(/issues\/232/.test(section) && /pull\/247/.test(section),
+      'and attributed to #232 and the PR in flight against it, rather than claimed or denied here');
+    assert.ok(/read that issue for its state rather than inferring it here/.test(section),
+      'with the reader sent to the owning issue for the state, which is what survives either merge order');
   });
 
   test('[GUARD] #234 AC8b — docs/project-structure.md no longer says this mechanism is unimplemented', async function(assert) {

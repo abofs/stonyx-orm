@@ -951,7 +951,18 @@ per-record filter. An input you cannot identify must **deny**.
   `methodAccessMap[request.method]`: it would ask a different question on a
   write route than on a read route, which is the two-vocabularies failure
   `createLinkageFilter` exists to prevent. An unresolvable class
-  (`getAccess()` → `undefined`) and a predicate that throws both **deny**. A
+  (`getAccess()` → `undefined`) and a predicate that throws both **deny**.
+
+  **What the two write surfaces cost before #235, measured rather than
+  described:** one HTTP verb defeated the filter on the same record. On
+  `dev @ 8dda5d6`, seconds apart, with no query string and no relationship
+  route, `GET /animals/1` returned `owner.data: null` while `PATCH /animals/1`
+  returned **200 naming angela**. Any caller who could read a record could also
+  write it and be handed the id the read withheld. That consequence is kept here
+  after the fix, and stated as a measurement, because **naming the two handlers
+  is not a substitute for it** — a reader who is told only that `POST` and
+  `PATCH` are now covered cannot tell what was wrong, and a reviewer cannot tell
+  whether the fix addressed it. A
   filtered-out relationship is **indistinguishable from a genuinely empty one** —
   an emptied `hasMany` is `data: []` and an emptied `belongsTo` is `data: null`,
   both **keeping their `links`**, which are built from the serialized record's
@@ -983,20 +994,30 @@ per-record filter. An input you cannot identify must **deny**.
   *permitted* related record, which is recorded in the release notes as a
   breaking change.
 
-  **Not yet covered, and each one still publishes ids the surfaces above
-  withhold:**
+  **Not yet covered by #235. Each still publishes ids the surfaces above
+  withhold, except where its own owning issue has since closed it — the first
+  entry names an issue that is in flight as this is written:**
 
-  - **`GET /:models/:id/relationships/{relationship}`**, whose *primary data* is
-    linkage, so filtering it is a **membership** decision —
-    [#232](https://github.com/abofs/stonyx-orm/issues/232), the filed child of
-    [#196](https://github.com/abofs/stonyx-orm/issues/196). This route builds
-    its `{type, id}` objects by hand and never calls `toJSON`, so it does not
-    see a `linkage` option no matter who supplies one. Measured:
-    `GET /animals/1/relationships/owner` answers
-    `{"type":"owner","id":"angela"}` while `GET /owners/angela` is `404`.
-  - **Whether a related resource appears in `included` at all** —
-    [#233](https://github.com/abofs/stonyx-orm/issues/233). #235 filters what a
-    record *already in* `included` may **name**; a hidden record is still a
+  - **`GET /:models/:id/relationships/{relationship}`, and its state is #232's
+    to report rather than this entry's.**
+    [#232](https://github.com/abofs/stonyx-orm/issues/232) owns the
+    relationships-linkage route. Its *primary data* is linkage,
+    so filtering it is a **membership** decision — which is why it is the filed
+    child of [#196](https://github.com/abofs/stonyx-orm/issues/196) and not of
+    #234. The route builds its `{type, id}` objects by hand and never calls
+    `toJSON`, so the `linkage` **option** never reaches it; whatever that route
+    filters, it filters itself. Measured **on `dev @ 8dda5d6`**, the commit
+    #235 branched from: `GET /animals/1/relationships/owner` answered
+    `{"type":"owner","id":"angela"}` while `GET /owners/angela` was `404`. That
+    measurement is pinned to a commit on purpose, so that it does not quietly
+    become a false claim about `dev`. **PR
+    [#247](https://github.com/abofs/stonyx-orm/pull/247) is in flight against
+    this entry**; if it has landed, this route is covered and the bullet #247
+    adds above supersedes this one.
+  - **Whether a related resource appears in `included` at all.**
+    [#233](https://github.com/abofs/stonyx-orm/issues/233) owns whether a
+    related resource appears in `included`. #235 filters what a record
+    *already in* `included` may **name**; a hidden record is still a
     **member** of that array. The two are different questions and neither closes
     the other: after #235, `GET /animals/1?include=owner,owner.pets` returns
     `owner.data: null` on every permitted animal it sideloads **and still
@@ -1105,11 +1126,29 @@ read all of these.
 
 #### `Record.toJSON()` does not filter relationship linkage unless you pass a verdict
 
-**The framework owns this on four surfaces. You own it everywhere else.**
+**The framework resolves a verdict for you on every request-bound surface that
+serializes a record through `toJSON()`. You own it everywhere else.**
 
-`GET /:models`, `GET /:models/:id` and both `GET /:models/:id/{relationship}`
-shapes resolve a linkage verdict and pass it to `toJSON()` for you. Any other
-path to a document — `JSON.stringify(record)`, `res.json(record)`,
+Those surfaces are `GET /:models`, `GET /:models/:id`, both shapes of
+`GET /:models/:id/{relationship}`, the `POST /:models` and `PATCH /:models/:id`
+**response documents**, and every record inside an `?include=` **`included`**
+array ([#234](https://github.com/abofs/stonyx-orm/issues/234) for the four
+reads, [#235](https://github.com/abofs/stonyx-orm/issues/235) for the two
+writes and `included`). Each resolves a linkage verdict and passes it to
+`toJSON()` for you.
+
+**`GET /:models/:id/relationships/{relationship}` is not on that list, and its
+state is not this section's to report.** It builds its `{ type, id }` objects by
+hand instead of calling `toJSON()`, so the `linkage` **option** never reaches it
+— whatever that route filters, it filters itself. And because its linkage *is*
+its primary data, filtering it is a **membership** decision rather than a
+linkage one. Membership on both relationship route families is owned by
+[#232](https://github.com/abofs/stonyx-orm/issues/232) (PR
+[#247](https://github.com/abofs/stonyx-orm/pull/247), in flight as this is
+written); read that issue for its state rather than inferring it here, because
+this section describes only what `toJSON()` filters.
+
+Any other path to a document — `JSON.stringify(record)`, `res.json(record)`,
 `console.log(record)`, a custom route, a queue payload, a websocket frame —
 calls `toJSON()` with no verdict, and **the no-verdict document names every
 related id, including records hidden on every one of their own surfaces**

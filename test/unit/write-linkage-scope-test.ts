@@ -86,10 +86,30 @@ module('[Unit] #235 write & included linkage — cross-file scope', function() {
     assert.ok(testStart > -1, 'precondition: the nested-include test is findable by name');
     const body = source.slice(testStart, source.indexOf("\n    test(", testStart + 10));
     assert.ok(body.length > 0 && body.length < 4000, 'precondition: the slice is one test body, not the rest of the file');
-    assert.notOk(body.includes("test('get call with include parameter sideloads relationships'"),
-      'precondition: and it does NOT contain the OTHER test that carries an identical membership line');
 
-    assert.ok(body.includes("const owner = included.find(r => r.type === 'owner' && r.id === 'angela');"),
+    // PRECONDITION MADE KILLABLE. This read:
+    //
+    //     assert.notOk(body.includes("test('get call with include parameter
+    //       sideloads relationships'"), 'precondition: and it does NOT contain
+    //       the OTHER test ...');
+    //
+    // which cannot fail. The slice above terminates at the next `\n    test(`,
+    // so no second test opener can be inside it by construction -- and the
+    // twin sits at :573, BEFORE the slice even begins. It was decoration on an
+    // assertion that can fail, and decoration reads as coverage.
+    //
+    // What it was trying to certify is real and IS checkable: the reason this
+    // guard is sliced at all is that the membership literal is NOT UNIQUE in
+    // the file, so a file-wide `includes()` would pin neither copy. Asserting
+    // the two counts states that reason and fails when it stops holding --
+    // widen the slice back to the whole file and the second assertion reads 2.
+    const membershipLine = "const owner = included.find(r => r.type === 'owner' && r.id === 'angela');";
+    assert.strictEqual(source.split(membershipLine).length - 1, 2,
+      'precondition: the membership literal occurs TWICE in the file — which is why a file-wide includes() would pin neither');
+    assert.strictEqual(body.split(membershipLine).length - 1, 1,
+      'and the slice isolates exactly ONE of them, so deleting THIS test’s copy reds this guard');
+
+    assert.ok(body.includes(membershipLine),
       "the nested-include test still SELECTS the hidden owner out of `included`");
     assert.ok(body.includes("assert.ok(owner, 'owner is included');"),
       'and still asserts she is a member — that is #233’s reproduction, and #235 leaves it standing');
@@ -142,22 +162,52 @@ module('[Unit] #235 write & included linkage — cross-file scope', function() {
     // comment-out tamper is live.
     const raw = await readRepoFile('../../src/orm-request.ts');
 
-    assert.ok(raw.includes('abofs/stonyx-orm#232 OWNS THIS ROUTE'),
+    assert.ok(/abofs\/stonyx-orm#232 OWNS THIS\s+\/\/ ROUTE/.test(raw),
       'the relationships-linkage route names its owning issue at the code site');
-    assert.ok(/cannot see a filter no matter who passes one/.test(raw),
-      'and says WHY — it never calls toJSON, so passing it a filter would do nothing');
+    assert.ok(/the `linkage` option cannot\s+\/\/ reach it/.test(raw),
+      'and says WHY — it never calls toJSON, so the option has nowhere to arrive');
+
+    // AND NAMES THE SIBLING PR AS IN FLIGHT. #232 lands this sprint as PR
+    // #247, and `src/orm-request.ts` AUTO-MERGES CLEAN between the two
+    // branches -- verified with `git merge-tree`. The note's earlier wording
+    // ("cannot see a filter no matter who passes one") would therefore have
+    // landed forty-one lines above #247's own `createLinkageFilter` call,
+    // silently, with no conflict for anyone to resolve. A scope note that
+    // outlives its scope is worse than none, so the note now dates itself
+    // against the PR that ends it and this assertion keeps it doing so.
+    assert.ok(/PR #247 is IN FLIGHT/.test(raw),
+      'and names the sibling PR that changes this route, so the note cannot silently outlive its own scope');
 
     // The behavioural pin is `[GUARD] #235 X2`. This one only stops the note
     // from being deleted while that test is quietly rewritten.
     assert.ok(raw.includes('`[GUARD] #235 X2`'),
-      'and points at the test that would go red if someone wired it anyway');
+      'and points at the test that pins the ownership boundary behaviourally');
 
     // THE CODE ITSELF, so this test is not purely an assertion about prose.
-    // The route's belongsTo branch still builds its linkage object by hand.
+    //
+    // MESSAGE CORRECTED IN #235's FIX ROUND, AND THE CORRECTION IS THE POINT.
+    // It read "the branch is still the unfiltered hand-built one -- #235 did
+    // not wire it", which names a property this assertion does not check.
+    // MEASURED: adding an access check ABOVE this line -- which is exactly
+    // what PR #247 does (`if (!isLinkable(relatedData)) return 404;`) -- wires
+    // the branch while leaving the pinned line byte-identical, so this
+    // assertion stayed GREEN at 1009/2 (baseline 1011/0) while
+    // `[GUARD] #235 X2` went red. The message was reporting a guarantee the
+    // assertion never offered.
+    //
+    // FIXED BY CORRECTING THE MESSAGE, NOT THE ASSERTION, and deliberately.
+    // The assertion pins the hand-built CONSTRUCTION, which is the reason the
+    // `linkage` option cannot reach this route and therefore the reason the
+    // route is not #235's -- that claim is true, load-bearing, and survives
+    // #247 (which keeps this line verbatim and adds a guard above it).
+    // Widening it to "nobody wired a filter here" would instead pin the
+    // route's implementation against its owner, which is the same out-of-scope
+    // mistake `[GUARD] #235 X2` was just re-specified to stop making. Whether
+    // a filter is wired is X2's question, and X2 is where it is asked.
     const code = withoutLineComments(raw);
 
     assert.ok(code.includes('data = { type: relatedData.__model.__name, id: relatedData.id };'),
-      'and the branch is still the unfiltered hand-built one — #235 did not wire it');
+      'and the belongsTo linkage is still built BY HAND rather than through toJSON — which is WHY the `linkage` option cannot reach this route');
   });
 
   test('[GUARD] #235 D1 — README no longer claims the write handlers need a signature change', async function(assert) {

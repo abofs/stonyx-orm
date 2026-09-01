@@ -1454,27 +1454,46 @@ export default class OrmRequest extends Request {
 
       // Relationship linkage route: GET /:id/relationships/{relationship}
       //
-      // NO `linkage` FILTER HERE, AND IT IS NOT AN OVERSIGHT --
-      // abofs/stonyx-orm#232 OWNS THIS ROUTE. The three sites that carry the
-      // filter (`buildResponse`'s `included`, the related-resource branch
-      // above, and the two write handlers) all call `record.toJSON()`, which is
-      // where the `linkage` option is applied. This branch builds its
-      // `{ type, id }` objects BY HAND and never calls `toJSON` at all, so it
-      // cannot see a filter no matter who passes one.
+      // NO `linkage` FILTER FROM abofs/stonyx-orm#235, AND THAT IS A SCOPE
+      // BOUNDARY RATHER THAN AN OVERSIGHT -- abofs/stonyx-orm#232 OWNS THIS
+      // ROUTE, and PR #247 is IN FLIGHT against it in this same sprint. If you
+      // are reading this after #247 landed, the filtering below is #232's and
+      // this note records why it was never #235's to add.
       //
-      // It is also a DIFFERENT QUESTION. Everywhere else, linkage is metadata
-      // ABOUT a document. Here the linkage IS the primary data, so dropping an
-      // entry is a MEMBERSHIP decision about what this route serves -- the same
-      // class as abofs/stonyx-orm#233 and #196, not the class #234/#235 close.
-      // That is why it is absent from #224 §2a's seven-site inventory.
+      // The three sites #235 does own (`buildResponse`'s `included`, the
+      // related-resource branch above, and the two write handlers) all reach
+      // the filter through `record.toJSON()`, which is where the `linkage`
+      // OPTION is applied. This branch builds its `{ type, id }` objects BY
+      // HAND and never calls `toJSON` at all, so the `linkage` option cannot
+      // reach it -- whatever this route filters, it has to filter itself, which
+      // is precisely why doing so is a separate change with a separate owner.
       //
-      // MEASURED, so the next person does not re-derive it: this route answers
-      // `GET /animals/1/relationships/owner` with
-      // `{"type":"owner","id":"angela"}` while `GET /owners/angela` is 404.
-      // Wiring the filter in here takes the suite to 993/2 and turns the
+      // It is also a DIFFERENT QUESTION. Everywhere #235 touches, linkage is
+      // metadata ABOUT a document. Here the linkage IS the primary data, so
+      // dropping an entry is a MEMBERSHIP decision about what this route
+      // serves -- the same class as abofs/stonyx-orm#233 and #196, not the
+      // class #234/#235 close. That is why it is absent from #224 §2a's
+      // seven-site inventory.
+      //
+      // MEASURED, so the next person does not re-derive it. Against this
+      // branch's baseline of 1011/0, wiring `createLinkageFilter` into the
+      // belongsTo branch below takes the suite to 1009/2, reddening
+      // `[GUARD] #235 X2` and the
       // `GET /animals/:id/relationships/owner returns relationship linkage`
-      // test red -- which is #232's own reproduction, not a regression.
-      // Pinned unchanged by `[GUARD] #235 X2` in test/integration/orm-test.ts.
+      // test -- the latter is #232's own reproduction, not a regression.
+      //
+      // THE BASELINE IS QUOTED WITH THE RESULT BECAUSE AN EARLIER REVISION OF
+      // THIS COMMENT SAID 993/2 AND SHIPPED IT. This file lands in consumers'
+      // `node_modules`, so a wrong number here is a wrong number in the
+      // published package. 993+2 = 995 is the DEV baseline, carried over from
+      // a branch on which `[GUARD] #235 X2` does not exist. A pass/fail pair
+      // with no baseline beside it cannot be checked by reading, which is how
+      // it survived three artifacts and a review; the qualitative claim was
+      // right the whole time and only the count was wrong.
+      //
+      // `[GUARD] #235 X2` in test/integration/orm-test.ts pins the OWNERSHIP
+      // BOUNDARY here rather than this route's current answer, so that it
+      // survives #247 landing. Read its comment before changing it.
       routes[`/:id/relationships/${dasherizedName}`] = async (request: OrmRequest$, { filter }: { [key: string]: unknown } = {}) => {
         const record = await store.find(model, getId(request.params)) as OrmRecord | undefined;
         if (!record) return 404;
