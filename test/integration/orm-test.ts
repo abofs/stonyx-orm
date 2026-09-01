@@ -1820,8 +1820,6 @@ module('[Integration] ORM', function(hooks) {
       // COMPARISON: five spellings are sampled to show the rule is not
       // character-positional, and the contract they sample is "the verdict
       // follows the record".
-      const bodyOf = response => response.body;
-
       // AC1 + AC2 — THE BYPASS, CLOSED, ACROSS FIVE SPELLINGS. One encodes the
       // first character, one a middle character, one the last, one encodes
       // every character, and one adds a trailing slash — so a fix that
@@ -1839,7 +1837,7 @@ module('[Integration] ORM', function(hooks) {
         const response = await rawRequest('GET', target);
 
         assert.equal(response.status, 403, `INPUT GET ${target} -> 403 (all eight were 200 on the defective head)`);
-        assert.notOk(bodyOf(response).includes('"secret"'), `INPUT GET ${target}: and the record does not come back in full`);
+        assert.notOk(response.body.includes('"secret"'), `INPUT GET ${target}: and the record does not come back in full`);
       }
 
       // AC3 — THE DESTRUCTIVE VERB, AND THE STATUS IS NOT SUFFICIENT EVIDENCE.
@@ -1889,7 +1887,7 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(upperEncoded.status, 200, 'INPUT GET /owners/%41RCHIVED -> 200 — the same record, encoded (was: 200 too, but for the wrong reason)');
       assert.strictEqual(upper.status, upperEncoded.status,
         'and the two spellings of ONE record now AGREE — under .toLowerCase() they were 403 and 200, wrong in opposite directions');
-      assert.ok(bodyOf(upper).includes('"uppercase-secret"'), 'and it is really the other record that came back');
+      assert.ok(upper.body.includes('"uppercase-secret"'), 'and it is really the other record that came back');
 
       // AND A DECODED SEPARATOR IS STILL ONE ID. The router splits THEN decodes,
       // so `archived%2fx` is the single id `archived/x` — a genuinely distinct
