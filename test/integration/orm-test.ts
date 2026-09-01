@@ -28,6 +28,17 @@ module('[Integration] ORM', function(hooks) {
 
   hooks.before(function() {
     endpoint = `http://localhost:${config.restServer.port}`;
+
+    // abofs/stonyx-orm#240, fixture 2. Seeded HERE, in the outermost before
+    // hook, so it exists before ANY nested module creates an animal: the trait
+    // sub-records come out of the animal serializer, and a `belongsTo` whose
+    // target record does not yet exist resolves to `null` rather than keeping
+    // the raw foreign key. Seeded late, `serialized.traits[n].tag` would be
+    // `null` and this fixture would be inert on every surface.
+    //
+    // `tag` is claimed by no access class, so nothing mounts a route for it —
+    // see test/sample/models/tag.ts.
+    createRecord('tag', { id: 'never-mounted', label: 'a collection the consumer never exposed' });
   });
 
   hooks.after(function() {
@@ -287,7 +298,35 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(store.get('trait').size);
       assert.ok(store.get(dbKey).size);
 
-      assert.deepEqual(dbRecordData, serialized);
+      // RE-SPECIFIED BY abofs/stonyx-orm#240, FIXTURE 2 -- AND THE
+      // RE-SPECIFICATION IS THE POINT, NOT A WORKAROUND.
+      //
+      // `tag` is claimed by no access class and is deliberately kept OUT of
+      // test/sample/db-schema.ts (putting it in costs 6 reds across two files,
+      // one of them the exact-key schema pin at :41). A model absent from the
+      // schema is NEVER PERSISTED, so the saved file carries no `tags`
+      // collection and the reload above has no tag record to resolve
+      // `trait.tag` against. It comes back `null` where the live store held
+      // `'never-mounted'`.
+      //
+      // "An unclaimed model is not persisted with the sample db" is a true and
+      // useful property of this fixture, so it is asserted DIRECTLY rather than
+      // absorbed into a looser comparison that would also swallow a real
+      // regression.
+      assert.notOk('tags' in parsedFileData,
+        'the saved file carries no `tags` collection -- an unclaimed model is absent from the schema and is therefore never persisted');
+      assert.deepEqual(dbRecordData.traits.map(trait => trait.tag), [null, null, null],
+        'so a belongsTo to it does not survive the round trip');
+      // The measured-loss half. Without this the assertion above is satisfied
+      // by a fixture that never linked a tag in the first place, which is the
+      // inert-fixture failure #240 AC4 exists to prevent.
+      assert.deepEqual(serialized.traits.map(trait => trait.tag), [null, 'never-mounted', 'never-mounted'],
+        'precondition: the LIVE store resolved two of the three, so the line above records a loss rather than an absence');
+
+      assert.deepEqual(dbRecordData, {
+        ...serialized,
+        traits: serialized.traits.map(trait => ({ ...trait, tag: null })),
+      }, 'and everything else round-trips byte-identically');
     });
 
     test('format() deduplicates records by ID in hasMany arrays', function(assert) {
@@ -4208,6 +4247,8 @@ module('[Integration] ORM', function(hooks) {
       }
     });
 
+  });
+
   // ===========================================================================
   // #240 -- THE TWO DEFERRED ACCESS FIXTURES
   // ===========================================================================
@@ -4284,8 +4325,6 @@ module('[Integration] ORM', function(hooks) {
     QUnit.todo('[DISCLOSURE] #232 AC11 -- a consumer predicate cannot express a per-record deny for a related resource', function(assert) {
       assert.ok(false, 'scaffold: the residual, pinned as behaviour rather than only documented');
     });
-  });
-
   });
 
   // ===========================================================================

@@ -225,7 +225,23 @@ export default class GlobalAccess {
     // inert. Deliberately NO `?? record.owner` fallback: accepting the raw
     // shape as well as the resolved one would absorb a resolution regression
     // silently, which is exactly what blinded this fixture before.
-    if (model === 'animal') return record => record.owner?.id !== 'restricted';
+    // `record.id !== 18` IS abofs/stonyx-orm#240's FIRST FIXTURE, AND IT IS THE
+    // ONLY HIDDEN CHILD IN THIS SAMPLE WITH A PERMITTED PARENT. Animal 18 is
+    // owned by `gina`, who is NOT hidden. Before it, every hidden animal (21,
+    // 22) was owned by `restricted`, who is hidden himself -- so no permitted
+    // parent named a hidden child anywhere in the fixture, and every `hasMany`
+    // assertion about that shape was vacuously green. Measured: `owner.pets`,
+    // `owner.phoneNumbers` and `animal.traits` named ZERO hidden children.
+    //
+    // The cheap alternative does NOT work and was measured: adding an owner
+    // whose `pets` names the already-hidden animal 21 RE-PARENTS it onto the
+    // new owner and de-hides it (`GET /animals` goes 20 -> 22). A hidden-child
+    // fixture has to come from an access() rule.
+    //
+    // DO NOT MOVE THIS TO `trait`: `/traits` is this suite's designated
+    // UNFILTERED collection, load-bearing for #190's GATE-0 scoping guard and
+    // for #234's AC7 cache guard -- measured at 6 reds.
+    if (model === 'animal') return record => record.owner?.id !== 'restricted' && record.id !== 18;
 
     // Allows full access to all calls that don't match any of the above conditions
     return ['read', 'create', 'update', 'delete'];

@@ -452,7 +452,11 @@ export default class GlobalAccess {
     // inert. Deliberately NO `?? record.owner` fallback: accepting the raw
     // shape as well as the resolved one would absorb a resolution regression
     // silently, which is exactly what blinded this fixture before.
-    if (model === 'animal') return record => record.owner?.id !== 'restricted';
+    // `record.id !== 18` hides one animal whose OWNER is permitted. It is the
+    // fixture that makes the `hasMany` half of the relationship-route rules
+    // observable: gina is served, animal 18 is not, and every surface that
+    // names gina's pets has to drop it.
+    if (model === 'animal') return record => record.owner?.id !== 'restricted' && record.id !== 18;
 
     // Allows full access to all calls that don't match any of the above conditions
     return ['read', 'create', 'update', 'delete'];

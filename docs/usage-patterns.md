@@ -305,7 +305,11 @@ export default class GlobalAccess {
     // `record.owner` resolves to an OrmRecord, not to the owner's id string.
     // Comparing it directly against a string is never equal, which is the bug
     // that made this predicate inert while looking like it worked.
-    if (model === 'animal') return record => record.owner?.id !== 'restricted';
+    // `record.id !== 18` hides one animal whose OWNER is permitted. It is the
+    // fixture that makes the `hasMany` half of the relationship-route rules
+    // observable: gina is served, animal 18 is not, and every surface that
+    // names gina's pets has to drop it.
+    if (model === 'animal') return record => record.owner?.id !== 'restricted' && record.id !== 18;
 
     // Grant CRUD permissions. A bare string ('read') is ONE permission, not a
     // grant of all four. Any shape that is not a boolean, a string, an array or
