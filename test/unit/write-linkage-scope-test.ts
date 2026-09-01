@@ -68,13 +68,30 @@ module('[Unit] #235 write & included linkage — cross-file scope', function() {
     // #233 incidentally — so it also must not be DELETED by #235, which would
     // leave #233 with nothing to turn red in Sprint 87.
     //
-    // TAMPER TESTED: commenting the line out. `withoutLineComments` removes it
-    // before the search, so `// const owner = included.find(…)` fails this.
+    // SCOPED TO THE NESTED-INCLUDE TEST'S BODY, NOT TO THE WHOLE FILE, AND
+    // THAT CORRECTION CAME OUT OF ATTACKING THIS GUARD RATHER THAN READING IT.
+    // The first draft searched the whole file for
+    // `included.find(r => r.type === 'owner' && r.id === 'angela')`. That
+    // literal occurs TWICE — the `get call with include parameter sideloads
+    // relationships` test at :582 carries an identical line — so deleting the
+    // one this guard is about would have left the guard green. A file-wide
+    // `includes()` on a line that is not unique pins nothing.
+    //
+    // TAMPER TESTED: commenting the line out (`withoutLineComments` removes it
+    // before the search), and deleting it while the identical line in the
+    // other test remains (the slice below excludes that one).
     const source = withoutLineComments(await readRepoFile('../integration/orm-test.ts'));
 
-    assert.ok(source.includes("const owner = included.find(r => r.type === 'owner' && r.id === 'angela');"),
+    const testStart = source.indexOf("test('get call with nested include parameter sideloads deep relationships'");
+    assert.ok(testStart > -1, 'precondition: the nested-include test is findable by name');
+    const body = source.slice(testStart, source.indexOf("\n    test(", testStart + 10));
+    assert.ok(body.length > 0 && body.length < 4000, 'precondition: the slice is one test body, not the rest of the file');
+    assert.notOk(body.includes("test('get call with include parameter sideloads relationships'"),
+      'precondition: and it does NOT contain the OTHER test that carries an identical membership line');
+
+    assert.ok(body.includes("const owner = included.find(r => r.type === 'owner' && r.id === 'angela');"),
       "the nested-include test still SELECTS the hidden owner out of `included`");
-    assert.ok(source.includes("assert.ok(owner, 'owner is included');"),
+    assert.ok(body.includes("assert.ok(owner, 'owner is included');"),
       'and still asserts she is a member — that is #233’s reproduction, and #235 leaves it standing');
   });
 
