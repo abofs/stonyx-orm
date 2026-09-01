@@ -102,6 +102,13 @@ function accessContextFor(request) {
   return {
     model: MODEL_BY_MOUNT[mount.split('/').pop()],
     operation: OPERATION_BY_METHOD[request?.method],
+    // #236. Mirrors `auth()`: the key is ALWAYS present, and `null` -- not
+    // `undefined` -- when the route addresses no record. Read off `params`,
+    // which is what the router populates, and NOT parsed out of the fabricated
+    // url above: deriving it from a path here would reproduce inside the
+    // harness the exact decode-versus-dispatch disagreement #237 closed, and
+    // the harness would then agree with a broken predicate.
+    recordId: request?.params && 'id' in request.params ? request.params.id : null,
   };
 }
 
@@ -1715,8 +1722,12 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // INVARIANCE: hand the predicate one fixed context and vary the request
       // target every way the variant did, and the verdict does not move. A
       // regression that reintroduced any read of the mount would make it move.
-      const ownerContext = { model: 'owner', operation: 'read' };
-      const animalContext = { model: 'animal', operation: 'read' };
+      // #237 HARNESS UPDATE. `recordId` is held FIXED alongside `model` and
+      // `operation` -- that is what makes this an invariance check now: the
+      // request target varies through every shape variant 3 used and the one
+      // structural fact the predicate reads does not move.
+      const ownerContext = { model: 'owner', operation: 'read', recordId: 'angela' };
+      const animalContext = { model: 'animal', operation: 'read', recordId: 22 };
 
       for (const [url, context] of [
         ['/OwNeRs/angela', ownerContext],
@@ -1771,7 +1782,9 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       assert.notStrictEqual('/api' + 'owners', '/api/owners',
         "the old remediation expression evaluates to /apiowners, not /api/owners");
 
-      const ownerContext = { model: 'owner', operation: 'read' };
+      // #237 harness update: `recordId` supplied, and held fixed across all six
+      // mounts. A mount prefix cannot change which record a request addresses.
+      const ownerContext = { model: 'owner', operation: 'read', recordId: 'angela' };
 
       for (const mount of ['/api/owners', '/api/animals', '/API/Owners', '/deeply/nested/api/owners', '/apiowners', '/owners']) {
         assert.strictEqual(typeof globalAccess.access(makeRequest({ url: `${mount}/angela`, mount }), ownerContext), 'function',
@@ -1836,7 +1849,10 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // it.)
       const { readFile } = await import('node:fs/promises');
 
-      const ACCESS_SIGNATURE = '  access(request, { model, operation }) {';
+      // #236/#237: `recordId` joins the destructured context. The literal is
+      // updated rather than loosened to a regex -- see AC3/3 in
+      // test/unit/access-sample-migration-test.ts for why the shape pin matters.
+      const ACCESS_SIGNATURE = '  access(request, { model, operation, recordId }) {';
 
       const extract = (source, label) => {
         const start = source.indexOf(ACCESS_SIGNATURE);
@@ -1890,8 +1906,13 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // migration, because the context names which model and which verb, not
       // which route. An absolute-form target that reached that comparison with
       // an unexpected `path` really would walk past the deny.
-      const ownerContext = { model: 'owner', operation: 'read' };
-      const absolute = url => makeRequest({ url, mount: '/owners', path: '/angela' });
+      // #237 HARNESS UPDATE. `recordId` joins the fixed context, and `angela` is
+      // the record every absolute-form target below addresses. Holding it fixed
+      // is what makes the loop an invariance check: the request target varies
+      // through the shapes variant 5 was built from and the structural facts do
+      // not move, because none of those shapes is an input any more.
+      const ownerContext = { model: 'owner', operation: 'read', recordId: 'angela' };
+      const absolute = url => makeRequest({ url, mount: '/owners', path: '/angela', params: { id: 'angela' } });
 
       for (const url of [
         'http://anything.example/owners/angela',
@@ -1913,10 +1934,25 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // mode for a mutation sweep to have.
       const verdict = value => (typeof value === 'function' ? 'a per-record filter' : JSON.stringify(value));
 
-      for (const path of ['/archived', '/ARCHIVED', '/Archived/2024']) {
+      // RE-SPECIFIED BY abofs/stonyx-orm#237, NOT INVERTED — the axis it varied
+      // was the wrong one. It swept the PATH (`/archived`, `/ARCHIVED`,
+      // `/Archived/2024`) and asserted the deny fired on all three, which
+      // pinned a rule measured wrong in BOTH directions: case-folding a route
+      // parameter false-DENIED a distinct record at `ARCHIVED` while still
+      // admitting `%41RCHIVED`, and comparing the RAW path admitted all 255
+      // encoded spellings of `archived`. So the sweep now varies the SPELLING
+      // OF THE TARGET while holding the decoded record fixed, which is the
+      // contract that actually holds: the verdict follows the RECORD, not the
+      // string the caller used to name it.
+      //
+      // KILLING MUTATION: reinstate `request.path.toLowerCase()` and compare it
+      // against '/archived' — `/%61rchived` and `/archived/pets` stop denying.
+      const denied = { ...ownerContext, recordId: 'archived' };
+
+      for (const path of ['/archived', '/%61rchived', '/archived/pets', '/ARCHIVED', undefined]) {
         assert.strictEqual(
-          verdict(globalAccess.access(makeRequest({ url: `http://anything.example/owners${path}`, mount: '/owners', path }), ownerContext)),
-          'false', `the outright deny still fires on an absolute-form target at ${path} (was: a full CRUD grant)`);
+          verdict(globalAccess.access(makeRequest({ url: `http://anything.example/owners${path ?? ''}`, mount: '/owners', path, params: { id: 'archived' } }), denied)),
+          'false', `the deny fires for the record \`archived\` however the target is spelled (path ${String(path)}) — including a spelling that used to walk straight past it`);
       }
 
       // The path is lower-cased because the router matched case-insensitively,
@@ -1943,8 +1979,23 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // around this deny (abofs/stonyx-orm#228). The line is simultaneously
       // load-bearing and insufficient, which is why it must be neither deleted
       // nor cited as a normalisation recipe.
-      assert.strictEqual(verdict(globalAccess.access(makeRequest({ url: '/owners/ARCHIVED', mount: '/owners', path: '/ARCHIVED' }), ownerContext)),
-        'false', 'and a case-varied sub-path cannot step around it either');
+      // AND THIS ONE IS RE-SPECIFIED THE OTHER WAY, because the behaviour it
+      // pinned was never correct in EITHER direction. It asserted that
+      // `/owners/ARCHIVED` is denied. `ARCHIVED` is a DISTINCT RECORD from
+      // `archived` — the store is case-sensitive and so is the dispatch — so
+      // denying it was a false deny on a record the rule was never about, and
+      // the same `.toLowerCase()` that produced it admitted `%41RCHIVED`, the
+      // encoded spelling of that very record. One line, both errors.
+      //
+      // The correct contract: an `/archived` rule denies the record `archived`
+      // and NOTHING ELSE. `case sensitive routing` governs literal route
+      // SEGMENTS; a record id is a VALUE.
+      //
+      // KILLING MUTATION: add `.toLowerCase()` anywhere in the comparison —
+      // this reds, and so does the live-router pair in
+      // test/integration/orm-test.ts that seeds a real record at `ARCHIVED`.
+      assert.strictEqual(verdict(globalAccess.access(makeRequest({ url: '/owners/ARCHIVED', mount: '/owners', path: '/ARCHIVED', params: { id: 'ARCHIVED' } }), { ...ownerContext, recordId: 'ARCHIVED' })),
+        'a per-record filter', 'a DIFFERENT record whose id differs only in case is NOT denied by the /archived rule (was: 403, a false deny on the wrong record)');
 
       // FAIL CLOSED. `?? ''` converted an absent request target into a total
       // grant: the empty string matched no collection, so `access()` fell
@@ -1971,7 +2022,7 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // `Orm.instance.getAccess()` path, whose consumers (#196, #207) exist to
       // refuse. BOTH sweeps are therefore kept, and the sample guards BOTH
       // arguments at their own read.
-      const request = makeRequest({ url: '/owners/angela', path: '/angela' });
+      const request = makeRequest({ url: '/owners/angela', path: '/angela', params: { id: 'angela' } });
       const DEGENERATE = [undefined, null, '', 42, {}];
 
       for (const value of DEGENERATE) {
@@ -1979,42 +2030,62 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
           `an absent or non-string model (${String(value)}) denies (was: full CRUD, no filter)`);
       }
 
-      // ARGUMENT ONE, same value set, with a VALID context held fixed — so a
-      // guard that only covers the context cannot satisfy it.
+      // ARGUMENT ONE — RE-SPECIFIED BY abofs/stonyx-orm#237, AND THIS IS THE
+      // ASSERTION THAT RECORDS WHY THE GUARD MOVED RATHER THAN VANISHED.
       //
-      // REVERTING THE ARGUMENT-ONE GUARD IS CAUGHT IN BOTH SPELLINGS, AND THE
-      // COUNT DEPENDS ON WHICH ONE. The mutation is: delete
-      // `if (typeof request?.path !== 'string' || request.path === '') return false;`
-      // and restore `const path = String(request.path ?? '').toLowerCase();`.
+      // It used to sweep `request.path` and assert every degenerate value
+      // DENIED, because the predicate read `request.path` and a guard on
+      // argument two does not protect a read of argument one. The predicate no
+      // longer reads argument one at all, so that guard would now be theatre
+      // and the sweep would be measuring nothing. What the same sweep measures
+      // instead is the property the fix BUYS: argument one is not an input, so
+      // no shape of it — absent, empty, a number, an object — can move a
+      // verdict. That is the strongest form of "variants 1 through 5 are
+      // unconstructible": there is no read to construct against.
       //
-      //   fixture only ............................ 955 / 3
-      //     (assertion 46, THIS assertion, AC1/5)
-      //   all three copies in lockstep ............ 956 / 2
-      //     (THIS assertion, AC1/5)
-      //
-      // The lockstep number is the one a contributor actually produces, because
-      // assertion 46 and AC1/5 exist to force the copies to move together; the
-      // fixture-only number is three only because assertion 46 additionally
-      // fires on COPY DIVERGENCE rather than on the guard. Quote the figure with
-      // its scope. The killer in both is this assertion, which is the right one:
-      // it is the only one that measures the guard's BEHAVIOUR rather than its
-      // presence as a string.
-      const ownerRead = { model: 'owner', operation: 'read' };
+      // KILLING MUTATION: reintroduce ANY read of argument one into the owner
+      // branch (`request.path`, `request.originalUrl`, `request.baseUrl`) — the
+      // degenerate shapes stop agreeing with the real one and this reds.
+      const ownerRead = { model: 'owner', operation: 'read', recordId: 'angela' };
 
       for (const value of DEGENERATE) {
-        assert.strictEqual(verdict(globalAccess.access({ ...request, path: value }, ownerRead)), 'false',
-          `an absent or non-string request.path (${String(value)}) denies too, with a valid context (was: a per-record filter — the /archived deny simply gone)`);
+        assert.strictEqual(verdict(globalAccess.access({ ...request, path: value }, ownerRead)), 'a per-record filter',
+          `an absent or non-string request.path (${String(value)}) cannot move the verdict, because argument one is no longer read (was: it had to DENY, because it was)`);
       }
 
       // And the whole of argument one absent, which is the shape a programmatic
-      // caller assembling only a context produces.
-      assert.strictEqual(verdict(globalAccess.access({}, ownerRead)), 'false',
-        'a request object with no path at all denies (was: a per-record filter)');
+      // caller assembling only a context produces. It is now indistinguishable
+      // from a full request, which is the point.
+      assert.strictEqual(verdict(globalAccess.access({}, ownerRead)), 'a per-record filter',
+        'a request object with no path at all is answered identically (was: a deny, because the path was read)');
 
-      // CONFIRM THIS COULD FAIL: the same valid context with a real path is
-      // still authorised, so the sweep above is not satisfied by deny-all.
+      // THE GUARD DID NOT DISAPPEAR — IT MOVED TO THE KEY THAT CAN ACTUALLY BE
+      // MISSING, and this is the behavioural pin on it. `auth()` ALWAYS sets
+      // `recordId`, so `undefined` means the context was hand-assembled by a
+      // caller resolving this predicate through `Orm.instance.getAccess()` —
+      // the documented path #196 and #207 exist to refuse. An input this
+      // function cannot identify DENIES, and `undefined` is the only spelling
+      // of "cannot identify" here.
+      //
+      // KILLING MUTATION: delete `if (recordId === undefined) return false;`
+      // from the owner branch — this reds, and so do assertion 1, 37 and 38.
+      assert.strictEqual(verdict(globalAccess.access(request, { model: 'owner', operation: 'read' })), 'false',
+        'a context with NO recordId key at all denies — it did not come from auth(), which always sets it');
+
+      // AND `null` IS NOT `undefined`, WHICH IS THE WHOLE REASON auth() EMITS
+      // `null`. A collection route is addressed to no record and must still be
+      // authorised; a guard written as `if (!recordId)` would deny it, and a
+      // guard written against `undefined` does not.
+      //
+      // KILLING MUTATION: write the guard as `if (!recordId) return false;` —
+      // this reds while every other assertion in this test stays green.
+      assert.strictEqual(verdict(globalAccess.access(request, { ...ownerRead, recordId: null })), 'a per-record filter',
+        'while `recordId: null` — the collection route, addressed to no record — is authorised');
+
+      // CONFIRM THIS COULD FAIL: the same valid context with a real record is
+      // still authorised, so the sweeps above are not satisfied by deny-all.
       assert.strictEqual(typeof globalAccess.access(request, ownerRead), 'function',
-        'while a request carrying a real path is still authorised');
+        'while a request carrying a real recordId is still authorised');
 
       // And a caller that resolves the predicate and omits the context ENTIRELY
       // must not be granted either. The migrated signature destructures, so this
@@ -2350,6 +2421,96 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
         params: { id: String(HIDDEN_ID) },
       }));
       assert.strictEqual(deleted, 204, 'DELETE of an EXISTING record is still 204 — the behaviour change is scoped to the missing case');
+    });
+  });
+
+  // =========================================================================
+  // The harness's own recordId derivation (assertions 52-53)
+  // =========================================================================
+  module('accessContextFor — the recordId derivation the default call sites ride on', function() {
+    test('[GUARD] assertion 52 — the default context carries the ADDRESSED record, read off `params`, and the /archived deny fires through it', function(assert) {
+      // WHY THIS EXISTS. `accessContextFor` (top of this file) builds the
+      // second argument for the ~36 call sites that invoke `access(request)`
+      // with one argument. #236 added the `recordId` line to it, and NOTHING
+      // MEASURED THAT LINE: replacing the whole derivation with the constant
+      // `null` left this suite at 972 pass / 0 fail, fully green. The only
+      // property anything pinned was "the key exists and is not 'archived'" --
+      // so the `params` read the comment above the line calls load-bearing was
+      // inert, and the person most likely to delete it is someone tidying.
+      //
+      // KILLING MUTATIONS, each measured on a clean rebuilt tree:
+      //   recordId: null                          -> assertions 1 and 2 below red
+      //   recordId: request?.params?.id ?? null    -> assertion 4 reds (null vs undefined)
+      //   derived from the fabricated url instead  -> assertions 2 and 3 red
+      seedOwners();
+
+      // 1. The deny is REACHABLE through the default context. Without this the
+      //    36 one-argument call sites never exercise the /archived branch at
+      //    all, and a harness that stopped supplying a real id would look
+      //    identical.
+      // Verdicts are reduced to a STRING before comparing: `access()` answers a
+      // per-record FILTER FUNCTION on allow, and handing a function to the TAP
+      // reporter as `actual` kills the run before it reports.
+      const verdictOf = request => {
+        const verdict = access(request);
+
+        if (verdict === false) return 'DENY';
+        if (typeof verdict === 'function') return 'FILTER';
+
+        return `OTHER: ${JSON.stringify(verdict)}`;
+      };
+
+      assert.strictEqual(verdictOf(makeRequest({ url: '/owners/archived', params: { id: 'archived' } })), 'DENY',
+        'assertion 52 — access(request) through the DEFAULT context denies the addressed record `archived` (with `recordId: null` hard-coded in accessContextFor, this answers FILTER instead)');
+
+      // 2 and 3. THE PAIR THAT PINS WHICH FIELD IS READ, in both directions.
+      //    The url and `params` are made to DISAGREE: the verdict must follow
+      //    `params`, which is what the router populates, and must not follow
+      //    the fabricated path. A derivation parsed out of the url reproduces
+      //    inside the harness the decode-versus-dispatch disagreement #237
+      //    closed, and would then agree with a broken predicate.
+      assert.strictEqual(verdictOf(makeRequest({ url: '/owners/gina', params: { id: 'archived' } })), 'DENY',
+        'assertion 52 — and the verdict follows `params.id`, not the fabricated path: `params` says `archived`, the url says `gina`, the answer is DENY');
+      assert.strictEqual(verdictOf(makeRequest({ url: '/owners/archived', params: { id: 'gina' } })), 'FILTER',
+        'assertion 52 — and the converse: the url says `archived`, `params` says `gina`, and the record is NOT denied — nothing here parses the request target');
+
+      // 4. The absence spelling the framework guarantees, at the harness tier.
+      //    `auth()` emits `null` on a collection route and NEVER `undefined`;
+      //    the sample's `recordId === undefined` guard is sound only because of
+      //    that, so a harness that drifted to `undefined` would deny every
+      //    collection read for a reason unrelated to the rule under test.
+      assert.strictEqual(accessContextFor(makeRequest({ url: '/owners' })).recordId, null,
+        'assertion 52 — a collection route carries `recordId: null`, the spelling auth() produces, not undefined and not the empty string');
+      assert.ok('recordId' in accessContextFor(makeRequest({ url: '/owners' })),
+        'assertion 52 — and the KEY is present, because the sample refuses a context that lacks it');
+    });
+
+    test('[GUARD] assertion 53 — the harness does NOT mirror the auth() coercion, and that limitation is pinned rather than described', function(assert) {
+      // STATED LIMITATION, per the rule that a comment claiming a guarantee it
+      // does not provide is worse than no comment. `accessContextFor` says
+      // "Mirrors `auth()`" and it mirrors the SHAPE (key always present, `null`
+      // for a collection) but not the COERCION: `auth()` emits
+      // `getId(request.params)`, this harness emits `request.params.id` raw.
+      //
+      // WHY NOT SIMPLY CALL `getId`: it is module-private in
+      // src/orm-request.ts and is not exported, and re-implementing its
+      // `isNaN` gate here would be a FOURTH copy of the coercion `coerceId`'s
+      // own docblock forbids ("two coercions that must agree cannot be kept in
+      // agreement by review; they have to be one function"). The harness would
+      // then be pinned against a copy rather than against the function.
+      //
+      // INERT TODAY -- the fixture compares `recordId` against the string
+      // 'archived', and the per-record filter takes the record, not the id --
+      // and a live trap for the next rule that compares `recordId`
+      // NUMERICALLY, which is the divergence #237 closed at the framework
+      // tier. Pinned here so it is visible and so a future change to either
+      // side reds this assertion instead of passing silently.
+      const context = accessContextFor(makeRequest({ url: '/animals/0x2391', params: { id: '0x2391' } }));
+
+      assert.strictEqual(context.recordId, '0x2391',
+        'assertion 53 — the harness hands over the RAW param, while auth() would hand over getId({ id: "0x2391" }) === 9105; the two disagree on hex-shaped ids and every rule in this file is written against strings');
+      assert.strictEqual(transforms.number('0x2391'), 9105,
+        'assertion 53 — confirming the divergence is real and not a claim: the store files that id under 9105, which is the value auth() supplies and this harness does not');
     });
   });
 });

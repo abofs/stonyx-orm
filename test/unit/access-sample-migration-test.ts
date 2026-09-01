@@ -33,7 +33,10 @@ const { module, test } = QUnit;
 
 // The exact literal assertion 46 anchors its extractor on. Written out once
 // here so that a change to the signature reds this file as well as that one.
-const ACCESS_SIGNATURE = '  access(request, { model, operation }) {';
+// #236/#237: `recordId` joined the destructured context, so the literal moved
+// with it. Kept in lockstep with the copy in access-filter-enforcement-test.ts
+// by AC3/3 below, which compares this value against that file's source.
+const ACCESS_SIGNATURE = '  access(request, { model, operation, recordId }) {';
 
 async function readRepoFile(relativePath) {
   const { readFile } = await import('node:fs/promises');
@@ -165,7 +168,7 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
       'and `assert.ok(start !== -1)` still reports a failed extraction, so it is named rather than silently compared as an empty match');
   });
 
-  test('AC1/5 — the sample body drops baseUrl and originalUrl, and KEEPS request.path', async function(assert) {
+  test('AC1/5 — the sample body reads NOTHING off argument one, and expresses the /archived deny against the decoded recordId', async function(assert) {
     // THE TRAP. #213's original AC1 required the migrated sample to contain no
     // reference to `baseUrl`, `originalUrl` OR `request.path`. README
     // "What the context does not tell you: which surface" — text #202 itself
@@ -227,21 +230,43 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
 
       assert.notOk(code.includes('baseUrl'), `${label}'s access() body does not read request.baseUrl`);
       assert.notOk(code.includes('originalUrl'), `${label}'s access() body does not read request.originalUrl`);
-      assert.ok(code.includes('request.path'), `${label}'s access() body DOES still read request.path — the sanctioned read`);
-      assert.ok(code.includes("'/archived'"), `${label}'s access() body still carries the /archived deny`);
+      // RE-SPECIFIED BY abofs/stonyx-orm#237, NOT INVERTED. This line pinned
+      // `request.path` as "the sanctioned read" — the ONE read of argument one
+      // #222 had to keep, because the context named which model and which verb
+      // but not which record. #236 put the record in the context, so the read
+      // is retired rather than dropped and the rule it enforced is enforced
+      // against a better input. What was never correct in either direction was
+      // pinning the READ; what is correct is pinning the RULE.
+      //
+      // KILLING MUTATION: restore `const path = request.path.toLowerCase();`
+      // and compare it against '/archived' — the first two red here, and the
+      // live-router 403s in test/integration/orm-test.ts red with them.
+      assert.notOk(code.includes('request.path'), `${label}'s access() body no longer reads request.path — the raw pathname disagreed with the decoded dispatch, which is how /owners/%61rchived walked past the deny`);
+      assert.notOk(/toLowerCase/.test(code), `${label}'s access() body does not case-fold anything — a record id is a value, and folding it false-denied a distinct record at ARCHIVED while admitting %41RCHIVED`);
+      assert.notOk(/decodeURI/.test(code), `${label}'s access() body does not decode anything either — express decodes a route parameter exactly once, and a second decode denies the legitimate id %61rchived`);
+      assert.ok(code.includes("recordId === 'archived'"), `${label}'s access() body still carries the /archived deny, now against the DECODED record id`);
       assert.ok(/if \(model === 'owner'\)/.test(code), `${label} branches on the context's model, not on a mount string`);
       assert.ok(/if \(model === 'animal'\)/.test(code), `${label} branches on model for animals too`);
 
-      // BOTH ARGUMENTS ARE GUARDED. The fail-closed check on `model` protects
-      // argument two; it does not protect the `request.path` read, and on the
-      // first #227 head it did not — `access({}, { model: 'owner', ... })`
-      // returned a per-record filter where `origin/dev` returned `false`.
+      // THE GUARD MOVED WITH THE READ. #222 guarded BOTH arguments because the
+      // predicate read both. It now reads only argument two, so the guard on
+      // `request.path` would be theatre — and the input that can still be
+      // missing is `recordId`, which `auth()` always sets and a hand-assembled
+      // context does not. `undefined` is the ONLY spelling of absent here:
+      // `null` is a legitimate collection route and must NOT deny, which is why
+      // the pin below is on the strict-equality form and not on `if (!recordId)`.
+      //
+      // KILLING MUTATION: delete the recordId guard, or rewrite it as
+      // `if (!recordId) return false;` — the first reds assertion 47's
+      // no-recordId pin, the second reds its `recordId: null` pin.
       assert.ok(code.includes("if (typeof model !== 'string' || model === '') return false;"),
         `${label} fails closed on an unidentifiable model (argument two)`);
-      assert.ok(code.includes("if (typeof request?.path !== 'string' || request.path === '') return false;"),
-        `${label} fails closed on an unidentifiable request.path too (argument one) — the guard and the read are on the same object`);
-      assert.notOk(/request\.path \?\? ''/.test(code),
-        `${label} does not reach the sub-path rule through \`?? ''\`, which this sample's own header condemns`);
+      assert.ok(code.includes('if (recordId === undefined) return false;'),
+        `${label} fails closed on a context that carries no recordId — it did not come from auth(), which always sets the key`);
+      assert.notOk(/if \(!recordId\)/.test(code),
+        `${label} does not deny on a FALSY recordId — \`null\` is the collection route and denying it would be a new false deny`);
+      assert.notOk(/\?\? ''/.test(code),
+        `${label} does not reach the record rule through \`?? ''\`, which this sample's own header condemns`);
     }
 
     // The three bodies are ONE matcher, code line for code line. Assertion 46
@@ -256,16 +281,52 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
     // THE RATIONALE IS PINNED TOO, because assertion 46's extractor strips `//`
     // lines and therefore compares no comments at all. The sentence below is the
     // one thing stopping a future contributor from "finishing the migration" by
-    // deleting the `request.path` read — and it could be removed from the
-    // SHIPPED copy with the suite staying green.
+    // deleting the rule outright — and it could be removed from the SHIPPED copy
+    // with the suite staying green. It survives #237 unchanged, and that is the
+    // point: what changed is WHERE the rule reads its input, not whether
+    // dropping it is a silent deny-to-allow.
     for (const [label, source] of copies) {
       assert.ok(source.includes('turns a deny into an ALLOW, silently'),
-        `${label} still carries the sentence that says migrating this read away is a silent deny-to-allow`);
+        `${label} still carries the sentence that says dropping this rule is a silent deny-to-allow`);
     }
 
+    // RE-SPECIFIED BY abofs/stonyx-orm#237 — THE FACT INVERTED, SO THE PIN DID.
+    //
+    // This pinned the banner `THIS DENY CANNOT BE EXPRESSED FROM THE CONTEXT
+    // ALONE`, which was true while the context carried only `model` and
+    // `operation`: six owner surfaces produced one identical context, so a
+    // SUB-PATH rule had to read argument one. #236 added `recordId` and that
+    // stopped being true. Leaving the old banner in the shipped copies would
+    // have taught the next consumer to re-derive a fact the framework now hands
+    // over — which is the exact failure this whole issue family is made of.
+    //
+    // NOT DELETED, INVERTED. The replacement banner has to say BOTH halves: it
+    // is expressible now, AND it still must not be dropped. A banner that said
+    // only the first half would read as permission to delete the rule.
+    //
+    // KILLING MUTATION: restore the old banner, or drop the "must not be
+    // dropped" half of the new one.
+    // SCOPE OF THIS CHECK, STATED BECAUSE ITS MESSAGE USED TO OVERSTATE IT.
+    // `source` here is the EXTRACTED SAMPLE BODY -- for the README, the fenced
+    // code block only (`fencedSample` above), not the file. So this measures
+    // the sample a consumer copies, NOT "the copy a consumer installs": the
+    // installed README still carries the pre-#236 claim in PROSE, outside the
+    // fence, in the `The access context (second argument)` reference section
+    // ("a rule that depends on the sub-path still needs `request.path` ... its
+    // `/archived` deny cannot be expressed from the context alone"), lower-cased
+    // and therefore clearing the needle below on case as well as on scope. That
+    // prose is knowingly still there; retiring it WITH its measurement is
+    // abofs/stonyx-orm#238, and dated superseded-by markers now sit at each of
+    // those sites so a reader arriving at one is not left with the old claim
+    // alone. Widening this check to the whole file is #238's to do, when the
+    // prose it would then measure has actually moved.
     for (const [label, source] of copies.slice(0, 2)) {
-      assert.ok(source.includes('CANNOT BE EXPRESSED FROM THE CONTEXT ALONE'),
-        `${label} — the copy a consumer installs — still carries the banner in full`);
+      assert.ok(source.includes('EXPRESSIBLE FROM THE CONTEXT ALONE'),
+        `${label} — the sample body a consumer copies — says the deny is now expressible from the context alone`);
+      assert.notOk(source.includes('CANNOT BE EXPRESSED FROM THE CONTEXT ALONE'),
+        `${label} — the extracted sample body, NOT the whole file — no longer carries the pre-#236 banner, which would send a consumer back to parsing the request target (the README's PROSE sections still do, knowingly, and are dated-marked and tracked at #238)`);
+      assert.ok(/still must not be dropped/i.test(source),
+        `${label} keeps the other half: expressible is not the same as optional`);
     }
 
     // AND THE NARROWED VARIANT CLAIM IS PINNED. abofs/stonyx-orm#228 is a
@@ -378,10 +439,15 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
     assert.ok(body.includes('unconstructible'),
       'and gives the reason: the variant is unconstructible against a predicate that reads the context');
     assert.ok(body.includes('/owners/archived'),
-      'and points at the assertion that IS live coverage of the surviving read of argument one');
+      'and points at the assertion that IS live coverage of the /archived deny');
 
-    // And the thing it points at exists.
-    assert.ok(source.includes("test('[DEFECT] #222 — the /archived sub-path deny survives"),
+    // And the thing it points at exists. POINTER UPDATED BY #237, which renamed
+    // that test: the deny is no longer expressed as a sub-path rule, so the
+    // word "sub-path" left the title. A dangling pointer is exactly what this
+    // assertion exists to catch, so it moves with the thing it points at.
+    assert.ok(source.includes("test('[DEFECT] #222/#236 — the /archived deny survives"),
       'which is present — the pointer is not dangling');
+    assert.notOk(source.includes("test('[DEFECT] #222 — the /archived sub-path deny survives"),
+      'and the pre-#237 title is gone — renamed, not duplicated');
   });
 });

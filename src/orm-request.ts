@@ -69,6 +69,15 @@
  * records under `model: 'owner'`, and the context gives no signal of that
  * (abofs/stonyx-orm#196).
  *
+ * SUPERSEDED 2026-09-01 BY abofs/stonyx-orm#236/#237, AND KEPT FOR THE
+ * CONSTRAINT IT STATES RATHER THAN AS A DESCRIPTION OF THE CODE. The context
+ * now also carries `recordId` -- the DECODED route-parameter id, see
+ * `AccessContext.recordId` in ./types/orm-types.ts -- so the fixture's
+ * `/archived` deny IS expressible from the context alone, and the shipped
+ * sample no longer reads `request.path` at all. Retiring this wording WITH the
+ * measurement that retires it, rather than by deletion, is
+ * abofs/stonyx-orm#238.
+ *
  * `record` IS NOT IN THIS CONTEXT, deliberately. `auth()` runs after route
  * matching but BEFORE any handler executes (`@stonyx/rest-server`
  * `src/request.ts:58-60`), so nothing has been fetched yet -- supplying a
@@ -158,6 +167,11 @@
  * `/archived` SUB-PATH rule is still a string match, and abofs/stonyx-orm#228 is
  * a sixth spelling that gets past it.
  *
+ * SUPERSEDED 2026-09-01 BY abofs/stonyx-orm#236/#237: the `/archived` rule is
+ * no longer a string match against the request target -- it compares the
+ * decoded `recordId` the framework supplies -- and abofs/stonyx-orm#228 is
+ * CLOSED. Retirement of this wording: abofs/stonyx-orm#238.
+ *
  *   An intermediate revision of the sample read `request.baseUrl` -- the mount
  *   Express ACTUALLY MATCHED. That closed all five variants (no query string,
  *   not mount-relative, unaffected by absolute-form, already carrying the
@@ -173,11 +187,25 @@
  *   does not decode, so `GET /owners/%61rchived` steps past it. See the
  *   normalisation paragraph below and abofs/stonyx-orm#228.
  *
+ *   SUPERSEDED 2026-09-01 BY abofs/stonyx-orm#236/#237. Variant 3 lived in that
+ *   one string comparison, and the comparison is gone: the sample compares the
+ *   decoded `recordId`. Left standing rather than edited because the same
+ *   "variant 3 survives" wording sits at four sites -- this header, README.md
+ *   twice, and test/sample/access/global-access.ts -- three of which SHIP, so
+ *   retiring one of four leaves the shipped copies contradicting each other.
+ *   Retiring all four WITH their measurement is abofs/stonyx-orm#238.
+ *
  * ONE READ OF ARGUMENT ONE SURVIVES, AND IT MUST: `request.path`. It is
  * mount-relative and query-free, and it is for rules that distinguish SUB-PATHS
  * beneath the mount. The context names which model and which verb, NOT which
  * route, so the sample's `/archived` deny cannot be expressed from the context
  * alone and a context-ONLY rewrite would silently turn that deny into an allow.
+ *
+ * SUPERSEDED 2026-09-01 BY abofs/stonyx-orm#236/#237: NO read of argument one
+ * survives in the shipped sample. `recordId` names WHICH RECORD the route was
+ * addressed to, so the `/archived` deny is expressible from the context alone
+ * -- and it still must not be dropped; expressible is not optional. Retirement
+ * of this wording: abofs/stonyx-orm#238.
  *
  * NORMALISE THE WAY THE ROUTER DOES, AND CASE-FOLDING ALONE IS NOT THAT. The
  * sample lower-cases before comparing, because a matcher stricter than the
@@ -188,6 +216,20 @@
  * sample and is tracked as abofs/stonyx-orm#228; the `.toLowerCase()` is not a
  * complete normalisation recipe. Compare record ids at their real case.
  *
+ * DO NOT FOLLOW THE PARAGRAPH ABOVE. SUPERSEDED 2026-09-01 BY
+ * abofs/stonyx-orm#236/#237, and flagged here rather than merely dated because
+ * it is an INSTRUCTION, not a stale observation. `.toLowerCase()` on the access
+ * path was measured WRONG IN BOTH DIRECTIONS AT ONCE: with a distinct owner
+ * seeded at `ARCHIVED`, `GET /owners/ARCHIVED` was a false DENY on the wrong
+ * record and `GET /owners/%41RCHIVED` a false ALLOW on that same record. A
+ * record id is a VALUE, not a literal route segment, and express's
+ * `case sensitive routing` governs literal segments only. Compare
+ * `context.recordId` AS IT ARRIVES: do not case-fold it, do not decode it, do
+ * not derive it from `request.path`. `AccessContext.recordId` in
+ * ./types/orm-types.ts is the contract and says "Do NOT case-fold it"; the same
+ * published tarball ships both files, and THIS paragraph is the one that is
+ * wrong. Retiring it WITH its measurement is abofs/stonyx-orm#238.
+ *
  * `?? ''` is not a defence. It converts an absent request target into an empty
  * string, which matches no collection, which falls through to the permission
  * array -- a total grant. An input you cannot identify must DENY, and that
@@ -195,6 +237,12 @@
  * different objects, and a guard on argument two does not protect a read of
  * argument one. The sample returns `false` for an absent `model` AND for an
  * absent or non-string `request.path`, rather than falling through either way.
+ *
+ * SUPERSEDED 2026-09-01 BY abofs/stonyx-orm#236/#237 as to WHAT is guarded --
+ * the principle is unchanged. The sample no longer reads `request.path`, so it
+ * returns `false` for an absent `model` AND for an absent `recordId`
+ * (`undefined`, the one spelling `auth()` never produces). Retirement of this
+ * wording: abofs/stonyx-orm#238.
  *
  * THE REAL FIX IS abofs/stonyx-orm#202: `access()` should receive the model,
  * the operation and the record. Prefer the array shape (`['read']`) or `false`
@@ -1389,10 +1437,53 @@ export default class OrmRequest extends Request {
     // src/types/orm-types.ts. Nothing is fetched at this point and adding a
     // lookup here would put a store read in the middle of an authorization
     // path. The function return shape below IS the per-record hook.
+    //
+    // -------------------------------------------------------------------------
+    // #236 -- `recordId`, the DECODED route-parameter id, for the same reason.
+    //
+    // WHICH RECORD is the third structural fact the framework already holds and
+    // the consumer was left to re-derive, and re-deriving it failed OPEN. The
+    // documented sample compared `request.path` -- the RAW, undecoded pathname
+    // -- against a literal `/archived`, while the router DECODES `:id`. So
+    // `GET /owners/%61rchived` walked past the deny and was dispatched as the
+    // record `archived`: 200 with the record in full, and DELETE answered 204
+    // with the record destroyed, unauthenticated. Four spellings measured, all
+    // four through; 255 non-canonical spellings of that 8-character id decode
+    // to the same key, so this was never a deny-list of one.
+    //
+    // TWO CONSUMER-SIDE NORMALISATIONS WERE MEASURED WRONG IN OPPOSITE
+    // DIRECTIONS, which is the argument for doing it once, here.
+    // `.toLowerCase()` case-folds a route-parameter VALUE on the axis that
+    // governs literal SEGMENTS: with a distinct owner seeded at `ARCHIVED`,
+    // `GET /owners/ARCHIVED` was a false DENY on the wrong record and
+    // `GET /owners/%41RCHIVED` a false ALLOW on that same one.
+    // `decodeURIComponent(request.path)` decodes THEN splits while the router
+    // splits THEN decodes, so it over-denied `/owners/archived%2fx` -- 403 for
+    // a genuinely distinct record. Failing closed there was luck, not design.
+    //
+    // `getId(request.params)` AND NOT `request.params.id`, for exactly the
+    // reason `operation` is a `methodAccessMap` lookup: it is the SAME single
+    // coercion the store lookup one layer down performs, so the predicate and
+    // the dispatch cannot disagree about which record a request addresses.
+    // The raw string would reintroduce that divergence on hex-shaped ids --
+    // `GET /animals/0x2391` looks up record `9105`.
+    //
+    // NOTHING HERE PARSES THE REQUEST TARGET EITHER. `request.params` is what
+    // the router matched, so a mount prefix, an absolute-form target, a query
+    // string or a case-varied mount cannot move this value -- the same
+    // guarantee `model` carries, by the same means.
+    //
+    // `null` and not `undefined` on a collection route, so the KEY IS ALWAYS
+    // PRESENT -- the rule `operation`'s own docblock already establishes. A
+    // context reaching a predicate WITHOUT the key therefore did not come from
+    // here; it was hand-assembled by a caller resolving the predicate through
+    // `Orm.instance.getAccess()`, and that absence stays deniable only because
+    // `auth()` never produces it.
     // -------------------------------------------------------------------------
     const context: AccessContext = {
       model: this.model,
       operation: methodAccessMap[request.method],
+      recordId: request.params && 'id' in request.params ? getId(request.params) : null,
     };
 
     let access: AccessMethod;
