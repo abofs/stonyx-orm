@@ -18,7 +18,7 @@
 // ---------------------------------------------------------------------------
 import QUnit from 'qunit';
 
-const { module, test, todo } = QUnit;
+const { module, test } = QUnit;
 
 async function readRepoFile(relativePath) {
   const { readFile } = await import('node:fs/promises');
@@ -90,7 +90,94 @@ module('[Unit] recordId on the access context (#236/#237)', function() {
       'confirming the slice is doing work: the prohibitions are not satisfiable from the interface header, which predates this key');
   });
 
-  todo('AC10 (#237) — the #222 tripwires were INVERTED, not deleted', function(assert) {
-    assert.ok(false, 'SCAFFOLD — not implemented');
+  test('AC10 (#237) — the #222 tripwires were INVERTED, not deleted, and no file lost assertions doing it', async function(assert) {
+    // THE LOAD-BEARING ONE, AND IT IS AN ASSERTION ABOUT OTHER FILES'
+    // ASSERTIONS. #222 planted assertions pinned to the DEFECTIVE state,
+    // labelled so a reader would find them, and instructed the next engineer to
+    // INVERT rather than delete them. A fix necessarily reds them. The failure
+    // mode this exists to catch is "repair by deletion": delete the red
+    // assertion, the suite goes green, and the only evidence the fix landed is
+    // gone with it.
+    //
+    // IT CANNOT LIVE IN THE FILE IT MEASURES. An assertion that a pin still
+    // exists, sitting beside that pin, is satisfied by deleting both. Same
+    // reasoning as test/unit/access-sample-migration-test.ts, which does this
+    // for #222.
+    //
+    // TWO CLAUSES, AND THE SECOND IS WHAT MAKES IT FALSIFIABLE. "No `DEFECT
+    // #228:` message survives" alone is satisfied by deletion — that is the
+    // exact failure. The count floor is what distinguishes an inversion from a
+    // deletion.
+    const files = {
+      '../integration/orm-test.ts': 590,
+      './access-context-test.ts': 26,
+      './access-filter-enforcement-test.ts': 203,
+      './access-sample-migration-test.ts': 43,
+    };
+
+    const sources = {};
+    for (const path of Object.keys(files)) sources[path] = await readRepoFile(path);
+
+    // CLAUSE 1 — no assertion still carries a `DEFECT #228:` message.
+    //
+    // Measured over CODE, with `//` lines stripped, because the inverted
+    // assertions' own comments have to be free to say what they were labelled
+    // before — an assertion that forbade the string everywhere would forbid
+    // explaining the inversion, which is the opposite of what #222 asked for.
+    const codeOf = source => source
+      .split('\n')
+      .filter(line => !line.trim().startsWith('//'))
+      .join('\n');
+
+    assert.notOk(codeOf(sources['../integration/orm-test.ts']).includes('DEFECT #228:'),
+      'no assertion in orm-test.ts still carries a `DEFECT #228:` message — the tripwire was answered, not left in place');
+    assert.ok(sources['../integration/orm-test.ts'].includes('DEFECT #228:'),
+      'while the comments still NAME the label, so the inversion is traceable to what it inverted (confirming clause 1 is measuring code, not prose)');
+
+    // CLAUSE 2 — and no file paid for it with assertions. Baselines are
+    // `grep -c 'assert\.'` on origin/dev at c5f7907, the head this branch
+    // started from and the head the #228 refinement measured the inversion
+    // budget against.
+    //
+    // A COUNT OF CALL SITES, AND ITS LIMIT IS STATED ON PURPOSE: it cannot tell
+    // a real assertion from a trivial one, so it is a FLOOR, not a proof. The
+    // proof that the specific pins were inverted rather than swapped for filler
+    // is clause 3 below, which reads them by content.
+    for (const [path, baseline] of Object.entries(files)) {
+      const count = (sources[path].match(/assert\./g) ?? []).length;
+
+      assert.ok(count >= baseline,
+        `${path} carries ${count} assertion call sites, not fewer than the ${baseline} it had on origin/dev at c5f7907 (a net DROP is the "repair by deletion" this AC exists to catch)`);
+    }
+
+    // CLAUSE 3 — the specific pins, by content, at the tier they were planted.
+    // Each pair is [what the defective head pinned, what the fixed head pins].
+    // The first half must be GONE and the second half must be PRESENT, so
+    // neither deleting the pin nor leaving it untouched passes.
+    const orm = sources['../integration/orm-test.ts'];
+
+    for (const [was, now, label] of [
+      ["assert.equal(encoded.status, 200,", "assert.equal(encoded.status, 403,",
+        'GET /owners/%61rchived: 200 -> 403 (orm-test.ts:1723)'],
+      ["assert.ok(encoded.body.includes('\"secret\"')", "assert.notOk(encoded.body.includes('\"secret\"')",
+        'and the record is no longer returned in full (orm-test.ts:1725)'],
+      ["assert.equal(cased.status, 403,", "assert.equal(cased.status, 200,",
+        'GET /owners/ARCHIVED: RE-SPECIFIED to 200 — a distinct record the /archived rule was never about (orm-test.ts:1680)'],
+    ]) {
+      assert.notOk(orm.includes(was), `${label} — the pre-fix form is gone`);
+      assert.ok(orm.includes(now), `${label} — and the inverted form is present, at the same tier over the same socket`);
+    }
+
+    // AC9 — AND THE LOCKSTEP THAT STOPS THE THREE COPIES DRIFTING IS STILL
+    // WIRED, on the new signature. Both mechanisms are anchored on the same
+    // exact literal; loosening either one to a regex, or letting them disagree,
+    // would let the shipped README sample diverge from the matcher under test —
+    // which is how fail-open variant 5 survived four review rounds.
+    const SIGNATURE = "'  access(request, { model, operation, recordId }) {'";
+
+    for (const path of ['./access-filter-enforcement-test.ts', './access-sample-migration-test.ts']) {
+      assert.ok(sources[path].includes(`const ACCESS_SIGNATURE = ${SIGNATURE};`),
+        `${path} still anchors the body extractor on the exact signature literal, updated for recordId`);
+    }
   });
 });

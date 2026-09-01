@@ -15,7 +15,7 @@ import RestServer from '@stonyx/rest-server';
 import OrmRequest from '../../dist/orm-request.js';
 import net from 'node:net';
 
-const { module, test, todo } = QUnit;
+const { module, test } = QUnit;
 let endpoint;
 
 //let endpoint;
@@ -1272,6 +1272,12 @@ module('[Integration] ORM', function(hooks) {
     const VISIBLE = 7802;   // owned by gina — seeded by this module, destroyed by this module
     const NEVER_EXISTED = 7777;
     const ARCHIVED_OWNER = 'archived'; // seeded by this module, destroyed by this module
+    // A SECOND, DISTINCT OWNER whose id differs from the one above ONLY IN CASE
+    // (abofs/stonyx-orm#237). Without a real record here the case contract is
+    // unmeasurable: `GET /owners/ARCHIVED` answers 404 whether the rule denies
+    // it or not, which is how the wrong contract was pinned at :1680 for three
+    // rounds. Module-owned, like the two above, and removed in `after`.
+    const ARCHIVED_UPPER = 'ARCHIVED';
     const COLLIDE = 7803;   // never created; used by the create-collision assertions
 
     // This module OWNS its subjects. An earlier revision used shared fixture
@@ -1301,6 +1307,13 @@ module('[Integration] ORM', function(hooks) {
       if (!store.get('owner', ARCHIVED_OWNER)) {
         createRecord('owner', { id: ARCHIVED_OWNER, gender: 'secret', age: 99, pets: [], phoneNumbers: [] }, { serialize: false, _skipAutoPersist: true });
       }
+
+      // #237. `uppercase-secret` rather than `secret`, so the body assertions
+      // can tell the two records apart: a response carrying `"secret"` could be
+      // either, and the whole finding is that they are DIFFERENT records.
+      if (!store.get('owner', ARCHIVED_UPPER)) {
+        createRecord('owner', { id: ARCHIVED_UPPER, gender: 'uppercase-secret', age: 98, pets: [], phoneNumbers: [] }, { serialize: false, _skipAutoPersist: true });
+      }
     });
 
     accessHooks.after(function() {
@@ -1308,7 +1321,9 @@ module('[Integration] ORM', function(hooks) {
         if (store.get('animal', id)) store.remove('animal', id, { _skipAutoPersist: true });
       }
 
-      if (store.get('owner', ARCHIVED_OWNER)) store.remove('owner', ARCHIVED_OWNER, { _skipAutoPersist: true });
+      for (const id of [ARCHIVED_OWNER, ARCHIVED_UPPER]) {
+        if (store.get('owner', id)) store.remove('owner', id, { _skipAutoPersist: true });
+      }
     });
 
     // Raw-socket dispatch through the real router. Hoisted to module scope by
@@ -1572,10 +1587,17 @@ module('[Integration] ORM', function(hooks) {
       // whatsoever.
       //
       // Do not read a green here as evidence that a URL-parsing predicate is
-      // safe, and do not delete it and call the variant covered elsewhere. The
-      // live coverage of the one read of argument ONE that survived the
-      // migration is `request.path`, and it is the `/owners/archived` assertion
-      // immediately below this one.
+      // safe, and do not delete it and call the variant covered elsewhere.
+      //
+      // #237 UPDATE — AND THE VACUITY IS NOW TOTAL, WHICH IS THE GOOD OUTCOME.
+      // `request.path` was the one read of argument ONE that survived #222, and
+      // it was the read that failed open on a percent-encoded id. #236 put the
+      // decoded id on the context as `recordId` and #237 moved the rule onto
+      // it, so the sample reads NOTHING off argument one. The live coverage of
+      // that rule is now the `/owners/archived` pair immediately below this one
+      // — the #222 tripwire, inverted, and the #237 test beside it, which drives
+      // eight spellings, both relationship surfaces and the DELETE over this
+      // same socket.
       // ======================================================================
       //
       // HISTORY. HTTP/1.1 permits an absolute-form request-target
@@ -1629,7 +1651,7 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(store.get('animal', HIDDEN), 'and the hidden record survives (was: DESTROYED)');
     });
 
-    test('[DEFECT] #222 — the /archived sub-path deny survives the migration to the access context, over the real router', async function(assert) {
+    test('[DEFECT] #222/#236 — the /archived deny survives the migration to the access context, over the real router', async function(assert) {
       // THE TRAP THIS STORY EXISTS TO NOT FALL INTO. #213's original AC1
       // forbade `request.path` in the migrated sample. README "What the context
       // does not tell you: which surface" -- text #202 itself shipped --
@@ -1639,12 +1661,17 @@ module('[Integration] ORM', function(hooks) {
       //   GET /owners/gina                     { model: 'owner', operation: 'read' }
       //   GET /owners/archived                 { model: 'owner', operation: 'read' }
       //
-      // So the `/archived` deny CANNOT be expressed from the context alone. A
-      // context-only migration does not drop a rule loudly; it converts a DENY
-      // into an ALLOW, silently, and every other assertion in the suite stays
-      // green while it does. The migrated sample is therefore a HYBRID: `model`
-      // and `operation` from the context for which collection and which verb,
-      // `request.path` for which sub-path.
+      // So the `/archived` deny COULD NOT be expressed from the context alone,
+      // and the migrated sample was a HYBRID: `model` and `operation` from the
+      // context, `request.path` for which sub-path.
+      //
+      // SUPERSEDED BY abofs/stonyx-orm#236, AND THE TRAP IT NAMES STILL HOLDS.
+      // #236 added `recordId` — the DECODED route-parameter id — to that
+      // context, so the deny IS now expressible from the context alone and the
+      // read of `request.path` is gone. What has not changed is the reason this
+      // test exists: dropping the rule does not fail loudly, it converts a DENY
+      // into an ALLOW silently, and every other assertion in the suite stays
+      // green while it does.
       //
       // Over the real router, because that is the only tier that proves express
       // populates `request.path` the way the predicate assumes -- a fabricated
@@ -1676,9 +1703,33 @@ module('[Integration] ORM', function(hooks) {
       const nested = await fetch(`${endpoint}/owners/archived/2024`);
       assert.equal(nested.status, 403, 'and so is a path beneath it');
 
+      // RE-SPECIFIED BY abofs/stonyx-orm#237, AND IT IS NOT AN INVERSION —
+      // the behaviour pinned here was never correct in EITHER direction.
+      //
+      // It asserted that `GET /owners/ARCHIVED` is 403, on the reasoning that
+      // the router matched case-insensitively so the rule had to as well. That
+      // reasoning confuses two different things: `case sensitive routing`
+      // governs literal route SEGMENTS, and `archived` is not a segment, it is
+      // the value of `:id`. Case-folding a route-parameter VALUE over-matches
+      // the router rather than matching it.
+      //
+      // Measured, with a distinct owner now really seeded at `ARCHIVED`: the
+      // `.toLowerCase()` this pin protected produced a false DENY here — 403 on
+      // a record the `/archived` rule was never about — while simultaneously
+      // producing a false ALLOW on `GET /owners/%41RCHIVED`, the encoded
+      // spelling of that same record. One line, both errors, in opposite
+      // directions. Until #237 there was no record at this id at all, so the
+      // 403 could not be told apart from a 404 and the wrong contract survived
+      // three rounds of review.
+      //
+      // The correct contract: an `/archived` rule denies the record `archived`
+      // and nothing else. Both spellings of the DISTINCT record agree, and
+      // neither is denied — asserted in full by the #237 test below.
       const cased = await fetch(`${endpoint}/owners/ARCHIVED`);
-      assert.equal(cased.status, 403,
-        'and a case-varied sub-path cannot step around it — the router matched case-insensitively, so the rule must too');
+      assert.equal(cased.status, 200,
+        'a DIFFERENT record whose id differs only in case is NOT denied by the /archived rule (was: 403 — a false deny on the wrong record, pinned as if it were correct)');
+      assert.ok((await cased.text()).includes('"uppercase-secret"'),
+        'and it really is the other record that came back, not the one behind the deny');
 
       // A DENIED DELETE MUST NOT DESTROY THE RECORD. Status alone is not
       // sufficient evidence on a destructive verb.
@@ -1702,28 +1753,38 @@ module('[Integration] ORM', function(hooks) {
       assert.notOk(absolute.body.includes('"secret"'), 'and the response does not carry the record');
 
       // ---------------------------------------------------------------------
-      // abofs/stonyx-orm#228 — A LIVE BYPASS, PINNED HERE, NOT FIXED HERE.
+      // abofs/stonyx-orm#228 — THE TRIPWIRE, INVERTED. CLOSED BY #236/#237.
       //
-      // Express sets `request.path` from the RAW, undecoded pathname while the
-      // router DECODES `:id`. So the predicate compares an undecoded string
-      // against a decoded dispatch and `%61rchived` walks straight past the
-      // deny. Pre-existing on `origin/dev`, out of scope for #222, filed as
-      // #228 (critical) with its own acceptance criteria — including the
-      // relationship route, the DELETE, and double-encoded spellings.
+      // #222 planted two assertions here written to the MEASURED DEFECTIVE
+      // state, labelled `DEFECT #228:` and carrying the instruction "when #228
+      // lands, these two red and must be inverted to 403 / not-present. Do not
+      // 'repair' them by deleting them." This is that inversion, and the
+      // instruction was followed literally: both assertions are still here, at
+      // the same tier, over the same socket, with the same inputs. Only the
+      // expected values moved.
       //
-      // THE ASSERTIONS BELOW RECORD THE DEFECT, THEY DO NOT ENDORSE IT. They
-      // are written to the MEASURED state so the suite stays honest, and they
-      // are the tripwire for #228: when #228 lands, these two red and must be
-      // inverted to 403 / not-present. Do not "repair" them by deleting them.
+      // WHAT THE DEFECT WAS. Express sets `request.path` from the RAW, undecoded
+      // pathname while the router DECODES `:id`, so the predicate compared an
+      // undecoded string against a decoded dispatch and `%61rchived` walked
+      // straight past the deny. #236 put the decoded id on the access context
+      // as `recordId`; #237 made the sample compare against it. The predicate
+      // and the dispatch now read one value.
       //
-      // No DELETE probe is run on the encoded form: the measured behaviour is
-      // 204 with the record destroyed, and #228 owns that assertion.
+      // MEASURED HERE ON THE DEFECTIVE HEAD, for the record: 200 with the body
+      // carrying `"secret"`, and `DELETE` answered 204 with the record
+      // destroyed. The DELETE half was deliberately not probed by #222 because
+      // it destroys the fixture; it is probed in full, with the survival check
+      // AFTER the response, by the #237 test immediately below.
+      //
+      // THE NEGATIVE CONTROLS BELOW ARE WHAT KEEP THIS FROM BEING SATISFIABLE
+      // BY DENY-ALL, and they matter more after the inversion than before: two
+      // assertions expecting 403 are trivially satisfied by a broken router.
       const encoded = await rawRequest('GET', '/owners/%61rchived');
 
-      assert.equal(encoded.status, 200,
-        'DEFECT #228: GET /owners/%61rchived is 200, NOT 403 — percent-encoding steps around the sub-path deny (invert this to 403 when #228 lands)');
-      assert.ok(encoded.body.includes('"secret"'),
-        'DEFECT #228: and it returns that record in full through a route the deny refuses (invert this when #228 lands)');
+      assert.equal(encoded.status, 403,
+        'GET /owners/%61rchived is 403 — percent-encoding no longer steps around the deny (was: 200, and this assertion was pinned to that 200 as the #228 tripwire)');
+      assert.notOk(encoded.body.includes('"secret"'),
+        'and the record does not come back through a route the deny refuses (was: it did, in full)');
 
       // The negative control for the pair above: the canonical spelling of the
       // same target, over the same socket, is still refused. Without it the two
@@ -1744,9 +1805,128 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(filtered.status, 404, 'and a record the per-record filter rejects is 404, not 403 — the two mechanisms stay distinguishable');
     });
 
-    todo('#237 — every percent-encoded spelling of /archived is refused, and a denied DELETE destroys nothing', async function(assert) {
-      // SCAFFOLD. Full ACs: the refinement comment on #228, §8 "#228b".
-      assert.ok(false, 'SCAFFOLD — not implemented');
+    test('#237 — the /archived deny follows the RECORD, not the spelling, and a denied DELETE destroys nothing', async function(assert) {
+      // THE SECURITY CLOSE, over a raw socket against the live router.
+      //
+      // `fetch()` cannot express most of what has to be measured here: it
+      // percent-normalises the target, and RFC 9112 3.2.2 absolute-form is
+      // unreachable through it entirely. Every probe below is therefore a raw
+      // socket, and every assertion prints its INPUT beside the answer.
+      //
+      // WHY NOT AN ENUMERATION OF SPELLINGS. `archived` is 8 characters, each
+      // independently percent-encodable, so 255 non-canonical spellings decode
+      // to the same key. A deny-list is the wrong shape and an AC enumerating
+      // spellings would be the wrong AC. What is asserted is the DECODED
+      // COMPARISON: five spellings are sampled to show the rule is not
+      // character-positional, and the contract they sample is "the verdict
+      // follows the record".
+      const bodyOf = response => response.body;
+
+      // AC1 + AC2 — THE BYPASS, CLOSED, ACROSS FIVE SPELLINGS. One encodes the
+      // first character, one a middle character, one the last, one encodes
+      // every character, and one adds a trailing slash — so a fix that
+      // special-cased a leading `%` or anchored on an exact string reds here.
+      for (const target of [
+        '/owners/%61rchived',
+        '/owners/a%72chived',
+        '/owners/archive%64',
+        '/owners/%61%72%63%68%69%76%65%64',
+        '/owners/%61rchived/',
+        '/owners/%61rchived?filter[age]=99',
+        'http://anything.example/owners/%61rchived',
+        '/OWNERS/%61rchived',
+      ]) {
+        const response = await rawRequest('GET', target);
+
+        assert.equal(response.status, 403, `INPUT GET ${target} -> 403 (all eight were 200 on the defective head)`);
+        assert.notOk(bodyOf(response).includes('"secret"'), `INPUT GET ${target}: and the record does not come back in full`);
+      }
+
+      // AC3 — THE DESTRUCTIVE VERB, AND THE STATUS IS NOT SUFFICIENT EVIDENCE.
+      // The measured failure was 204 WITH THE RECORD DESTROYED, so the store is
+      // read AFTER the response, not before it. A fix that answered 403 and
+      // still deleted would pass on status alone.
+      assert.ok(store.get('owner', ARCHIVED_OWNER), 'precondition: the record is in the store before the denied DELETE');
+
+      const destroy = await rawRequest('DELETE', '/owners/%61rchived');
+
+      assert.equal(destroy.status, 403, 'INPUT DELETE /owners/%61rchived -> 403 (was: 204)');
+      assert.ok(store.get('owner', ARCHIVED_OWNER), 'and the record is STILL IN THE STORE after the response (was: DESTROYED, unauthenticated)');
+
+      // AC4 — BOTH RELATIONSHIP SURFACES. A fix expressed as a rule about the
+      // `/:id` route alone leaves these at 200 — measured on the defective head.
+      // `recordId` is the same value on all three surfaces, so one rule covers
+      // them without a `startsWith` clause.
+      for (const target of ['/owners/%61rchived/pets', '/owners/%61rchived/relationships/pets']) {
+        const response = await rawRequest('GET', target);
+
+        assert.equal(response.status, 403, `INPUT GET ${target} -> 403 (was: 200)`);
+      }
+
+      // AC5 — EXACTLY ONE DECODE, AND THIS IS THE ASSERTION A NAIVE FIX FAILS.
+      // Express decodes a route parameter once. `%2561rchived` is the literal,
+      // LEGITIMATE id `%61rchived` — a record this rule was never about. A fix
+      // that decoded until stable would answer 403 here, which is a NEW false
+      // deny introduced by the fix for a false allow.
+      const doubled = await rawRequest('GET', '/owners/%2561rchived');
+
+      assert.equal(doubled.status, 404,
+        'INPUT GET /owners/%2561rchived -> 404, NOT 403 — double-encoding is a different id, not a second-order spelling of this one');
+
+      // AC6 — THE CASE CONTRACT, IN BOTH DIRECTIONS, AGAINST A REAL RECORD.
+      // This is the pair that refutes `.toLowerCase()`. `ARCHIVED` is a
+      // DISTINCT owner, seeded by this module. Under the case-folding rule the
+      // canonical spelling was 403 (a false deny on the wrong record) and the
+      // encoded spelling was 200 (a false allow on that same record) — the two
+      // spellings of one record DISAGREED, which is the tell that the matcher
+      // was normalising on a different axis from the router.
+      assert.ok(store.get('owner', ARCHIVED_UPPER), 'precondition: a DISTINCT owner really is seeded at id ARCHIVED');
+
+      const upper = await rawRequest('GET', '/owners/ARCHIVED');
+      const upperEncoded = await rawRequest('GET', '/owners/%41RCHIVED');
+
+      assert.equal(upper.status, 200, 'INPUT GET /owners/ARCHIVED -> 200 — a distinct record, and the /archived rule is not about it (was: 403)');
+      assert.equal(upperEncoded.status, 200, 'INPUT GET /owners/%41RCHIVED -> 200 — the same record, encoded (was: 200 too, but for the wrong reason)');
+      assert.strictEqual(upper.status, upperEncoded.status,
+        'and the two spellings of ONE record now AGREE — under .toLowerCase() they were 403 and 200, wrong in opposite directions');
+      assert.ok(bodyOf(upper).includes('"uppercase-secret"'), 'and it is really the other record that came back');
+
+      // AND A DECODED SEPARATOR IS STILL ONE ID. The router splits THEN decodes,
+      // so `archived%2fx` is the single id `archived/x` — a genuinely distinct
+      // record. `decodeURIComponent(request.path)` decodes THEN splits and
+      // over-denied it 403; measured. 404 is the honest answer.
+      const separator = await rawRequest('GET', '/owners/archived%2fx');
+
+      assert.equal(separator.status, 404,
+        'INPUT GET /owners/archived%2fx -> 404 — a distinct record, not over-denied (a whole-path decode answers 403 here)');
+
+      // AC7 — NEGATIVE CONTROLS. Six assertions expecting 403 are satisfiable
+      // by a router that denies everything, so this pins that the same mount,
+      // one segment different, is not denied — and that the per-record filter
+      // stays a DIFFERENT mechanism with a different status.
+      const canonical = await rawRequest('GET', '/owners/archived');
+      const permitted = await rawRequest('GET', '/owners/gina');
+      const filtered = await rawRequest('GET', '/owners/angela');
+      const collection = await rawRequest('GET', '/owners');
+
+      assert.equal(canonical.status, 403, 'INPUT GET /owners/archived -> 403 — the canonical spelling is still refused');
+      assert.equal(permitted.status, 200, 'INPUT GET /owners/gina -> 200 — so the 403s above are not a blanket deny');
+      assert.equal(filtered.status, 404, 'INPUT GET /owners/angela -> 404, not 403 — the per-record filter stays distinguishable from the deny');
+      assert.equal(collection.status, 200,
+        'INPUT GET /owners -> 200 — the collection route carries recordId `null`, and a guard written as `if (!recordId)` would 403 it');
+
+      // AC8 — MALFORMED AND OVER-LONG ESCAPES ARE THE ROUTER'S ANSWER, NOT THE
+      // PREDICATE'S. Express rejects these with 400 BEFORE `auth()` runs —
+      // verified in refinement with an instrumented wrapper that never fired.
+      // Asserted as 400 rather than 403 precisely so a predicate that started
+      // throwing on them would be visible: `auth()` turns a throw into a 403,
+      // so the two statuses tell those cases apart.
+      for (const target of ['/owners/%c1%a1rchived', '/owners/%e0%81%a1rchived', '/owners/%zz', '/owners/%', '/owners/%6']) {
+        const response = await rawRequest('GET', target);
+
+        assert.equal(response.status, 400,
+          `INPUT GET ${target} -> 400 at the router, not 403 from the predicate — over-long UTF-8 and malformed escapes never reach auth()`);
+      }
     });
 
     test('[DEFECT] a denied write runs no consumer hook, over the real dispatch', async function(assert) {

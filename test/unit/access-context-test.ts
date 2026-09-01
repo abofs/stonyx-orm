@@ -26,7 +26,7 @@ import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
 import OrmRequest from '../../src/orm-request.js';
 
-const { module, test, todo } = QUnit;
+const { module, test } = QUnit;
 
 // The four verbs, and the ONLY four. Both copies of the documentation have to
 // name every one of them; a copy that names three has not documented the

@@ -425,10 +425,15 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
     assert.ok(body.includes('unconstructible'),
       'and gives the reason: the variant is unconstructible against a predicate that reads the context');
     assert.ok(body.includes('/owners/archived'),
-      'and points at the assertion that IS live coverage of the surviving read of argument one');
+      'and points at the assertion that IS live coverage of the /archived deny');
 
-    // And the thing it points at exists.
-    assert.ok(source.includes("test('[DEFECT] #222 — the /archived sub-path deny survives"),
+    // And the thing it points at exists. POINTER UPDATED BY #237, which renamed
+    // that test: the deny is no longer expressed as a sub-path rule, so the
+    // word "sub-path" left the title. A dangling pointer is exactly what this
+    // assertion exists to catch, so it moves with the thing it points at.
+    assert.ok(source.includes("test('[DEFECT] #222/#236 — the /archived deny survives"),
       'which is present — the pointer is not dangling');
+    assert.notOk(source.includes("test('[DEFECT] #222 — the /archived sub-path deny survives"),
+      'and the pre-#237 title is gone — renamed, not duplicated');
   });
 });
