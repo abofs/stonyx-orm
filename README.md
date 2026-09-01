@@ -1022,17 +1022,22 @@ per-record filter. An input you cannot identify must **deny**.
     the other: after #235, `GET /animals/1?include=owner,owner.pets` returns
     `owner.data: null` on every permitted animal it sideloads **and still
     includes the hidden owner as a resource**.
-  - **A computed attribute that interpolates a related record's id.** This is a
-    **consumer-side** residual and the ORM cannot close it. `relationships.*.data`
-    is a structure this module builds, so it can be filtered; a computed
-    property is arbitrary consumer code returning an arbitrary value, and
-    deciding which substrings of it are identifiers is not something the
-    framework can do. Measured on this repo's own fixture, where the `animal`
-    model has a `get tag()` that interpolates `owner.id`: **every** animal
-    document on **every** surface — including the ones above — carries
-    `attributes.tag: "angela's small dog"` for an owner that answers `404`. If
-    your access rules hide a record, audit your computed properties for its
-    identifiers.
+  - **A computed attribute that interpolates a related record's id.**
+    [#245](https://github.com/abofs/stonyx-orm/issues/245) owns this channel,
+    and **it is open as this is written**. `relationships.*.data` is a structure
+    this module builds, so it can be filtered; a computed property is arbitrary
+    consumer code returning an arbitrary value. Whether that makes the channel a
+    **framework defect** the ORM should close — by handing computed getters a
+    verdict, or by refusing to run them while a filter is in force — or a
+    **consumer contract** the ORM should only document, is the question #245
+    must decide. **This README does not decide it; neither reading should be
+    read out of the text here.** Measured on this repo's own fixture, where the
+    `animal` model has a `get tag()` that interpolates `owner.id`: **every**
+    animal document on **every** surface — including the ones above — carries
+    `attributes.tag: "angela's small dog"` for an owner that answers `404`. That
+    measurement is where #245 starts, and it holds whichever way the decision
+    lands. Until it lands, if your access rules hide a record, audit your
+    computed properties for its identifiers.
 - **A bare `toJSON()` still emits unfiltered linkage, and that is deliberate.**
   `Record.toJSON()` **applies** a verdict; it never **resolves** one. It has no
   request, and the documented `access()` contract permits a predicate to read
