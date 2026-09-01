@@ -77,7 +77,9 @@
  * predicate migrated to context-ONLY would silently drop it: a deny becoming an
  * allow. `request.path` is mount-relative and query-free, and reading it for a
  * sub-path rule is the one read of the raw request README
- * `### Identifying the collection` sanctions. See README `:437-442`.
+ * `### Identifying the collection` sanctions. See also README
+ * `#### What the context does not tell you: which surface`, which records the six
+ * owner surfaces that produce one identical context.
  *
  * `?? ''` IS NOT A DEFENCE, and that lesson still applies to the one read that
  * is left. A previous revision wrote `String(request.originalUrl ?? '')`, which
