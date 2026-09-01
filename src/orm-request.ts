@@ -835,7 +835,7 @@ export default class OrmRequest extends Request {
         //                     gives 56 pass / 0 fail, GREEN.
         //                     KEPT ANYWAY, AND NOT FOR THE OLD REASON. Without
         //                     it a denied create becomes `store.remove` on a key
-        //                     the caller may have influenced, which :779-786
+        //                     the caller may have influenced, which :815-820
         //                     records as having been an unauthenticated deletion
         //                     primitive across the whole id space. BECOMES
         //                     KILLABLE AGAIN the moment any caller-supplied id
@@ -845,7 +845,7 @@ export default class OrmRequest extends Request {
         //                     store (abofs/stonyx-orm#207), and what a third
         //                     un-stripped id channel would do for this one
         //                     (#204). Do not delete it on the strength of #203
-        //                     being closed; that is the reasoning :801-808 warns
+        //                     being closed; that is the reasoning :862-867 warns
         //                     about, one level up.
         //   identity       -- the slot still holds the object we just created,
         //                     so nothing between createRecord and here replaced

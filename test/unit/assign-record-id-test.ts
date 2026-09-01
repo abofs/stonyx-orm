@@ -9,7 +9,8 @@
 //
 // Measured on `origin/dev` @ a351f58 and re-measured here: the shipped suite
 // scores 951 pass / 0 fail, and a naive `Math.max` fix to
-// src/manage-record.ts:217-219 ALSO scores 951 pass / 0 fail — identical.
+// src/manage-record.ts:217-219 (`dev` numbering) ALSO scores 951 pass / 0
+// fail — identical.
 // There is no assertion anywhere in the repo on `assignRecordId`'s id
 // selection, so a bad fix ships green. The naive fix additionally REGRESSES a
 // no-id create on a string-id model from `'bob1'` to `'NaN'`, and nothing in
@@ -62,24 +63,24 @@
 //
 //   mutation                                                | red              | green
 //   ---------------------------------------------------------|------------------|--------
-//   A   manage-record.ts:265 — revert the WHOLE selection to
+//   A   manage-record.ts:265-345 — revert the WHOLE selection to
 //       `at(-1).id + 1`, i.e. `dev`                          | 1,2,3,6,7,8,9    | 4, 5
 //   A2  revert only `maxNumericId`, KEEP the walk            | 2,3,8,9          | 1,4,5,6,7
 //   B   utils.ts `maxNumericId` -> `Math.max(0, ...ids)`     | 2,3,8,9          | 1,4,5,6,7
-//   C   manage-record.ts:389 — occupancy guard on the RAW
+//   C   manage-record.ts:383 — occupancy guard on the RAW
 //       candidate: `storeMap.has(toCandidate(candidate))`    | 4,8,9            | rest
 //   D   manage-record.ts:250-254 — disable the SQL
 //       pending-negative early return                        | 5 (5.3, got 9641)| rest
 //   E   manage-record.ts:52-56 — blanket duplicate refusal   | 5 (5.2)          | rest
 //   F   manage-record.ts:239 — `if (rawData.id) return;`     | 6                | rest
 //   G   refuse EVERY server-assigned create                  | 1,2,3,5,6,7,8,9  | 4
-//   H   manage-record.ts:342-345 — delete the restart-from-1 | 7                | rest
-//   I   manage-record.ts:389 — weaken the bound to
+//   H   manage-record.ts:346-351 — delete the restart-from-1 | 7                | rest
+//   I   manage-record.ts:397 — weaken the bound to
 //       `if (++attempts > 0)`                                | 7,8,9            | rest
-//   J   manage-record.ts:389 — delete the bound              | 8 **HANGS**      | —
-//   K   manage-record.ts:319-321 — bare-number candidate for
+//   J   manage-record.ts:397 — delete the bound              | 8 **HANGS**      | —
+//   K   manage-record.ts:323-325 — bare-number candidate for
 //       a string-keyed model (`value => value`)              | 3,8,9            | rest
-//   L   manage-record.ts:447 — delete the `catch` retry in
+//   L   manage-record.ts:448-458 — delete the `catch` retry in
 //       `storeKeyDeriver`                                    | 4,9              | rest
 //   M   orm-request.ts:785-798 — delete the `createRecord`
 //       try/catch that answers 409                           | 8 (route)        | rest
@@ -401,7 +402,7 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
   test('[DEFECT] AC2 — a NaN / non-numeric store key cannot poison the selection', async function(assert) {
     // A record CAN be held under the key `NaN`, and this is the shipped route
     // that puts it there — `'   '` is truthy, so it survives `assignRecordId`'s
-    // falsy guard at manage-record.ts:204, and the model's id transform
+    // falsy guard at manage-record.ts:239, and the model's id transform
     // (`parseInt`, transforms.ts:7) NaNs it on the way into the store. This is
     // exactly the state access-filter-enforcement-test.ts assertion 44
     // constructs, so it is reachable, not contrived.
@@ -480,7 +481,7 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
     //
     // KILLING MUTATIONS: (B) `Math.max(0, ...ids)` for `maxNumericId` -> the id
     // becomes `'owner-NaN'` and AC3.2 goes red. (K) `toCandidate` at
-    // manage-record.ts:319-321 replaced by `value => value` -> the id becomes
+    // manage-record.ts:323-325 replaced by `value => value` -> the id becomes
     // `'1'`, AC3.2 goes red and AC3.4's route lookup 404s.
     await withIsolatedOwnerStoreAsync(async () => {
       seedOwner('gina', 30);
@@ -546,13 +547,13 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
     // apart deliberately; this assertion is what keeps them apart.
     //
     // KILLING MUTATION (C): `while (storeMap.has(landingKey))` at
-    // manage-record.ts:389 -> `while (storeMap.has(toCandidate(candidate)))`.
+    // manage-record.ts:383 -> `while (storeMap.has(toCandidate(candidate)))`.
     // AC4.2 goes red: `OWNER-1` age 12 -> 9, store size unchanged, no error.
     //
     // WHY AC4.1 IS NOT THAT ASSERTION ANY MORE, STATED RATHER THAN LEFT AS AN
     // UNKILLED SURVIVOR. AC4.1 is the scenario this AC was written for — an
     // owner already filed under `'1'`, with `StandaloneDB`'s reduce
-    // (src/standalone-db.ts:137-150) transplanted whole, which has no id-type
+    // (src/standalone-db.ts:137-151) transplanted whole, which has no id-type
     // concept and hands back the NUMBER 1 that lands under `'1'`. Measured under
     // that transplant: owner `'1'` age 55 -> 9, size unchanged, HTTP 200. Since
     // a string-keyed candidate is now `<model>-<n>` (#209 — see AC3), a
@@ -644,7 +645,7 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
 
     // -- AC5.2: a CLIENT-SUPPLIED duplicate still performs last-entry-wins.
     //
-    // KILLING MUTATION: transplant src/standalone-db.ts:143-146's BLANKET
+    // KILLING MUTATION: transplant src/standalone-db.ts:153-157's BLANKET
     // duplicate refusal into createRecord:52-55. It is the right shape for
     // StandaloneDB and the wrong shape here — `createRecord` deliberately
     // updates on a client-supplied duplicate, and
@@ -688,10 +689,10 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
       assert.strictEqual(rawData.__pendingSqlId, true, 'AC5.3 — and it is flagged __pendingSqlId for the adapter');
 
       // Negative ids must survive the number transform — that is exactly why
-      // manage-record.ts:241-249 uses them instead of string pending ids, and
+      // manage-record.ts:241-244 uses them instead of string pending ids, and
       // it is what the "transforms.number is out of scope" boundary protects.
       assert.strictEqual(store.get('animal', pending.id as number), pending,
-        'AC5.3 — and the negative id survives the number transform intact, so the record is reachable under it (manage-record.ts:241-249)');
+        'AC5.3 — and the negative id survives the number transform intact, so the record is reachable under it (manage-record.ts:241-244)');
     } finally {
       // In the `finally`, not after the last assertion: a negative key is
       // outside every band a range sweep could reach, so an assertion that
@@ -797,7 +798,7 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
     // store containing one adversarial record must not disable its collection.
     //
     // KILLING MUTATION: delete the restart-from-1 block at
-    // manage-record.ts:342-345 -> the walk returns NO_FREE_KEY, `assignRecordId`
+    // manage-record.ts:346-351 -> the walk returns NO_FREE_KEY, `assignRecordId`
     // throws, and the route answers 409 instead of a resource. AC7.1 red.
     //
     // WHY AC1 COULD NOT SEE THIS. AC1's "exceeds every numeric key" is false
@@ -858,12 +859,12 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
     // identically.
     //
     // KILLING MUTATIONS:
-    //   (I) weaken the bound to `if (++attempts > 0)` at manage-record.ts:389
+    //   (I) weaken the bound to `if (++attempts > 0)` at manage-record.ts:397
     //       -> AC8.1 red: the walk refuses on the FIRST collision instead of
     //          stepping past it. AC4 does NOT catch this — AC4.2 accepts a
     //          refusal as an acceptable collision policy, by design.
     //   (J) delete the bound entirely -> AC8.2 HANGS rather than failing.
-    //   (M) delete the `createRecord` try/catch at orm-request.ts:788-799
+    //   (M) delete the `createRecord` try/catch at orm-request.ts:785-798
     //       -> AC8.3 red: the route rejects instead of answering 409.
     const originalTransform = Orm.instance.transforms.string;
 
@@ -959,7 +960,7 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
     // class is closed that was not enumerated (abofs/stonyx-orm#212 § AC5).
     //
     // KILLING MUTATION: delete the `catch` retry in `storeKeyDeriver` at
-    // manage-record.ts:437-449 -> this test goes red with
+    // manage-record.ts:448-458 -> this test goes red with
     // `value?.toUpperCase is not a function`.
     const originalTransform = Orm.instance.transforms.string;
 
