@@ -79,7 +79,7 @@
 //       `if (++attempts > 0)`                                | 7,8,9            | rest
 //   J   manage-record.ts:397 — delete the bound              | 8 **HANGS**      | —
 //   K   manage-record.ts:323-325 — bare-number candidate for
-//       a string-keyed model (`value => value`)              | 3,8,9            | rest
+//       a string-keyed model (`value => value`)              | 3,4,8,9          | rest
 //   L   manage-record.ts:448-458 — delete the `catch` retry in
 //       `storeKeyDeriver`                                    | 4,9              | rest
 //   M   orm-request.ts:785-798 — delete the `createRecord`
@@ -87,11 +87,11 @@
 //
 // EVERY AC HAS AT LEAST ONE KILLING MUTATION, and no mutation kills all nine:
 //
-//   AC1 <- A, G          AC4 <- C, L          AC7 <- A, G, H, I
+//   AC1 <- A, G          AC4 <- C, K, L       AC7 <- A, G, H, I
 //   AC2 <- A, A2, B, G   AC5 <- D, E, G       AC8 <- A, A2, B, C, G, I, K, M
 //   AC3 <- A, A2, B, G, K  AC6 <- A, F, G     AC9 <- A, A2, B, C, G, I, K, L
 //
-// Six rows are worth reading twice:
+// Seven rows are worth reading twice:
 //
 //   A2 vs A. Reverting ONLY the max computation leaves AC1 GREEN — the walk
 //   steps past the occupied slot and repairs a wrong max. AC2 is the only
@@ -107,6 +107,15 @@
 //   range-based `cleanup()` structurally could not sweep. `cleanup()` is now
 //   snapshot-based and every intra-test removal is in a `finally`, which is the
 //   actual fix; the row is corrected rather than annotated.
+//
+//   K was under-recorded here as red on 3, 8, 9 for one review round. Measured
+//   again it is 5 pass / 4 fail — AC3, AC4, AC8 and AC9 — with AC4 failing on
+//   AC4.2 (`actual "1" / expected OWNER-2`) because a bare-number candidate is
+//   exactly the case where the RAW candidate and the LANDING key diverge, which
+//   is the property AC4.2 exists for. AC4.1 stays green under K, so the
+//   "AC4.1 is green under every mutation" claim below is unaffected; it was the
+//   ROW that was short, not that claim. Corrected rather than annotated in the
+//   table itself, per the B precedent above.
 //
 //   G leaves AC4 GREEN, and that is by design: AC4 accepts "refused with a
 //   defined error" as well as "landed on a free key", because either is an
@@ -546,9 +555,14 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
     // divergence reappearing INSIDE #203's own fix. #203 and #205 are sequenced
     // apart deliberately; this assertion is what keeps them apart.
     //
-    // KILLING MUTATION (C): `while (storeMap.has(landingKey))` at
-    // manage-record.ts:383 -> `while (storeMap.has(toCandidate(candidate)))`.
-    // AC4.2 goes red: `OWNER-1` age 12 -> 9, store size unchanged, no error.
+    // KILLING MUTATIONS:
+    //   (C) `while (storeMap.has(landingKey))` at manage-record.ts:383 ->
+    //       `while (storeMap.has(toCandidate(candidate)))`. AC4.2 goes red:
+    //       `OWNER-1` age 12 -> 9, store size unchanged, no error.
+    //   (K) bare-number candidate at manage-record.ts:323-325. AC4.2 goes red:
+    //       actual `"1"` / expected `OWNER-2`. This one was MISSING from the
+    //       matrix for a review round — see the K note in the header.
+    //   (L) delete the `catch` retry in `storeKeyDeriver`.
     //
     // WHY AC4.1 IS NOT THAT ASSERTION ANY MORE, STATED RATHER THAN LEFT AS AN
     // UNKILLED SURVIVOR. AC4.1 is the scenario this AC was written for — an
