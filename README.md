@@ -930,20 +930,47 @@ per-record filter. An input you cannot identify must **deny**.
   `include=`, related-resource routes and relationship-linkage routes. This is
   **membership** — whether the related resource is served at all — and it is a
   different question from which ids a document may *name*, immediately below.
-- **Relationship linkage is filtered on the four request-bound read surfaces,
-  and only there.** A document's `relationships.*.data` used to publish the id
-  of every related record unconditionally, so a record hidden on every one of
-  its own surfaces was still named inside another model's document — with no
-  `include=`, no relationship route and no query string
+- **Relationship linkage is filtered on every request-bound surface that
+  serializes a record — the reads, the two writes, and `included`.** A
+  document's `relationships.*.data` used to publish the id of every related
+  record unconditionally, so a record hidden on every one of its own surfaces
+  was still named inside another model's document — with no `include=`, no
+  relationship route and no query string
   ([#234](https://github.com/abofs/stonyx-orm/issues/234)). The ORM now resolves
-  the **related** model's own access class on `GET /:models`, `GET /:models/:id`
-  and both `GET /:models/:id/{relationship}` shapes, and asks it
-  `{ model: <related>, operation: 'read' }`. An unresolvable class
-  (`getAccess()` → `undefined`) and a predicate that throws both **deny**. A
+  the **related** model's own access class on `GET /:models`, `GET /:models/:id`,
+  both `GET /:models/:id/{relationship}` shapes, the `POST /:models` and
+  `PATCH /:models/:id` **response documents**, and every record inside an
+  `?include=` **`included`** array
+  ([#235](https://github.com/abofs/stonyx-orm/issues/235)), and asks it
+  `{ model: <related>, operation: 'read' }`. **`operation` is `'read'` even on a
+  write route, and that is correct rather than an oversight** — the question
+  asked of the *related* model is "may this caller **read** this id", not "may
+  they update it". An access class that grants `['create']` but not `['read']`
+  on the related model therefore denies that linkage on its own `POST`
+  response; that is the fail-closed direction. Do **not** wire these handlers to
+  `methodAccessMap[request.method]`: it would ask a different question on a
+  write route than on a read route, which is the two-vocabularies failure
+  `createLinkageFilter` exists to prevent. An unresolvable class
+  (`getAccess()` → `undefined`) and a predicate that throws both **deny**.
+
+  **What the two write surfaces cost before #235, measured rather than
+  described:** one HTTP verb defeated the filter on the same record. On
+  `dev @ 8dda5d6`, seconds apart, with no query string and no relationship
+  route, `GET /animals/1` returned `owner.data: null` while `PATCH /animals/1`
+  returned **200 naming angela**. Any caller who could read a record could also
+  write it and be handed the id the read withheld. That consequence is kept here
+  after the fix, and stated as a measurement, because **naming the two handlers
+  is not a substitute for it** — a reader who is told only that `POST` and
+  `PATCH` are now covered cannot tell what was wrong, and a reviewer cannot tell
+  whether the fix addressed it. A
   filtered-out relationship is **indistinguishable from a genuinely empty one** —
   an emptied `hasMany` is `data: []` and an emptied `belongsTo` is `data: null`,
   both **keeping their `links`**, which are built from the serialized record's
-  own id and never from the related one. Nothing errors and no status changes,
+  own id and never from the related one. On the two **write** surfaces there are
+  no `links` to keep: neither handler passes a `baseUrl`, so a filtered and a
+  genuinely-empty relationship are both a bare `{ "data": … }` there. That is
+  pre-existing and deliberate — adding `baseUrl` to the write handlers would be
+  an unrelated change to their response shape. Nothing errors and no status changes,
   because throwing here would be an existence oracle *and* would throw out of
   the enclosing `JSON.stringify`.
 
@@ -967,31 +994,50 @@ per-record filter. An input you cannot identify must **deny**.
   *permitted* related record, which is recorded in the release notes as a
   breaking change.
 
-  **Not yet covered, and each one still publishes ids the surfaces above
-  withhold:**
+  **Not yet covered by #235. Each still publishes ids the surfaces above
+  withhold, except where its own owning issue has since closed it — the first
+  entry names an issue that is in flight as this is written:**
 
-  - **`included`** — [#235](https://github.com/abofs/stonyx-orm/issues/235). A
-    permitted record sideloaded by `?include=` emits its **own**
-    `relationships.*.data` unfiltered, so `GET /animals/1?include=owner,owner.pets`
-    returns `owner.data: null` on the primary document and then names angela in
-    `included`, along with eight permitted animals that each name
-    `{"type":"owner","id":"angela"}`. Separately,
+  - **`GET /:models/:id/relationships/{relationship}`, and its state is #232's
+    to report rather than this entry's.**
+    [#232](https://github.com/abofs/stonyx-orm/issues/232) owns the
+    relationships-linkage route. Its *primary data* is linkage,
+    so filtering it is a **membership** decision — which is why it is the filed
+    child of [#196](https://github.com/abofs/stonyx-orm/issues/196) and not of
+    #234. The route builds its `{type, id}` objects by hand and never calls
+    `toJSON`, so the `linkage` **option** never reaches it; whatever that route
+    filters, it filters itself. Measured **on `dev @ 8dda5d6`**, the commit
+    #235 branched from: `GET /animals/1/relationships/owner` answered
+    `{"type":"owner","id":"angela"}` while `GET /owners/angela` was `404`. That
+    measurement is pinned to a commit on purpose, so that it does not quietly
+    become a false claim about `dev`. **PR
+    [#247](https://github.com/abofs/stonyx-orm/pull/247) is in flight against
+    this entry**; if it has landed, this route is covered and the bullet #247
+    adds above supersedes this one.
+  - **Whether a related resource appears in `included` at all.**
     [#233](https://github.com/abofs/stonyx-orm/issues/233) owns whether a
-    resource appears in `included` **at all** — that is membership, a different
-    question, and following it will not lead you to this residual.
-  - **The `POST`/`PATCH` response documents** —
-    [#235](https://github.com/abofs/stonyx-orm/issues/235). `createHandler` and
-    `updateHandler` destructure the request rather than binding it, so wiring
-    them needs a signature change rather than an argument. Until then **one HTTP
-    verb defeats the filter on the same record**: measured, `GET /animals/1`
-    returns `owner.data: null` and `PATCH /animals/1` returns **200 naming
-    angela**, seconds apart, with no query string and no relationship route. Any
-    caller who can read a record can also write it and be handed the id the read
-    withheld.
-  - **`GET /:models/:id/relationships/{relationship}`**, whose *primary data* is
-    linkage, so filtering it is a **membership** decision —
-    [#232](https://github.com/abofs/stonyx-orm/issues/232), the filed child of
-    [#196](https://github.com/abofs/stonyx-orm/issues/196).
+    related resource appears in `included`. #235 filters what a record
+    *already in* `included` may **name**; a hidden record is still a
+    **member** of that array. The two are different questions and neither closes
+    the other: after #235, `GET /animals/1?include=owner,owner.pets` returns
+    `owner.data: null` on every permitted animal it sideloads **and still
+    includes the hidden owner as a resource**.
+  - **A computed attribute that interpolates a related record's id.**
+    [#245](https://github.com/abofs/stonyx-orm/issues/245) owns this channel,
+    and **it is open as this is written**. `relationships.*.data` is a structure
+    this module builds, so it can be filtered; a computed property is arbitrary
+    consumer code returning an arbitrary value. Whether that makes the channel a
+    **framework defect** the ORM should close — by handing computed getters a
+    verdict, or by refusing to run them while a filter is in force — or a
+    **consumer contract** the ORM should only document, is the question #245
+    must decide. **This README does not decide it; neither reading should be
+    read out of the text here.** Measured on this repo's own fixture, where the
+    `animal` model has a `get tag()` that interpolates `owner.id`: **every**
+    animal document on **every** surface — including the ones above — carries
+    `attributes.tag: "angela's small dog"` for an owner that answers `404`. That
+    measurement is where #245 starts, and it holds whichever way the decision
+    lands. Until it lands, if your access rules hide a record, audit your
+    computed properties for its identifiers.
 - **A bare `toJSON()` still emits unfiltered linkage, and that is deliberate.**
   `Record.toJSON()` **applies** a verdict; it never **resolves** one. It has no
   request, and the documented `access()` contract permits a predicate to read
@@ -1085,11 +1131,29 @@ read all of these.
 
 #### `Record.toJSON()` does not filter relationship linkage unless you pass a verdict
 
-**The framework owns this on four surfaces. You own it everywhere else.**
+**The framework resolves a verdict for you on every request-bound surface that
+serializes a record through `toJSON()`. You own it everywhere else.**
 
-`GET /:models`, `GET /:models/:id` and both `GET /:models/:id/{relationship}`
-shapes resolve a linkage verdict and pass it to `toJSON()` for you. Any other
-path to a document — `JSON.stringify(record)`, `res.json(record)`,
+Those surfaces are `GET /:models`, `GET /:models/:id`, both shapes of
+`GET /:models/:id/{relationship}`, the `POST /:models` and `PATCH /:models/:id`
+**response documents**, and every record inside an `?include=` **`included`**
+array ([#234](https://github.com/abofs/stonyx-orm/issues/234) for the four
+reads, [#235](https://github.com/abofs/stonyx-orm/issues/235) for the two
+writes and `included`). Each resolves a linkage verdict and passes it to
+`toJSON()` for you.
+
+**`GET /:models/:id/relationships/{relationship}` is not on that list, and its
+state is not this section's to report.** It builds its `{ type, id }` objects by
+hand instead of calling `toJSON()`, so the `linkage` **option** never reaches it
+— whatever that route filters, it filters itself. And because its linkage *is*
+its primary data, filtering it is a **membership** decision rather than a
+linkage one. Membership on both relationship route families is owned by
+[#232](https://github.com/abofs/stonyx-orm/issues/232) (PR
+[#247](https://github.com/abofs/stonyx-orm/pull/247), in flight as this is
+written); read that issue for its state rather than inferring it here, because
+this section describes only what `toJSON()` filters.
+
+Any other path to a document — `JSON.stringify(record)`, `res.json(record)`,
 `console.log(record)`, a custom route, a queue payload, a websocket frame —
 calls `toJSON()` with no verdict, and **the no-verdict document names every
 related id, including records hidden on every one of their own surfaces**
@@ -1389,13 +1453,15 @@ GET /animals/1
 #### Limitations
 
 - Only available on GET endpoints (not POST/PATCH)
-- **`included` records are not access-filtered, on either question.** Whether a
-  resource appears in `included` at all is
-  [#233](https://github.com/abofs/stonyx-orm/issues/233); a record that *is*
-  permitted still emits its **own** `relationships.*.data` unfiltered, so
-  `?include=` republishes ids the primary document withholds
-  ([#235](https://github.com/abofs/stonyx-orm/issues/235)). See
-  [Consumer Contracts](#consumer-contracts).
+- **`included` is access-filtered on one of the two questions, not both.** What
+  a record already in `included` may **name** in its own
+  `relationships.*.data` is filtered
+  ([#235](https://github.com/abofs/stonyx-orm/issues/235)) — `?include=` no
+  longer republishes ids the primary document withholds. Whether a resource
+  appears in `included` **at all** is *membership* and is still unfiltered
+  ([#233](https://github.com/abofs/stonyx-orm/issues/233)): a record that is
+  404 on its own routes is still served as an `included` resource, attributes
+  and all. See [Consumer Contracts](#consumer-contracts).
 
 ## Lifecycle Hooks
 
