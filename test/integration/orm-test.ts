@@ -4207,6 +4207,85 @@ module('[Integration] ORM', function(hooks) {
         getAccessSpy.restore();
       }
     });
+
+  // ===========================================================================
+  // #240 -- THE TWO DEFERRED ACCESS FIXTURES
+  // ===========================================================================
+  //
+  // SCAFFOLD (abofs/stonyx-orm#240). Every assertion below is `todo` until the
+  // fixtures land. `todo` and not `assert.ok(true)`: a scaffold that passes is
+  // indistinguishable from a finished one in a CI log.
+  //
+  module('Deferred Access Fixtures (#240)', function() {
+    QUnit.todo('[GUARD] #240 AC1 -- the hidden-child fixture hides a child of a PERMITTED parent', function(assert) {
+      assert.ok(false, 'scaffold: GET /animals/18 -> 404 AND GET /owners/gina -> 200');
+    });
+
+    QUnit.todo('[GUARD] #240 AC2 -- the hasMany linkage surface is red-able', function(assert) {
+      assert.ok(false, 'scaffold: gina linkage excludes 18 while still naming 4, 8, 13');
+    });
+
+    QUnit.todo('[GUARD] #240 AC3 -- the unclaimed model is genuinely unclaimed and genuinely unmounted', function(assert) {
+      assert.ok(false, 'scaffold: getAccess(tag) undefined, absent from accessFunctions, GET /tags and GET /tags/:id both 404');
+    });
+
+    QUnit.todo('[GUARD] #240 AC4 -- the unclaimed model is REACHABLE, so the fixture is not inert', function(assert) {
+      assert.ok(false, 'scaffold: trait 2 resolves a tag record whose id is disclosable');
+    });
+
+    QUnit.todo('[GUARD] #240 AC6 -- negative controls for both fixtures', function(assert) {
+      assert.ok(false, 'scaffold: gina still names 4, 8, 13; GET /traits/2 still names category appearance');
+    });
+  });
+
+  // ===========================================================================
+  // #232 -- THE ACCESS FILTER ON THE TWO RELATIONSHIP ROUTE FAMILIES
+  // ===========================================================================
+  //
+  // SCAFFOLD (abofs/stonyx-orm#232). See the note above on `todo`.
+  //
+  module('Relationship Route Access (#232)', function() {
+    QUnit.todo('[DEFECT] #232 AC1 -- GET /:id/{rel} belongsTo: a related record its own model hides is 404', function(assert) {
+      assert.ok(false, 'scaffold: GET /animals/1/owner -> 404 (was 200, data.id=angela with attributes)');
+    });
+
+    QUnit.todo('[DEFECT] #232 AC2 -- GET /:id/relationships/{rel} belongsTo: the hand-built linkage is 404 too', function(assert) {
+      assert.ok(false, 'scaffold: GET /animals/1/relationships/owner -> 404 (was 200, {owner, angela})');
+    });
+
+    QUnit.todo('[DEFECT] #232 AC3 -- GET /:id/{rel} hasMany: a hidden child is dropped from the array', function(assert) {
+      assert.ok(false, 'scaffold: GET /owners/gina/pets -> [4, 8, 13] (was [4, 8, 13, 18])');
+    });
+
+    QUnit.todo('[DEFECT] #232 AC4 -- GET /:id/relationships/{rel} hasMany: the hidden child is dropped from the linkage', function(assert) {
+      assert.ok(false, 'scaffold: GET /owners/gina/relationships/pets -> [4, 8, 13] (was [4, 8, 13, 18])');
+    });
+
+    QUnit.todo('[DEFECT] #232 AC5 -- the unclaimed-model leak, at ZERO query parameters, on both route families', function(assert) {
+      assert.ok(false, 'scaffold: GET /traits/2/tag and GET /traits/2/relationships/tag -> 404');
+    });
+
+    QUnit.todo('[GUARD] #232 AC6 -- negative control: permitted related resources are still served on both families', function(assert) {
+      assert.ok(false, 'scaffold: GET /animals/4/owner -> gina; GET /traits/2/category -> appearance; gina/pets still 4, 8, 13');
+    });
+
+    QUnit.todo('[GUARD] #232 AC7 -- the PARENT filter is unchanged', function(assert) {
+      assert.ok(false, 'scaffold: GET /owners/angela/pets -> 404, GET /owners/nonexistent/pets -> 404');
+    });
+
+    QUnit.todo('[GUARD] #232 AC8 -- drop, never error: a filtered hasMany is byte-identical to a genuinely empty one', function(assert) {
+      assert.ok(false, 'scaffold: 200, links intact, no errors member, data === []');
+    });
+
+    QUnit.todo('[GUARD] #232 AC9 -- the LIVE request is handed to the predicate, and recordId stays null', function(assert) {
+      assert.ok(false, 'scaffold: argument one carries the probe header and the PRIMARY route params; recordId === null');
+    });
+
+    QUnit.todo('[DISCLOSURE] #232 AC11 -- a consumer predicate cannot express a per-record deny for a related resource', function(assert) {
+      assert.ok(false, 'scaffold: the residual, pinned as behaviour rather than only documented');
+    });
+  });
+
   });
 
   // ===========================================================================
