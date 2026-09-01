@@ -1460,10 +1460,17 @@ export default class OrmRequest extends Request {
       // are reading this after #247 landed, the filtering below is #232's and
       // this note records why it was never #235's to add.
       //
-      // The three sites #235 does own (`buildResponse`'s `included`, the
-      // related-resource branch above, and the two write handlers) all reach
-      // the filter through `record.toJSON()`, which is where the `linkage`
-      // OPTION is applied. This branch builds its `{ type, id }` objects BY
+      // The three sites #235 does own -- `buildResponse`'s `included`, and the
+      // two write handlers, `POST /:models` and `PATCH /:models/:id` -- all
+      // reach the filter through `record.toJSON()`, which is where the
+      // `linkage` OPTION is applied.
+      //
+      // The related-resource branch above ALSO passes a `linkage` filter, and
+      // it is NOT one of those three: it is abofs/stonyx-orm#234's code and
+      // predates this change. `git diff 8dda5d6..HEAD -- src/orm-request.ts`
+      // leaves that branch byte-unchanged.
+      //
+      // This branch builds its `{ type, id }` objects BY
       // HAND and never calls `toJSON` at all, so the `linkage` option cannot
       // reach it -- whatever this route filters, it has to filter itself, which
       // is precisely why doing so is a separate change with a separate owner.
