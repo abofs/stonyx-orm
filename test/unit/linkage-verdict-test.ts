@@ -705,8 +705,21 @@ module('[Unit] #234 linkage verdict', function(hooks) {
 
     const section = readme.slice(start, readme.indexOf('\n## ', start));
 
-    assert.ok(section.includes('Relationship linkage is filtered on the four request-bound read surfaces'),
+    // RE-SPECIFIED BY abofs/stonyx-orm#235, NOT LOOSENED. This pinned the
+    // sentence "filtered on the four request-bound READ surfaces", which #235
+    // made FALSE: the two write handlers and the `included` array are filtered
+    // too, so the count is no longer four and the word "read" no longer
+    // qualifies it. Preserving the old literal would have pinned a sentence
+    // that under-states the coverage and, worse, tells a reader their `POST`
+    // response is still leaking. The assertion keeps its job -- the section
+    // must state WHICH surfaces filter linkage -- and each surface family is
+    // now named individually, so the pin is stronger than the one it replaces
+    // rather than merely different.
+    assert.ok(section.includes('Relationship linkage is filtered on every request-bound surface that'),
       'the section states WHICH surfaces filter linkage');
+    for (const surface of ['GET /:models`', 'GET /:models/:id`', 'GET /:models/:id/{relationship}`', 'POST /:models`', 'PATCH /:models/:id`', '`included`']) {
+      assert.ok(section.includes(surface), `and names ${surface} among them`);
+    }
     assert.ok(section.includes('`format()` and `serialize()` are deliberately not filtered'),
       'the section states that the persistence path is out of scope, and stays out');
     assert.ok(section.includes('data loss'),
@@ -728,16 +741,38 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     // satisfied by a cross-reference elsewhere and does not pin this bullet.
     // Measured: it survived the mutation that put #233 back on the `included`
     // exclusion and stripped the link off the POST/PATCH one.
-    const bulletStart = section.indexOf('- **Relationship linkage is filtered on the four request-bound read surfaces');
+    const bulletStart = section.indexOf('- **Relationship linkage is filtered on every request-bound surface that');
     assert.ok(bulletStart > -1, 'precondition: the linkage bullet is findable');
     const bullet = section.slice(bulletStart, section.indexOf('\n- **', bulletStart + 10));
 
-    assert.strictEqual((bullet.match(/issues\/235/g) || []).length, 2,
-      'BOTH deferred LINKAGE exclusions — `included` and the POST/PATCH documents — are attributed to #235');
-    assert.ok(/#233\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/233\) owns whether a/.test(bullet),
+    // RE-SPECIFIED BY #235, AND THE DIRECTION OF THE CLAIM IS INVERTED.
+    // This used to pin "both of these are DEFERRED to #235", counting two
+    // `issues/235` links in the exclusion list. #235 has landed, so the same
+    // two surfaces now have to be attributed as COVERED and #235 has to be
+    // gone from the exclusion list entirely -- which is a strictly harder
+    // thing to satisfy than the count it replaces, because leaving either
+    // bullet where it was would fail both halves.
+    assert.strictEqual((bullet.match(/issues\/235/g) || []).length, 1,
+      '#235 is cited once, on the sentence saying which surfaces ARE filtered');
+
+    const notYetCovered = bullet.slice(bullet.indexOf('**Not yet covered'));
+    assert.ok(notYetCovered.length > 0, 'precondition: the exclusion list is findable inside the bullet');
+    assert.notOk(/issues\/235/.test(notYetCovered),
+      'and #235 no longer appears among the exclusions — it is closed, not deferred');
+    assert.ok(/issues\/232/.test(notYetCovered),
+      'the relationships-linkage route is still excluded, attributed to #232');
+    assert.ok(/#233\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/233\)/.test(notYetCovered),
       'and #233 is kept for what it actually owns: whether a resource appears in `included` at all');
-    assert.ok(bullet.includes('PATCH /animals/1'),
-      'the POST/PATCH exclusion states its consequence rather than naming the handlers');
+    assert.ok(/owns whether a\s+resource appears in `included`|appears in `included` at all/.test(bullet),
+      'stated as membership rather than as linkage, so the two are not conflated');
+
+    // The write surfaces are named as COVERED, and the one thing an
+    // implementer is most likely to get wrong about them is stated: the ask is
+    // for a READ even on a write route.
+    assert.ok(bullet.includes('PATCH /:models/:id') && bullet.includes('POST /:models'),
+      'the write surfaces are named in the covered list');
+    assert.ok(/`operation` is `'read'` even on a\s+write route/.test(bullet),
+      'and the section says the related model is asked about a READ even on a write route');
 
     // The security claim this section is not permitted to make unqualified.
     // `docs/project-structure.md` carries the standing rule; the measured

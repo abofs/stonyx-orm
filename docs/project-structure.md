@@ -491,11 +491,18 @@ property of the function it lives in, if there is one.
 >    #234 fix. The arity signal is
 >    [#213](https://github.com/abofs/stonyx-orm/issues/213) /
 >    [#221](https://github.com/abofs/stonyx-orm/issues/221), unshipped.
-> 2. **Four surfaces, not all of them.** `included`, the `POST`/`PATCH` response
->    documents and `GET /:id/relationships/{rel}` still publish unfiltered
->    linkage — [#235](https://github.com/abofs/stonyx-orm/issues/235) and #232.
->    Measured: `PATCH /animals/1` returns 200 naming `angela` seconds after
->    `GET /animals/1` returns `owner.data: null`.
+> 2. **Every serializing surface now, but one route still is not.**
+>    [#235](https://github.com/abofs/stonyx-orm/issues/235) extended the filter
+>    to the `POST`/`PATCH` response documents and to the records inside
+>    `included`, so the one-verb bypass is closed: `PATCH /animals/1` used to
+>    return 200 naming `angela` seconds after `GET /animals/1` returned
+>    `owner.data: null`, and both now answer `null`.
+>    `GET /:id/relationships/{rel}` **still publishes unfiltered linkage** —
+>    [#232](https://github.com/abofs/stonyx-orm/issues/232) — because its
+>    primary data IS the linkage, which makes filtering it a MEMBERSHIP
+>    decision rather than this one. Measured:
+>    `GET /animals/1/relationships/owner` returns
+>    `{"type":"owner","id":"angela"}` while `GET /owners/angela` is 404.
 > 3. **A bare `toJSON()` is unchanged and stays that way** — it holds no request
 >    to resolve against ([#230](https://github.com/abofs/stonyx-orm/issues/230)).
 >
