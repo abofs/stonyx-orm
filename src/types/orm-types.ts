@@ -302,16 +302,45 @@ export interface AccessContext {
    * `Orm.instance.getAccess()`. That absence stays a distinguishable, deniable
    * signal only because the framework never produces it.
    *
-   * IT IS THE ONE KEY THE HOOK VOCABULARY DOES *NOT* DISAGREE WITH.
-   * `HookContext.recordId` (`src/hooks.ts`) is an identically-named key on an
-   * identically-shaped context object, which is the exact configuration that
-   * makes `operation` fail-open shaped -- a hook sees `'get'` where `access()`
-   * sees `'read'`. Here they AGREE, and not by coincidence: `_withHooks` sets
-   * `context.recordId = getId(request.params)`, the same single coercion this
-   * key is built from. They differ in ONE way and it is the absence spelling --
-   * `HookContext.recordId` is optional and `undefined` when unset, while this
-   * key is always present and `null` on a collection route. A predicate must
-   * not read `undefined` here as "collection".
+   * IT DISAGREES WITH THE HOOK VOCABULARY, AND NOT ONLY ON THE ABSENCE
+   * SPELLING. `HookContext.recordId` (`src/hooks.ts`) is an identically-named
+   * key on an identically-shaped context object, which is the exact
+   * configuration that makes `operation` fail-open shaped -- a hook sees
+   * `'get'` where `access()` sees `'read'`. An earlier revision of THIS
+   * docblock asserted the opposite ("here they AGREE... they differ in ONE way
+   * and it is the absence spelling"). That was measured false, in the fail-open
+   * direction, and it is corrected here rather than deleted.
+   *
+   * MEASURED over the live dispatch, before-hooks registered for all five
+   * operations on one model:
+   *
+   *     before:list    key ABSENT      ('recordId' in context === false)
+   *     before:get     key ABSENT      params={"id":"visible1"}
+   *     before:create  key ABSENT
+   *     before:update  key ABSENT      params={"id":"visible2"}
+   *     before:delete  recordId="visible3"
+   *     after:delete   recordId="visible3"
+   *
+   * `_withHooks` assigns `context.recordId` at exactly TWO sites in
+   * `src/orm-request.ts`, and BOTH sit inside an `operation === 'delete'`
+   * branch. So the two keys differ in COVERAGE, on four of five operations: on
+   * a hook context the key is absent for get, list, create and update, while
+   * this key is present on every route `auth()` classifies. The absence
+   * spelling is the smaller half of the difference, not the whole of it.
+   *
+   * AND THAT INVERTS THE ARGUMENT ABOVE WHEN IT IS READ ACROSS THE TWO. Here,
+   * a missing `recordId` means "did not come from `auth()`" and is deniable.
+   * On a hook context it means "this is a get / list / create / update" -- an
+   * ordinary request. A consumer who writes the hook-side half of the same
+   * rule --
+   *
+   *     beforeHook('update', 'owner', ctx => ctx.recordId === 'archived' ? 403 : undefined)
+   *
+   * -- gets a deny that NEVER FIRES: measured, `PATCH /owners/visible2` -> 200,
+   * with `ctx.recordId === undefined` while the addressed record sits in
+   * `ctx.params`. The hook side is abofs/stonyx-orm#242 and is deliberately not
+   * repaired here. A predicate must not read `undefined` here as "collection",
+   * and nothing in this contract makes it safe to read the two keys as one key.
    *
    * IT NAMES WHICH RECORD, NOT WHICH SURFACE. `GET /owners/gina`,
    * `GET /owners/gina/pets` and `GET /owners/gina/relationships/pets` all

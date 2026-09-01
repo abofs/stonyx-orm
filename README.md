@@ -1249,6 +1249,16 @@ Each hook receives a context object with comprehensive information:
 - It contains a deep copy of the record's state **before** the operation executes (captured before the `before` hook fires)
 - The deep copy is created via JSON serialization (`JSON.parse(JSON.stringify())`) to ensure complete isolation
 - For `delete` operations, `recordId` is provided in after hooks since the record may no longer exist in the store
+- **`context.recordId` here is NOT `AccessContext.recordId`.** Same name, same-shaped
+  object, different coverage: `_withHooks` sets this key **only** under
+  `operation === 'delete'`, so on `get` / `list` / `create` / `update` the key is
+  **absent** — `beforeHook('update', 'owner', ctx => ctx.recordId === 'archived' ? 403 : undefined)`
+  never fires (measured: `PATCH /owners/{id}` → 200 with `ctx.recordId === undefined`
+  and the id sitting in `ctx.params`). The access context, by contrast, carries
+  `recordId` on every route it classifies and spells absence as `null`, never
+  `undefined`. Tracked as
+  [#242](https://github.com/abofs/stonyx-orm/issues/242); see
+  `AccessContext.recordId` in `src/types/orm-types.ts` for the other side.
 - `oldState` is captured as a deep copy of the record's data before the operation, providing access to the previous field values
 
 ### Usage Examples
