@@ -104,15 +104,33 @@ module('[Unit] recordId on the access context (#236/#237)', function() {
     // reasoning as test/unit/access-sample-migration-test.ts, which does this
     // for #222.
     //
-    // TWO CLAUSES, AND THE SECOND IS WHAT MAKES IT FALSIFIABLE. "No `DEFECT
-    // #228:` message survives" alone is satisfied by deletion — that is the
-    // exact failure. The count floor is what distinguishes an inversion from a
-    // deletion.
+    // THREE CLAUSES, AND THE SECOND AND THIRD ARE WHAT MAKE IT FALSIFIABLE.
+    // "No `DEFECT #228:` message survives" alone is satisfied by deletion —
+    // that is the exact failure. The count floor distinguishes an inversion
+    // from a deletion, and clause 3 reads the three specific pins by content.
+    //
+    // AND ALL THREE MEASURE CODE, WHICH THEY DID NOT. An earlier revision of this
+    // file applied `codeOf()` to clause 1 only: clause 2 counted over the raw
+    // source and clause 3 read its pins out of the raw source, so COMMENTING
+    // OUT the two inverted tripwires at orm-test.ts left the whole suite green
+    // (972/0) with this test passing, while hard-DELETING the same two lines
+    // reded it (971/1). Commenting out is the same failure with one keystroke
+    // of camouflage, and it is the form a tidy-up reaches for. Everything below
+    // now goes through `codeOf`, and the tampers are enumerated where they are
+    // asserted.
+    //
+    // BASELINES ARE CODE-ONLY OCCURRENCE COUNTS on origin/dev at c5f7907 --
+    // `(codeOf(source).match(/assert\./g) ?? []).length`, the SAME metric the
+    // assertion applies to the head. They were previously captured with
+    // `grep -c` (which counts LINES) and compared as occurrences, so
+    // access-sample-migration-test.ts's floor sat 3 BELOW its true origin/dev
+    // reading (43 lines vs 46 occurrences, 44 of them in code). Capturing in
+    // one unit and comparing in another is how a floor stops being a floor.
     const files = {
       '../integration/orm-test.ts': 590,
       './access-context-test.ts': 26,
       './access-filter-enforcement-test.ts': 203,
-      './access-sample-migration-test.ts': 43,
+      './access-sample-migration-test.ts': 44,
     };
 
     const sources = {};
@@ -134,27 +152,33 @@ module('[Unit] recordId on the access context (#236/#237)', function() {
     assert.ok(sources['../integration/orm-test.ts'].includes('DEFECT #228:'),
       'while the comments still NAME the label, so the inversion is traceable to what it inverted (confirming clause 1 is measuring code, not prose)');
 
-    // CLAUSE 2 — and no file paid for it with assertions. Baselines are
-    // `grep -c 'assert\.'` on origin/dev at c5f7907, the head this branch
-    // started from and the head the #228 refinement measured the inversion
-    // budget against.
+    // CLAUSE 2 — and no file paid for it with assertions. Baselines are the
+    // code-only occurrence counts above, taken on origin/dev at c5f7907: the
+    // head this branch started from, and the head the #228 refinement measured
+    // the inversion budget against.
     //
     // A COUNT OF CALL SITES, AND ITS LIMIT IS STATED ON PURPOSE: it cannot tell
     // a real assertion from a trivial one, so it is a FLOOR, not a proof. The
     // proof that the specific pins were inverted rather than swapped for filler
     // is clause 3 below, which reads them by content.
     for (const [path, baseline] of Object.entries(files)) {
-      const count = (sources[path].match(/assert\./g) ?? []).length;
+      const count = (codeOf(sources[path]).match(/assert\./g) ?? []).length;
 
       assert.ok(count >= baseline,
-        `${path} carries ${count} assertion call sites, not fewer than the ${baseline} it had on origin/dev at c5f7907 (a net DROP is the "repair by deletion" this AC exists to catch)`);
+        `${path} carries ${count} EXECUTING assertion call sites (comments stripped), not fewer than the ${baseline} it had on origin/dev at c5f7907 — a net drop is the "repair by deletion" this AC exists to catch, and counting over codeOf() is what makes commenting an assertion out count as a drop rather than as prose padding the floor`);
     }
 
     // CLAUSE 3 — the specific pins, by content, at the tier they were planted.
     // Each pair is [what the defective head pinned, what the fixed head pins].
-    // The first half must be GONE and the second half must be PRESENT, so
-    // neither deleting the pin nor leaving it untouched passes.
+    // The first half must be GONE and the second half must be PRESENT AND
+    // EXECUTING, so deleting the pin, commenting it out, rewording it, or
+    // leaving it untouched all fail. Those four tampers were each run against
+    // this clause on a clean rebuilt tree; what it does NOT catch is a changed
+    // assertion message, which is deliberate — the pins are on the assertion
+    // form, and the surrounding prose has to stay free to explain the
+    // inversion.
     const orm = sources['../integration/orm-test.ts'];
+    const ormCode = codeOf(orm);
 
     for (const [was, now, label] of [
       ["assert.equal(encoded.status, 200,", "assert.equal(encoded.status, 403,",
@@ -164,8 +188,11 @@ module('[Unit] recordId on the access context (#236/#237)', function() {
       ["assert.equal(cased.status, 403,", "assert.equal(cased.status, 200,",
         'GET /owners/ARCHIVED: RE-SPECIFIED to 200 — a distinct record the /archived rule was never about (orm-test.ts:1680)'],
     ]) {
+      // ABSENT-half over the RAW source (strictly stricter: the pre-fix form
+      // must not reappear even inside a comment), PRESENT-half over CODE.
       assert.notOk(orm.includes(was), `${label} — the pre-fix form is gone`);
-      assert.ok(orm.includes(now), `${label} — and the inverted form is present, at the same tier over the same socket`);
+      assert.ok(ormCode.includes(now),
+        `${label} — and the inverted form is present AND EXECUTING, at the same tier over the same socket. Tampers verified against this clause, each on a clean rebuilt tree: COMMENTING the assertion out reds it (was 972/0 green before codeOf was applied here), DELETING it reds it, and REWORDING it — e.g. assert.equal -> assert.strictEqual on the same pin — reds it. It does not catch a changed assertion MESSAGE, and is not claimed to.`);
     }
 
     // AC9 — AND THE LOCKSTEP THAT STOPS THE THREE COPIES DRIFTING IS STILL

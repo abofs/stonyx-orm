@@ -306,11 +306,25 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
     //
     // KILLING MUTATION: restore the old banner, or drop the "must not be
     // dropped" half of the new one.
+    // SCOPE OF THIS CHECK, STATED BECAUSE ITS MESSAGE USED TO OVERSTATE IT.
+    // `source` here is the EXTRACTED SAMPLE BODY -- for the README, the fenced
+    // code block only (`fencedSample` above), not the file. So this measures
+    // the sample a consumer copies, NOT "the copy a consumer installs": the
+    // installed README still carries the pre-#236 claim in PROSE, outside the
+    // fence, in the `The access context (second argument)` reference section
+    // ("a rule that depends on the sub-path still needs `request.path` ... its
+    // `/archived` deny cannot be expressed from the context alone"), lower-cased
+    // and therefore clearing the needle below on case as well as on scope. That
+    // prose is knowingly still there; retiring it WITH its measurement is
+    // abofs/stonyx-orm#238, and dated superseded-by markers now sit at each of
+    // those sites so a reader arriving at one is not left with the old claim
+    // alone. Widening this check to the whole file is #238's to do, when the
+    // prose it would then measure has actually moved.
     for (const [label, source] of copies.slice(0, 2)) {
       assert.ok(source.includes('EXPRESSIBLE FROM THE CONTEXT ALONE'),
-        `${label} — the copy a consumer installs — says the deny is now expressible from the context alone`);
+        `${label} — the sample body a consumer copies — says the deny is now expressible from the context alone`);
       assert.notOk(source.includes('CANNOT BE EXPRESSED FROM THE CONTEXT ALONE'),
-        `${label} no longer carries the pre-#236 banner, which would send a consumer back to parsing the request target`);
+        `${label} — the extracted sample body, NOT the whole file — no longer carries the pre-#236 banner, which would send a consumer back to parsing the request target (the README's PROSE sections still do, knowingly, and are dated-marked and tracked at #238)`);
       assert.ok(/still must not be dropped/i.test(source),
         `${label} keeps the other half: expressible is not the same as optional`);
     }
