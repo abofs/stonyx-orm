@@ -1981,6 +1981,24 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
 
       // ARGUMENT ONE, same value set, with a VALID context held fixed — so a
       // guard that only covers the context cannot satisfy it.
+      //
+      // REVERTING THE ARGUMENT-ONE GUARD IS CAUGHT IN BOTH SPELLINGS, AND THE
+      // COUNT DEPENDS ON WHICH ONE. The mutation is: delete
+      // `if (typeof request?.path !== 'string' || request.path === '') return false;`
+      // and restore `const path = String(request.path ?? '').toLowerCase();`.
+      //
+      //   fixture only ............................ 955 / 3
+      //     (assertion 46, THIS assertion, AC1/5)
+      //   all three copies in lockstep ............ 956 / 2
+      //     (THIS assertion, AC1/5)
+      //
+      // The lockstep number is the one a contributor actually produces, because
+      // assertion 46 and AC1/5 exist to force the copies to move together; the
+      // fixture-only number is three only because assertion 46 additionally
+      // fires on COPY DIVERGENCE rather than on the guard. Quote the figure with
+      // its scope. The killer in both is this assertion, which is the right one:
+      // it is the only one that measures the guard's BEHAVIOUR rather than its
+      // presence as a string.
       const ownerRead = { model: 'owner', operation: 'read' };
 
       for (const value of DEGENERATE) {

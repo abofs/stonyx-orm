@@ -1656,8 +1656,18 @@ module('[Integration] ORM', function(hooks) {
       // assertion here was a 403 raised on behalf of a record that does not
       // exist, and the deny-to-allow mutation this test exists to catch was
       // measured at 404 rather than 200. Seeded by this module's `before`.
+      //
+      // "BEHIND THE DENY" IS NOT "PROTECTED BY IT", AND THE DIFFERENCE IS
+      // MEASURED. The `/archived` rule is a SURFACE deny on one path, not record
+      // protection: the sample's per-record filter rejects `angela` and
+      // `restricted` only, so `GET /owners` returns this same record IN FULL
+      // through the authorised collection route (measured over a raw socket:
+      // 200, body carries `"secret"`). Nothing here asserts otherwise. A reader
+      // who takes the 403 below as evidence the record is protected will not add
+      // the protection they actually need — if you want that, widen the
+      // per-record filter, which is a different mechanism from this deny.
       assert.ok(store.get('owner', ARCHIVED_OWNER),
-        'precondition: the record the deny protects really does exist in the store');
+        'precondition: the record the /archived deny refuses on really does exist in the store');
 
       const archived = await fetch(`${endpoint}/owners/archived`);
       assert.equal(archived.status, 403,
@@ -1713,7 +1723,7 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(encoded.status, 200,
         'DEFECT #228: GET /owners/%61rchived is 200, NOT 403 — percent-encoding steps around the sub-path deny (invert this to 403 when #228 lands)');
       assert.ok(encoded.body.includes('"secret"'),
-        'DEFECT #228: and it returns the protected record in full (invert this when #228 lands)');
+        'DEFECT #228: and it returns that record in full through a route the deny refuses (invert this when #228 lands)');
 
       // The negative control for the pair above: the canonical spelling of the
       // same target, over the same socket, is still refused. Without it the two
