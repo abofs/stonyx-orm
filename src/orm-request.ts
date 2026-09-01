@@ -507,12 +507,23 @@ function buildResponse(
     // fresh filter here would resolve the consumer's `access()` once per
     // included record instead.
     //
-    // `linkage` may be `undefined`, and that is a live path rather than a
-    // defensive default: a caller with no request has no verdict to supply, and
-    // `Record.toJSON` reads an ABSENT option as "no verdict was supplied" and
-    // emits the pre-#234 document. It does NOT read a non-function as absent --
-    // a non-function, INCLUDING the primitive `true`, denies every relationship
-    // on the document. Do not "simplify" this to a boolean.
+    // `linkage` IS OPTIONAL IN THE TYPE AND IS NOT OPTIONAL IN PRACTICE.
+    // Stating it precisely because the opposite claim stood here in an earlier
+    // draft of this change: BOTH of this function's callers supply a filter
+    // (`getCollectionHandler` and `getSingleHandler`, the only two), so the
+    // `undefined` branch has no live caller in this module today. It is
+    // optional so that omitting it degrades to the PRE-#234 document rather
+    // than to a denial -- `Record.toJSON` reads an ABSENT option as "no verdict
+    // was supplied" and emits linkage in full.
+    //
+    // WHAT IT MUST NEVER BE HANDED IS A NON-FUNCTION. `toJSON` does NOT read a
+    // non-function as absent: `Object.prototype.toString.call(linkage)` must be
+    // `'[object Function]'`, and anything else -- `null`, an `AsyncFunction`,
+    // and INCLUDING the primitive `true` -- DENIES every relationship on the
+    // document and logs once. `toJSON({ linkage: true })` emits `null` linkage.
+    // So do not "simplify" this to a boolean, and do not make it default to
+    // `true`: both spellings look like "allow everything" and mean the exact
+    // opposite (abofs/stonyx-orm#224).
     response.included = includedRecords.map(record => record.toJSON?.({ baseUrl, linkage }));
   }
 
