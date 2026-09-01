@@ -3862,6 +3862,13 @@ module('[Integration] ORM', function(hooks) {
       for (const animal of raw.animals) {
         if (!store.get('animal', animal.id)) createRecord('animal', animal);
       }
+      // abofs/stonyx-orm#240, fixture 2. AC4 below reads it, and an earlier
+      // module in this file unloads the whole store and rebuilds it from the
+      // saved db file -- which carries no `tags` collection, because an
+      // unclaimed model is not persisted.
+      if (!store.get('tag', 'never-mounted')) {
+        createRecord('tag', { id: 'never-mounted', label: 'a collection the consumer never exposed' });
+      }
     });
 
     const getJson = async path => {
@@ -3935,31 +3942,55 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('[DEFECT] #234 AC1b — a hidden child id is absent from a permitted parent hasMany linkage', async function(assert) {
-      // Baseline first, so the assertion is a measured DELTA rather than a
-      // hard-coded pet list that an earlier module could have added to.
-      const before = await getJson('/owners/gina');
-      const petsBefore = before.body.data.relationships.pets.data.map(record => record.id);
+      // SWAPPED ONTO THE PERMANENT FIXTURE BY abofs/stonyx-orm#240.
+      //
+      // This drove `Orm.instance.accessFunctions` with a scoped override --
+      // `withAccess('animal', narrow('animal', r => r.id !== 8))` -- because at
+      // the time NO permitted parent named a hidden child anywhere in the
+      // sample: every hidden animal (21, 22) was owned by `restricted`, who is
+      // hidden himself. Measured across all three `hasMany` relations, the
+      // count of such pairs was ZERO.
+      //
+      // #240's first fixture supplies one permanently: animal 18, owned by the
+      // PERMITTED gina. The registry override is gone and the assertion now
+      // reads the shipped fixture directly, which is strictly stronger -- an
+      // override proves the code path works when the registry says so, while
+      // the fixture proves the shipped configuration says so.
+      //
+      // The cross-model half is preserved rather than dropped, because it is
+      // what proves the linkage answer came from `Orm.instance.getAccess` and
+      // not from the owners route's `state.filter`: /animals/18 is 404 on its
+      // OWN route, and if the linkage answer were coming from the owners
+      // filter, 18 would still be named here.
+      const owned = store.get('owner', 'gina').pets.map(pet => pet.id);
+      assert.ok(owned.includes(18), 'precondition: gina OWNS animal 18 — the drop below is a filter, not missing data');
 
-      assert.ok(petsBefore.includes(8), 'precondition: gina names animal 8 while it is permitted');
+      const { status, body } = await getJson('/owners/gina');
+      const pets = body.data.relationships.pets.data.map(record => record.id);
 
-      // Hide animal 8 in the REGISTRY -- the input `getAccess('animal')` reads
-      // -- leaving the mounted /animals route's own by-value filter alone.
+      assert.strictEqual(status, 200, 'the permitted parent is still served');
+      assert.notOk(pets.includes(18), 'the hidden child is not named');
+      assert.deepEqual(pets.slice().sort(), owned.filter(id => id !== 18).sort(),
+        'and ONLY that child was dropped — every other pet is still named');
+
+      assert.strictEqual((await getJson('/animals/18')).status, 404,
+        'and the child is hidden on its OWN route too — the linkage answer is the ANIMAL model’s, resolved cross-model');
+      assert.strictEqual((await getJson('/owners/gina')).status, 200,
+        'while the parent is not — which is the property the shipped fixture could not offer before #240');
+
+      // The registry-driven form is retained as a SECOND case rather than
+      // replaced, because it covers something the fixture cannot: that the
+      // mounted route's by-value filter and the registry are independent
+      // inputs. `withAccess` and `narrow` are still used by AC1c and AC7.
+      const petsBefore = pets;
       await withAccess('animal', narrow('animal', record => record.id !== 8), async () => {
-        const { status, body } = await getJson('/owners/gina');
-        const pets = body.data.relationships.pets.data.map(record => record.id);
+        const scoped = await getJson('/owners/gina');
+        const scopedPets = scoped.body.data.relationships.pets.data.map(record => record.id);
 
-        assert.strictEqual(status, 200, 'the permitted parent is still served');
-        assert.notOk(pets.includes(8), 'the hidden child is not named');
-        assert.deepEqual(pets, petsBefore.filter(id => id !== 8),
-          'and ONLY that child was dropped — every other pet is still named');
-
-        // Proves the linkage path consulted the ANIMAL model's predicate
-        // through `Orm.instance.getAccess`, not the owners route's
-        // `state.filter`: the mounted route still holds the boot-time snapshot,
-        // so /animals/8 is untouched by the override above.
+        assert.notOk(scopedPets.includes(8), 'a registry override hides a second child on top of the fixture');
         const stillServed = await getJson('/animals/8');
         assert.strictEqual(stillServed.status, 200,
-          'the mounted route is unaffected — the linkage answer came from the registry, cross-model');
+          'while the mounted route is unaffected — it holds the boot-time snapshot, so the linkage answer came from the registry');
       });
 
       const after = await getJson('/owners/gina');
@@ -4069,17 +4100,48 @@ module('[Integration] ORM', function(hooks) {
       // failed to LOAD" -- setup-rest-server catches a load failure, warns, and
       // publishes the PARTIAL map -- and the caller cannot tell those apart. So
       // the only safe reading is deny.
+      // SWAPPED ONTO THE PERMANENT FIXTURE BY abofs/stonyx-orm#240.
+      //
+      // This drove `withAccess('trait', undefined, …)` -- deleting a registry
+      // entry for the duration of the assertion -- because all five sample
+      // models were claimed by `GlobalAccess`, so `getAccess()` never returned
+      // `undefined` for anything in linkage range.
+      //
+      // #240's second fixture is strictly stronger than that override, and the
+      // difference is not cosmetic. Deleting `accessFunctions.trait` leaves the
+      // /traits routes MOUNTED; `tag` has no route at all, because a model no
+      // access class claims is never mounted in the first place. So this now
+      // asserts the shipped configuration rather than a hole punched into it.
+      assert.strictEqual(Orm.instance.getAccess('tag'), undefined,
+        'precondition: no predicate resolves for `tag` — no access class claims it');
+      assert.strictEqual((await getJson('/tags/never-mounted')).status, 404,
+        'precondition: and it has no REST surface of its own at all');
+      assert.strictEqual(store.get('trait', 2)?.tag?.id, 'never-mounted',
+        'precondition: while trait 2 really does resolve it — otherwise this assertion is vacuous');
+
+      const { status, body } = await getJson('/traits/2');
+
+      assert.strictEqual(status, 200, 'the request is not refused — only the linkage is dropped');
+      assert.strictEqual(body.data.relationships.tag.data, null,
+        'an unclaimed model is not named (was: {"type":"tag","id":"never-mounted"})');
+      assert.ok(body.data.relationships.tag.links,
+        'and the links survive — they are built from the SERIALIZED record id, never the related one');
+
+      // The registry-override form is RETAINED as a second case, not replaced:
+      // it covers the OTHER producer of `undefined`, which is an access class
+      // that exists and failed to LOAD (setup-rest-server publishes the partial
+      // map). The two are indistinguishable to `getAccess`, and that is exactly
+      // why both read as a denial.
       await withAccess('trait', undefined, async () => {
         assert.strictEqual(Orm.instance.getAccess('trait'), undefined,
-          'precondition: no predicate resolves for this model');
+          'a claimed model whose entry is missing reads identically');
 
-        const { status, body } = await getJson('/animals/1');
+        const scoped = await getJson('/animals/1');
 
-        assert.strictEqual(status, 200, 'the request is not refused — only the linkage is dropped');
-        assert.deepEqual(body.data.relationships.traits.data, [],
-          'an unclaimed model is not named (was: [{trait,1},{trait,2}])');
-        assert.ok(body.data.relationships.traits.links,
-          'and the links survive — they are built from the SERIALIZED record id, never the related one');
+        assert.strictEqual(scoped.status, 200, 'still 200');
+        assert.deepEqual(scoped.body.data.relationships.traits.data, [],
+          'and its linkage is dropped too (was: [{trait,1},{trait,2}])');
+        assert.ok(scoped.body.data.relationships.traits.links, 'links intact');
       });
 
       // Restored, and observably so: a hole in the registry must not be sticky.
