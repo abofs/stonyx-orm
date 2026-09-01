@@ -872,19 +872,63 @@ per-record filter. An input you cannot identify must **deny**.
   of every related record unconditionally, so a record hidden on every one of
   its own surfaces was still named inside another model's document — with no
   `include=`, no relationship route and no query string
-  ([#234](https://github.com/abofs/stonyx-orm/issues/234)). It is now filtered
-  through the related model's own access class on `GET /:models`,
-  `GET /:models/:id` and both `GET /:models/:id/{relationship}` shapes. A
+  ([#234](https://github.com/abofs/stonyx-orm/issues/234)). The ORM now resolves
+  the **related** model's own access class on `GET /:models`, `GET /:models/:id`
+  and both `GET /:models/:id/{relationship}` shapes, and asks it
+  `{ model: <related>, operation: 'read' }`. An unresolvable class
+  (`getAccess()` → `undefined`) and a predicate that throws both **deny**. A
   filtered-out relationship is **indistinguishable from a genuinely empty one** —
   an emptied `hasMany` is `data: []` and an emptied `belongsTo` is `data: null`,
   both **keeping their `links`**, which are built from the serialized record's
   own id and never from the related one. Nothing errors and no status changes,
   because throwing here would be an existence oracle *and* would throw out of
-  the enclosing `JSON.stringify`. **Not yet covered:** `included`
-  ([#233](https://github.com/abofs/stonyx-orm/issues/233) owns whether a
-  resource appears there at all), the `POST`/`PATCH` response documents, and
-  `GET /:models/:id/relationships/{relationship}`, whose *primary data* is
-  linkage ([#196](https://github.com/abofs/stonyx-orm/issues/196)).
+  the enclosing `JSON.stringify`.
+
+  **That resolves the right class; it does not guarantee a model-correct
+  answer, and the failure direction is not the safe one.** Only a predicate that
+  *reads* `context.model` can answer about the model it was asked about — see
+  [Passing the context makes a model-correct answer *possible*](#passing-the-context-makes-a-model-correct-answer-possible)
+  above. A **single-argument predicate remains the default in every consumer
+  tree**, it identifies its collection from the request, and asked about
+  `owner` on a request dispatched to `/animals` it answers about **animals**.
+  Measured against this repo's own fixture with an arity-1 predicate registered
+  for `owner`: `GET /owners` correctly returns `["gina","michael","bob"]` while
+  `GET /animals/1` returns `owner.data {"type":"owner","id":"angela"}` — the
+  #234 defect, on the #234 surface, after the #234 fix. This is not a
+  regression (the id was published unconditionally before), it cannot be fixed
+  from this side, and the signal that surfaces such a predicate is
+  [#221](https://github.com/abofs/stonyx-orm/issues/221) /
+  [#213](https://github.com/abofs/stonyx-orm/issues/213). **Migrate your
+  predicates to read the context before relying on this filter.** A migrated,
+  context-reading predicate degrades the other way — it can over-deny a
+  *permitted* related record, which is recorded in the release notes as a
+  breaking change.
+
+  **Not yet covered, and each one still publishes ids the surfaces above
+  withhold:**
+
+  - **`included`** — [#235](https://github.com/abofs/stonyx-orm/issues/235). A
+    permitted record sideloaded by `?include=` emits its **own**
+    `relationships.*.data` unfiltered, so `GET /animals/1?include=owner,owner.pets`
+    returns `owner.data: null` on the primary document and then names angela in
+    `included`, along with eight permitted animals that each name
+    `{"type":"owner","id":"angela"}`. Separately,
+    [#233](https://github.com/abofs/stonyx-orm/issues/233) owns whether a
+    resource appears in `included` **at all** — that is membership, a different
+    question, and following it will not lead you to this residual.
+  - **The `POST`/`PATCH` response documents** —
+    [#235](https://github.com/abofs/stonyx-orm/issues/235). `createHandler` and
+    `updateHandler` destructure the request rather than binding it, so wiring
+    them needs a signature change rather than an argument. Until then **one HTTP
+    verb defeats the filter on the same record**: measured, `GET /animals/1`
+    returns `owner.data: null` and `PATCH /animals/1` returns **200 naming
+    angela**, seconds apart, with no query string and no relationship route. Any
+    caller who can read a record can also write it and be handed the id the read
+    withheld.
+  - **`GET /:models/:id/relationships/{relationship}`**, whose *primary data* is
+    linkage, so filtering it is a **membership** decision —
+    [#232](https://github.com/abofs/stonyx-orm/issues/232), the filed child of
+    [#196](https://github.com/abofs/stonyx-orm/issues/196).
 - **A bare `toJSON()` still emits unfiltered linkage, and that is deliberate.**
   `Record.toJSON()` **applies** a verdict; it never **resolves** one. It has no
   request, and the documented `access()` contract permits a predicate to read
@@ -901,8 +945,11 @@ per-record filter. An input you cannot identify must **deny**.
   surface to protect. Closing the residual means moving JSON:API serialization
   **off** the `toJSON` name, tracked as
   [#230](https://github.com/abofs/stonyx-orm/issues/230). If you hand a `Record`
-  to an untrusted consumer, serialize it through the REST layer or pass your own
-  resolved `linkage` option.
+  to an untrusted consumer, serialize it through the REST layer, or resolve a
+  verdict with the **exported** `createLinkageFilter(request)` and pass it as
+  the `linkage` option — do not write your own reading of `access()`. This is a
+  consumer obligation with no signal when it lapses; it is stated once, in full,
+  under [Consumer Contracts](#consumer-contracts) below.
 - **`format()` and `serialize()` are deliberately not filtered, and must stay
   that way.** `format()` is the **persistence** path — its output is what
   `Orm.db.save()` writes to disk — so applying an access filter there would
@@ -965,6 +1012,80 @@ per-record filter. An input you cannot identify must **deny**.
   [#207](https://github.com/abofs/stonyx-orm/issues/207) — puts the condition
   back, and without the guard a denied `403` would delete a record the request
   did not create.
+
+### Consumer Contracts
+
+Obligations this package **cannot enforce**, where nothing fails, warns or
+changes shape when a consumer omits them. One place, findable, per
+`quality.md` rule 2 — if you are relying on `@stonyx/orm` for access control,
+read all of these.
+
+#### `Record.toJSON()` does not filter relationship linkage unless you pass a verdict
+
+**The framework owns this on four surfaces. You own it everywhere else.**
+
+`GET /:models`, `GET /:models/:id` and both `GET /:models/:id/{relationship}`
+shapes resolve a linkage verdict and pass it to `toJSON()` for you. Any other
+path to a document — `JSON.stringify(record)`, `res.json(record)`,
+`console.log(record)`, a custom route, a queue payload, a websocket frame —
+calls `toJSON()` with no verdict, and **the no-verdict document names every
+related id, including records hidden on every one of their own surfaces**
+([#234](https://github.com/abofs/stonyx-orm/issues/234)). That default is
+deliberate and cannot be inverted; the reasons are in
+[Known limitations](#known-limitations) above.
+
+**There is no signal when you omit it.** `linkage` is optional, absent is the
+default, the default is the unfiltered document, and a filtered relationship is
+byte-identical to a genuinely empty one — so nothing on the wire distinguishes
+"filtered" from "forgotten".
+
+Do this:
+
+```js
+import { createLinkageFilter } from '@stonyx/orm';
+
+// `request` is the live request the caller was authorised against. The verdict
+// is REQUEST-SCOPED: build one per request and never cache it across requests,
+// or a second caller is answered with the first caller's authorization.
+const linkage = createLinkageFilter(request);
+
+res.json({ data: record.toJSON({ baseUrl, linkage }) });
+```
+
+Not this:
+
+```js
+// A second, unreviewed reading of access(). It will drift from the one in
+// src/access-verdict.ts, and it will drift in consumer code where no reviewer
+// of this repository will ever see it.
+const linkage = (type, r) => Orm.instance.getAccess(type)?.(request)?.(r) ?? true;
+```
+
+**`linkage` is validated, and an unusable value DENIES.** `undefined` means "no
+verdict supplied" and emits today's document. Any other non-function — `null`,
+`0`, `false`, `''`, `true`, a string, an object — drops **all** linkage on that
+document and logs. This matters because `null` is the natural return of a
+resolver that could not resolve a session: it used to be read as "absent" and
+emit the full document silently.
+
+#### A predicate that ignores `context.model` makes cross-model resolution GRANT
+
+The linkage filter above asks the **related** model's access class the
+model-correct question, but only a predicate that *reads*
+[`context.model`](#the-access-context-second-argument) can give a model-correct
+answer. A single-argument predicate identifies its collection from the request
+and therefore answers about the collection the request was *addressed to* —
+which is the direction that **grants**. Measured, and worked through in
+[Known limitations](#known-limitations). There is no boot-time warning yet
+([#221](https://github.com/abofs/stonyx-orm/issues/221)). **Migrate your
+predicates to the two-argument contract.**
+
+#### `format()` and `serialize()` are never filtered, by design
+
+They are the persistence path. Do not hand their output to an untrusted
+consumer, and do not add a filter to them — `Orm.db.save()` writes `format()`
+output to disk, so filtering there is data loss rather than disclosure
+prevention.
 
 ### Breaking changes
 
@@ -1175,6 +1296,13 @@ GET /animals/1
 #### Limitations
 
 - Only available on GET endpoints (not POST/PATCH)
+- **`included` records are not access-filtered, on either question.** Whether a
+  resource appears in `included` at all is
+  [#233](https://github.com/abofs/stonyx-orm/issues/233); a record that *is*
+  permitted still emits its **own** `relationships.*.data` unfiltered, so
+  `?include=` republishes ids the primary document withholds
+  ([#235](https://github.com/abofs/stonyx-orm/issues/235)). See
+  [Consumer Contracts](#consumer-contracts).
 
 ## Lifecycle Hooks
 

@@ -97,7 +97,7 @@ export interface OrmRecord {
    * method is also the `JSON.stringify` hook, so an implicit caller has no
    * syntactic place to pass it (abofs/stonyx-orm#230).
    */
-  toJSON?(options?: { fields?: Set<string>; baseUrl?: string; linkage?: (type: string, record: unknown) => boolean }): Record<string, unknown>;
+  toJSON?(options?: { fields?: Set<string>; baseUrl?: string; linkage?: LinkageFilter }): Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -282,3 +282,22 @@ export interface AccessContext {
  * context gets `TS2554: Expected 2 arguments, but got 1`.
  */
 export type AccessFunction = (request: unknown, context: AccessContext) => AccessMethod;
+
+/**
+ * A resolved, request-scoped linkage decision: may `record` of model `type` be
+ * NAMED, by id, inside another model's document (abofs/stonyx-orm#234)?
+ *
+ * Arity is `(type, record)` and not `(type, id)` because the per-record filter
+ * a consumer returns is handed the RECORD -- this repo's own fixture reads
+ * `record.owner?.id`, not just `record.id`. The `(type, id)` pair is the CACHE
+ * key inside `createLinkageFilter`, not the input.
+ *
+ * DECLARED HERE, with the rest of the access vocabulary, and imported by every
+ * site that names it. It had three structurally-identical hand-written copies
+ * (`access-verdict.ts`, `record.ts`, `OrmRecord.toJSON` below) bridged to each
+ * other by nothing, so a drift in nullability or a widening of `type` would
+ * have landed on one and not the others -- which is the same "second,
+ * unreviewed vocabulary" failure `src/access-verdict.ts` exists to prevent, one
+ * level up in the type system.
+ */
+export type LinkageFilter = (type: string, record: unknown) => boolean;

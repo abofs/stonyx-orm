@@ -1,8 +1,10 @@
 import { store } from '@stonyx/orm';
+import log from 'stonyx/log';
 import { getComputedProperties } from "./serializer.js";
 import { camelCaseToKebabCase } from '@stonyx/utils/string';
 import { getPluralName } from './plural-registry.js';
 import type Serializer from './serializer.js';
+import type { LinkageFilter } from './types/orm-types.js';
 
 interface ToJSONOptions {
   fields?: Set<string>;
@@ -17,8 +19,11 @@ interface ToJSONOptions {
    * the default and the default is TODAY'S DOCUMENT, unchanged, because
    * `toJSON` is also the `JSON.stringify` hook and an implicit caller has no
    * syntactic place to pass this (abofs/stonyx-orm#230).
+   *
+   * ABSENT and UNUSABLE are read differently, and the difference is a security
+   * decision -- see the three-way reading at the call site below.
    */
-  linkage?: (type: string, record: unknown) => boolean;
+  linkage?: LinkageFilter;
 }
 
 interface SerializeOptions {
@@ -153,6 +158,44 @@ export default class Record {
       attributes[key] = (getter as () => unknown).call(this);
     }
 
+    // `linkage` is a PUBLIC option -- it is on `OrmRecord.toJSON`
+    // (src/types/orm-types.ts) and the README tells consumers to pass one -- so
+    // it arrives from outside this package and may be ANY value. Three
+    // readings, and the difference between the second and the third is a
+    // security decision:
+    //
+    //   ABSENT (`undefined`). No verdict was supplied. Emit today's document.
+    //   Load-bearing and asserted (AC5/AC5b): `toJSON` is also the
+    //   `JSON.stringify` hook, so the implicit caller arrives as
+    //   `toJSON('data')` -- a STRING, which destructures to `undefined` here
+    //   (abofs/stonyx-orm#230).
+    //
+    //   A FUNCTION. Apply it per related record.
+    //
+    //   ANYTHING ELSE -- `null`, `0`, `false`, `''`, `true`, a string, an
+    //   object. DENY, and say so. Neither of the two obvious alternatives is
+    //   available. Reading it as absent is what `!linkage ||` did, and a
+    //   resolver returning `null` because it could not resolve a session is the
+    //   natural shape of that value and the fail-closed INTENT -- measured,
+    //   `toJSON({ linkage: null })` emitted the full pre-#234 linkage with no
+    //   signal, byte-identical to unpatched dev. Reading it as a function
+    //   raises `TypeError: linkage is not a function` out of the enclosing
+    //   `JSON.stringify` -- measured on `true`, `'x'` and `{}` -- which is
+    //   exactly the outcome the comment below promises cannot happen.
+    //
+    // Logged once per DOCUMENT, not once per relationship key or per related
+    // record: an emptied relationship is deliberately indistinguishable from a
+    // genuinely empty one on the wire, so the log is the only signal a consumer
+    // whose resolver silently returned `null` will ever get.
+    const linkageSupplied = linkage !== undefined;
+    const linkageVerdict: LinkageFilter | undefined = !linkageSupplied
+      ? undefined
+      : typeof linkage === 'function' ? linkage : () => false;
+
+    if (linkageSupplied && typeof linkage !== 'function') {
+      log.error?.(`[@stonyx/orm] toJSON() received a \`linkage\` option of type ${linkage === null ? 'null' : typeof linkage} -- it must be a function, so ALL relationship linkage on this \`${modelName}\` document is denied.`);
+    }
+
     for (const [key, childRecord] of Object.entries(this.__relationships)) {
       if (fields && !fields.has(key)) continue;
 
@@ -166,7 +209,7 @@ export default class Record {
       // oracle. It never throws: a throw here escapes the enclosing
       // `JSON.stringify` and takes `console.log` and `Orm.db.save()`'s
       // neighbours with it, which is a far worse failure mode than a status.
-      const isLinkable = (r: Record) => !linkage || linkage(r.__model.__name, r);
+      const isLinkable = (r: Record) => !linkageVerdict || linkageVerdict(r.__model.__name, r);
 
       const relationshipData = Array.isArray(childRecord)
         ? childRecord.filter((r: Record) => r?.__model).filter(isLinkable).map((r: Record) => ({ type: r.__model.__name, id: r.id }))

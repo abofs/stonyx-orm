@@ -56,7 +56,7 @@
  */
 import Orm from '@stonyx/orm';
 import log from 'stonyx/log';
-import type { AccessMethod, AccessOperation } from './types/orm-types.js';
+import type { AccessMethod, AccessOperation, LinkageFilter } from './types/orm-types.js';
 
 /**
  * The classified reading of one `access()` return value.
@@ -70,17 +70,6 @@ export interface AccessVerdict {
   granted: boolean;
   filter?: (record: unknown) => boolean;
 }
-
-/**
- * A resolved, request-scoped linkage decision: may `record` of model `type` be
- * NAMED, by id, inside another model's document?
- *
- * Arity is `(type, record)` and not `(type, id)` because the per-record filter
- * the consumer returns is handed the RECORD -- this repo's own fixture reads
- * `record.owner?.id`, not just `record.id`. The `(type, id)` pair is the CACHE
- * key, not the input.
- */
-export type LinkageFilter = (type: string, record: unknown) => boolean;
 
 const DENIED: AccessVerdict = Object.freeze({ granted: false });
 const GRANTED: AccessVerdict = Object.freeze({ granted: true });
@@ -130,16 +119,41 @@ export function interpretAccess(access: AccessMethod, operation: AccessOperation
  *   - the predicate THROWS. Same reading `auth()` and `isDenied` already use:
  *     a throw is a denial, logged, never a 500 and never a grant.
  *
- * NOTE ON CROSS-MODEL ASKS. The predicate is asked about `type` while the
- * request in hand was dispatched to a DIFFERENT model's route. Since #222 this
- * repo's fixture reads `context.model` and answers correctly; a consumer's
- * arity-1 predicate does not, and there is no supported way to tell which kind
- * was resolved (the boot-time arity warning is abofs/stonyx-orm#213). A
- * consequence to expect rather than debug: the fixture's surviving `request.path`
- * read means asking the OWNER predicate on a request dispatched to
- * `GET /animals/archived` returns a bare `false`. That is a whole-request deny
- * bleeding across models -- harmless, because it is the fail-closed direction,
- * and it is treated as "deny this linkage", not as an error.
+ * NOTE ON CROSS-MODEL ASKS -- READ THIS BEFORE REBASING #232 OR #233 ONTO IT.
+ * The predicate is asked about `type` while the request in hand was dispatched
+ * to a DIFFERENT model's route. This function makes another model's class
+ * REACHABLE and asks it the model-correct question (`{ model: type }`); whether
+ * the ANSWER is model-correct is the CONSUMER's, because only a predicate that
+ * READS `context.model` can give one. Since #222 this repo's fixture does. A
+ * consumer's arity-1 predicate does not, and there is no supported way to tell
+ * which kind was resolved (the boot-time arity warning is
+ * abofs/stonyx-orm#213/#221, unshipped).
+ *
+ * BOTH DEGRADATION DIRECTIONS ARE REACHABLE, AND THE SECOND ONE GRANTS. This is
+ * measured, not reasoned:
+ *
+ *   - CLOSED. The migrated fixture's surviving `request.path` read means asking
+ *     the OWNER predicate on a request dispatched to `GET /animals/archived`
+ *     returns a bare `false` -- a whole-request deny bleeding across models,
+ *     treated here as "deny this linkage", not as an error. That over-denies a
+ *     PERMITTED record.
+ *   - OPEN. An arity-1 predicate -- the shape `setup-rest-server.ts:15-18`
+ *     still declares valid and the README calls the default in every consumer
+ *     tree -- identifies its collection from the request, so asked about
+ *     `owner` on a request dispatched to `/animals` it answers about ANIMALS.
+ *     Measured against this repo's own fixture with `reg.owner` replaced by an
+ *     arity-1 predicate that hides angela on `/owners`:
+ *
+ *       GET /owners     -> ["gina","michael","bob"]   angela hidden, correctly
+ *       GET /animals    -> owners named: [angela, ...]              LEAK
+ *       GET /animals/1  -> owner.data {"type":"owner","id":"angela"}
+ *
+ *     That is byte-for-byte the abofs/stonyx-orm#234 defect, on the surface
+ *     #234 was filed for, AFTER this fix. It is not a regression -- dev
+ *     published the same id unconditionally -- and this file cannot close it,
+ *     because the arity signal is #213/#221. Do NOT write, here or anywhere
+ *     else, that the cross-model ask degrades closed. The standing rule this
+ *     paragraph is held to is in docs/project-structure.md.
  */
 function resolveVerdict(request: unknown, type: string): AccessVerdict {
   const predicate = Orm.instance?.getAccess?.(type);
@@ -173,9 +187,21 @@ function resolveVerdict(request: unknown, type: string): AccessVerdict {
  *     a 6.9x reduction and 41 predicate calls saved.
  *
  * The `(type, id)` cache is a `Map` per type keyed on the RAW id, not on a
- * template-string composite: `Map` compares with SameValueZero, so the numeric
- * id `1` and the string id `'1'` stay distinct, where `` `${type}:${id}` ``
- * would collapse them and let one model's verdict answer for another record.
+ * template-string composite. `Map` compares with SameValueZero, so the numeric
+ * id `1` and the string id `'1'` stay DISTINCT, where `` `${type}:${id}` `` --
+ * or a bare `String(id)` -- collapses them onto one entry and answers the second
+ * record with the first record's verdict.
+ *
+ * WHAT THAT DOES AND DOES NOT PROTECT. It cannot cross MODELS. `decisions` is
+ * already partitioned per type by `byType`, so a composite key inside a per-type
+ * map is one-to-one with the raw one and no owner's verdict could ever answer
+ * for an animal -- the claim that once stood here. The real exposure is narrower
+ * and entirely WITHIN one model: two records of the same type whose ids differ
+ * only by JavaScript type, which a per-record predicate may legitimately answer
+ * differently about (an id read off a JSON body is a string; the same id
+ * assigned by the server is a number). Pinned by unit assertion, because this
+ * fixture cannot produce the collision on its own -- `owner` ids are strings and
+ * `animal` ids are numbers.
  *
  * SCOPE IS ONE REQUEST. The filter closes over the request and must not outlive
  * it -- a verdict cached across requests would answer a second caller with the

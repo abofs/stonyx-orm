@@ -362,7 +362,12 @@ GET /scenes/e001-s001?include=slides.dialogue.character
 2. `traverseIncludePath()` recursively traverses relationships depth-first
 3. Deduplication still by type+id (no duplicates in included array)
 4. Gracefully handles null/missing relationships at any depth
-5. Each included record gets full `toJSON()` representation
+5. Each included record gets full `toJSON()` representation — **unfiltered**.
+   `buildResponse` calls `toJSON({ baseUrl })` with no `linkage` verdict, so a
+   permitted included record still names every related id, including ones the
+   primary document withheld (abofs/stonyx-orm#235). Whether the resource is
+   included at all is a separate, also-unfiltered question
+   (abofs/stonyx-orm#233).
 
 **Key Functions:**
 - `parseInclude()` - Splits comma-separated includes and parses nested paths

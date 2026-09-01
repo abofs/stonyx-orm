@@ -20,8 +20,11 @@
 //      unreviewed authorization vocabulary.
 //
 import QUnit from 'qunit';
+import sinon from 'sinon';
 import { readFile } from 'node:fs/promises';
 import Orm, { createRecord, store } from '@stonyx/orm';
+import * as ormPackage from '@stonyx/orm';
+import log from 'stonyx/log';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
 import OrmRequest from '../../src/orm-request.js';
 import Record from '../../src/record.js';
@@ -205,6 +208,236 @@ module('[Unit] #234 linkage verdict', function(hooks) {
       'the function shape is carried through by identity, not wrapped');
   });
 
+  test('[DEFECT] #234 AC10 — a supplied-but-unusable `linkage` denies, and cannot throw out of JSON.stringify', function(assert) {
+    // `linkage` is PUBLIC (`OrmRecord.toJSON`, src/types/orm-types.ts) and the
+    // README tells consumers to pass one, so it arrives from outside this
+    // package and may be any value. Measured on the pre-fix build, both halves
+    // silently wrong in opposite directions:
+    //
+    //   toJSON({ linkage: null })  -> owner {"type":"owner","id":"..."}   FULL PRE-#234 LEAK
+    //   toJSON({ linkage: true })  -> THREW TypeError: linkage is not a function
+    //
+    // The first is the shape a resolver takes when it cannot resolve a session
+    // -- the fail-closed INTENT -- read as "no verdict supplied". The second is
+    // the outcome src/record.ts's own comment promises cannot happen, because a
+    // throw here escapes the enclosing `JSON.stringify`.
+    const record = seed();
+    const errorStub = sinon.stub(log, 'error');
+
+    try {
+      // ABSENT is the one value that still means "no verdict". Load-bearing:
+      // AC5/AC5b depend on it, and it is the `JSON.stringify` hook path.
+      assert.deepEqual(record.toJSON({ linkage: undefined }).relationships, PRE_CHANGE_RELATIONSHIPS,
+        'an ABSENT linkage is still today\'s document — `undefined` is not "unusable"');
+      assert.strictEqual(errorStub.callCount, 0, 'and absent is not an error');
+
+      // Everything else is supplied-and-unusable. Falsy leaked; truthy threw.
+      const unusable = [
+        ['null', null], ['0', 0], ['false', false], ["''", ''],
+        ['true', true], ["'x'", 'x'], ['{}', {}], ['[]', []],
+      ];
+
+      for (const [label, value] of unusable) {
+        errorStub.resetHistory();
+
+        let document;
+        assert.strictEqual(typeof (document = record.toJSON({ linkage: value })), 'object',
+          `toJSON({ linkage: ${label} }) returns a document rather than throwing`);
+
+        assert.strictEqual(document.relationships.owner.data, null,
+          `${label} DENIES the belongsTo (was: the full pre-#234 linkage, or a TypeError)`);
+        assert.deepEqual(document.relationships.traits.data, [],
+          `${label} DENIES the hasMany`);
+
+        // The wire shape is deliberately indistinguishable from a genuinely
+        // empty relationship, so the log is the ONLY signal a consumer whose
+        // resolver quietly returned `null` will ever get. Once per DOCUMENT --
+        // this record has TWO relationships, so a per-key or per-record log
+        // would count higher and a missing one would count zero.
+        assert.strictEqual(errorStub.callCount, 1,
+          `${label} is reported exactly once per document, not once per relationship`);
+        assert.ok(/must be a function/.test(errorStub.firstCall.args[0]),
+          `${label} says what was wrong with it`);
+      }
+
+      // And the promise src/record.ts makes: no value of this option throws out
+      // of the enclosing `JSON.stringify`, which would take `console.log` and
+      // `Orm.db.save()`'s neighbours down with it.
+      for (const [label, value] of unusable) {
+        const wrapper = { toJSON: () => record.toJSON({ linkage: value }) };
+        assert.strictEqual(typeof JSON.stringify({ data: wrapper }), 'string',
+          `JSON.stringify survives a linkage of ${label}`);
+      }
+
+      // CONFIRMS THE CHECK COULD HAVE FAILED: a usable verdict is still applied
+      // rather than everything being denied wholesale.
+      assert.deepEqual(record.toJSON({ linkage: () => true }).relationships, PRE_CHANGE_RELATIONSHIPS,
+        'a FUNCTION that grants still emits the full linkage');
+    } finally {
+      errorStub.restore();
+      unseed();
+    }
+  });
+
+  test('[GUARD] #234 AC11 — the decision cache keys on the RAW id, so 1 and \'1\' stay distinct', function(assert) {
+    // The PR presents this as a deliberate, security-relevant choice, and it was
+    // pinned by nothing: `String(id)` AND the exact `${type}:${id}` composite the
+    // comment warns against BOTH survived the full 979-test suite.
+    //
+    // The hazard the comment claimed — "let one model's verdict answer for
+    // another record" — is unachievable: `decisions` is already partitioned per
+    // type by `byType`, so a composite key inside a per-type map is one-to-one
+    // with the raw one. The real exposure is narrower and entirely WITHIN one
+    // model: two records whose ids differ only by JavaScript type. This fixture
+    // cannot produce it (owner ids are strings, animal ids are numbers), so the
+    // probe builds it.
+    const registry = Orm.instance.accessFunctions;
+    const PROBE = 'zz-234-rawid-probe';
+    let recordCalls = 0;
+
+    registry[PROBE] = () => record => { recordCalls++; return typeof record.id === 'number'; };
+
+    try {
+      const first = createLinkageFilter(READ_REQUEST);
+      assert.strictEqual(first(PROBE, { id: 1 }), true, 'the numeric id 1 is permitted');
+      assert.strictEqual(first(PROBE, { id: '1' }), false,
+        "and the string id '1' is a DIFFERENT record, asked separately (String(id) and `${type}:${id}` both answer true here)");
+
+      // Both orders, because a collapsing key is order-sensitive: whichever
+      // record is asked first wins and answers for the other.
+      recordCalls = 0;
+      const second = createLinkageFilter(READ_REQUEST);
+      assert.strictEqual(second(PROBE, { id: '1' }), false, "the string id '1' is denied when asked first");
+      assert.strictEqual(second(PROBE, { id: 1 }), true, 'and the numeric id 1 is still permitted after it');
+      assert.strictEqual(recordCalls, 2, 'two distinct raw ids means two predicate invocations, not one cached answer');
+
+      // CONFIRMS THE CACHE IS GENUINELY CONSULTED — without this, the two
+      // assertions above are equally green against a build with no cache at
+      // all, which is the opposite defect.
+      recordCalls = 0;
+      const third = createLinkageFilter(READ_REQUEST);
+      third(PROBE, { id: 7 });
+      third(PROBE, { id: 7 });
+      third(PROBE, { id: 7 });
+      assert.strictEqual(recordCalls, 1, 'and the SAME raw id is decided once and cached');
+    } finally {
+      delete registry[PROBE];
+    }
+  });
+
+  test('[DEFECT] #234 AC12 — both fail-closed catch branches are entered, and both deny', function(assert) {
+    // These two blocks were DEAD under the 979: inverting each to GRANT — the
+    // fail-open direction, on a security path — left the suite at 979/0/0, and
+    // replacing BOTH bodies with `throw` also left it at 979/0/0, which is the
+    // decisive measurement: no test entered either block.
+    const registry = Orm.instance.accessFunctions;
+    const PROBE = 'zz-234-throwing-probe';
+    const errorStub = sinon.stub(log, 'error');
+
+    try {
+      // BRANCH 1 — `resolveVerdict`'s catch. The consumer `access()` itself
+      // throws while being asked about a related model.
+      registry[PROBE] = () => { throw new Error('boom-in-access'); };
+
+      const resolveFilter = createLinkageFilter(READ_REQUEST);
+      let verdict;
+
+      assert.strictEqual(typeof (verdict = resolveFilter(PROBE, { id: 1 })), 'boolean',
+        'a throwing access() does not propagate out of the filter');
+      assert.strictEqual(verdict, false, 'it DENIES (mutating this branch to GRANT was invisible to all 979 tests)');
+      assert.strictEqual(errorStub.callCount, 1, 'and it is logged — a silently-emptied relationship has no other signal');
+      assert.ok(/access\(\) threw while resolving linkage/.test(errorStub.firstCall.args[0]),
+        'the log names the branch that denied');
+      assert.ok(errorStub.firstCall.args[0].includes('boom-in-access'), 'and carries the consumer error');
+
+      // Bounded: at most once per type per request, so a predicate that throws
+      // on every record cannot flood the log.
+      resolveFilter(PROBE, { id: 2 });
+      resolveFilter(PROBE, { id: 3 });
+      assert.strictEqual(errorStub.callCount, 1, 'the per-type verdict is cached, so the denial is logged once per type');
+
+      // BRANCH 2 — the per-record catch. `access()` returns a predicate, and
+      // THAT throws. A different branch, one layer down, reached only after a
+      // verdict has already been granted.
+      errorStub.resetHistory();
+      registry[PROBE] = () => () => { throw new Error('boom-per-record'); };
+
+      const recordFilter = createLinkageFilter(READ_REQUEST);
+
+      assert.strictEqual(typeof (verdict = recordFilter(PROBE, { id: 1 })), 'boolean',
+        'a throwing per-record predicate does not propagate either');
+      assert.strictEqual(verdict, false, 'it DENIES (mutating this branch to GRANT was also invisible to all 979 tests)');
+      assert.strictEqual(errorStub.callCount, 1, 'and is logged');
+      assert.ok(/access filter threw while filtering linkage/.test(errorStub.firstCall.args[0]),
+        'with the OTHER message — the two branches are distinguishable in a log');
+
+      // Bounded per distinct (type, id), and the denial is cached like any
+      // other decision rather than re-thrown per lookup.
+      recordFilter(PROBE, { id: 1 });
+      assert.strictEqual(errorStub.callCount, 1, 'the denial is cached per (type, id), so one record logs once');
+      recordFilter(PROBE, { id: 2 });
+      assert.strictEqual(errorStub.callCount, 2, 'and a second record is a second decision');
+
+      // CONFIRMS THE CHECKS COULD HAVE FAILED: the same probe registry entry,
+      // not throwing, grants — so `false` above is the catch branch answering
+      // and not an unrelated denial.
+      errorStub.resetHistory();
+      registry[PROBE] = () => () => true;
+      assert.strictEqual(createLinkageFilter(READ_REQUEST)(PROBE, { id: 1 }), true,
+        'a non-throwing predicate on the same probe type grants');
+      assert.strictEqual(errorStub.callCount, 0, 'and logs nothing');
+    } finally {
+      errorStub.restore();
+      delete registry[PROBE];
+    }
+  });
+
+  test('[GUARD] #234 AC13 — the linkage path asks about the RELATED model, for a READ', function(assert) {
+    // `model` was well covered (dropping the context kills 7, including
+    // orm-test.ts:953). `operation` was not: `'delete'` survived at 979/0/0,
+    // so a consumer predicate that branches on `context.operation` — which #222
+    // made the supported contract — could be asked the wrong question and
+    // nothing here would notice.
+    const registry = Orm.instance.accessFunctions;
+    const PROBE = 'zz-234-context-probe';
+    const seen = [];
+
+    registry[PROBE] = (request, context) => { seen.push({ request, context }); return true; };
+
+    try {
+      assert.strictEqual(createLinkageFilter(READ_REQUEST)(PROBE, { id: 1 }), true, 'precondition: the probe grants');
+      assert.strictEqual(seen.length, 1, 'the consumer predicate was asked exactly once');
+      assert.deepEqual(seen[0].context, { model: PROBE, operation: 'read' },
+        'asked about the RELATED model, for a read — naming an id is a read, whatever verb the request carries');
+      assert.strictEqual(seen[0].request, READ_REQUEST,
+        'and handed the live request by identity, not a fabricated one');
+    } finally {
+      delete registry[PROBE];
+    }
+  });
+
+  test('[GUARD] #234 AC14 — the one interpreter is reachable from the package entry point', function(assert) {
+    // The README tells a consumer serializing a `Record` outside the REST layer
+    // to pass their own resolved `linkage`. Without an exported factory the
+    // only way to follow that advice is to write a SECOND reading of `access()`
+    // in consumer code — the exact "unreviewed second authorization vocabulary"
+    // src/access-verdict.ts exists to prevent, reproduced where no reviewer of
+    // this repo will ever see it drift.
+    assert.strictEqual(typeof ormPackage.createLinkageFilter, 'function',
+      '`createLinkageFilter` is exported from @stonyx/orm');
+    assert.strictEqual(ormPackage.createLinkageFilter.length, 1, 'and takes the request');
+
+    const filter = ormPackage.createLinkageFilter(READ_REQUEST);
+    assert.strictEqual(typeof filter, 'function', 'it returns a filter');
+    assert.strictEqual(filter.length, 2, 'of the (type, record) arity `toJSON`s `linkage` option expects');
+
+    // Reachable AND correct through the public name: an unclaimed model denies,
+    // so the exported factory is the same fail-closed primitive the four wired
+    // surfaces use, not a laxer public wrapper.
+    assert.strictEqual(filter('zz-234-model-claimed-by-nothing', { id: 1 }), false,
+      'and it fails closed on a model no access class claims');
+  });
+
   test('[GUARD] #234 AC8 — README Known limitations records the linkage and format() scope', async function(assert) {
     const readme = await readFile(new URL('../../README.md', import.meta.url), 'utf8');
     const start = readme.indexOf('### Known limitations');
@@ -221,6 +454,65 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     assert.ok(section.includes('A bare `toJSON()` still emits unfiltered linkage'),
       'the residual exposure on the language-hook path is recorded as consumer-facing behaviour');
     assert.ok(/issues\/230/.test(section), 'and points at the issue that closes it');
-    assert.ok(/issues\/233/.test(section), 'the `included` membership boundary is attributed to its own issue');
+    assert.ok(/issues\/233/.test(section), 'the `included` MEMBERSHIP boundary is attributed to its own issue');
+
+    // #233 alone is the WRONG pointer for what this PR defers, and it was for
+    // three reviews: #233 owns whether a resource appears in `included` at
+    // all; the deferred LINKAGE work -- inside `included` and on the two write
+    // handlers -- is #235, which appeared nowhere in this repository. A reader
+    // who follows the only link given lands on membership and is never told
+    // that a PERMITTED record still publishes hidden ids.
+    assert.ok(/issues\/235/.test(section),
+      'and the deferred LINKAGE residual is attributed to #235, not folded into the membership issue');
+    assert.ok(section.includes('PATCH /animals/1'),
+      'the POST/PATCH exclusion states its consequence rather than naming the handlers');
+
+    // The security claim this section is not permitted to make unqualified.
+    // `docs/project-structure.md` carries the standing rule; the measured
+    // counter-example is an arity-1 predicate, which GRANTS.
+    assert.ok(/does not guarantee a model-correct\s+answer/.test(section),
+      'the linkage bullet does not assert model-correct filtering unqualified');
+    assert.ok(/single-argument predicate remains the default in every consumer\s+tree/.test(section),
+      'and names the shape that makes it grant');
+    assert.ok(/issues\/221/.test(section),
+      'and points at the arity signal that would surface an unmigrated predicate');
+    assert.notOk(/filtered\s*\n?\s*through the related model's own access class on `GET/.test(section),
+      'the unqualified "filtered through the related model\'s own access class" claim is gone');
+
+    // quality.md rule 2: the consumer obligation lives in ONE findable place,
+    // not only in a design doc, an agent brief or a code comment.
+    assert.ok(readme.includes('### Consumer Contracts'),
+      'the README has a Consumer Contracts section (grep -i "consumer contract" returned nothing repo-wide)');
+    assert.ok(readme.includes('createLinkageFilter'),
+      'which names the exported factory rather than inviting a second reading of access()');
+  });
+
+  test('[GUARD] #234 AC8b — docs/project-structure.md no longer says this mechanism is unimplemented', async function(assert) {
+    // That file states its own purpose: "this file is where the next reader
+    // checks whether the chain is still blocked." It said the cross-model
+    // resolution was "not implemented yet" and that "the ORM does not yet use
+    // it on this path" AFTER this change implemented and wired it, which is
+    // the one failure mode that block exists to prevent.
+    const doc = await readFile(new URL('../../docs/project-structure.md', import.meta.url), 'utf8');
+
+    assert.notOk(doc.includes("resolve a different model's access class, which is not implemented yet"),
+      'the false "not implemented yet" clause is gone');
+    assert.notOk(doc.includes('**The mechanism exists; the ORM does not yet use it on this path**'),
+      'and so is the unqualified "does not yet use it" claim');
+
+    assert.ok(doc.includes('cross-model resolution IS now\n> implemented for it'),
+      'the file records that naming IS now resolved cross-model');
+    assert.ok(doc.includes('on the linkage\n> READ path only, never on this one'),
+      'and that the WRITE path it is written about is still unrefused');
+
+    // The sentence that survives correctly: this is MEMBERSHIP, which #234 did
+    // not close, and deleting the block rather than amending it would have lost
+    // it.
+    assert.ok(doc.includes('`GET /owners/angela` can be 404 while\n> `GET /animals/1/owner` returns angela in full'),
+      'the membership gap that is still open is still stated');
+
+    // And the limit that matters most to a reader of that file.
+    assert.ok(/An arity-1 predicate can make it GRANT/.test(doc),
+      'the fail-OPEN direction is named, not just the fail-closed one');
   });
 });

@@ -4,6 +4,7 @@ import sinon from 'sinon';
 import Orm, { createRecord, updateRecord, store, beforeHook, afterHook, clearHook, clearAllHooks } from '@stonyx/orm';
 import Cron from '@stonyx/cron';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
+import log from 'stonyx/log';
 import { raw, serialized } from '../sample/payload.js';
 import { dbKey } from '../../src/db.js';
 import { readFile, deleteFile } from '@stonyx/utils/file';
@@ -3655,6 +3656,83 @@ module('[Integration] ORM', function(hooks) {
       const after = await getJson('/animals/1');
       assert.deepEqual(after.body.data.relationships.traits.data, [{ type: 'trait', id: 1 }, { type: 'trait', id: 2 }],
         'the registry entry was restored');
+    });
+
+    test('[DEFECT] #234 AC4b — a predicate that throws denies the linkage over the live router, and still answers 200', async function(assert) {
+      // The two fail-closed `catch` branches in src/access-verdict.ts were DEAD
+      // under the suite. Measured on the build this test was added to:
+      //
+      //   resolveVerdict catch  DENIED -> GRANTED            -> 979 / 0 / 0
+      //   per-record catch      false  -> true               -> 979 / 0 / 0
+      //   BOTH catch bodies replaced with `throw`            -> 979 / 0 / 0
+      //
+      // The third is the decisive one: neither block was entered by any test,
+      // so the two fail-OPEN inversions above were invisible on a security
+      // path. AC12 (test/unit/linkage-verdict-test.ts) enters both branches
+      // directly; this asserts the property that actually ships — the status
+      // the CONSUMER sees, over the live router, is still 200 and the ids are
+      // withheld, rather than a 500 that is itself an existence oracle.
+      const errorStub = sinon.stub(log, 'error');
+
+      try {
+        // BRANCH 1 — the consumer `access()` throws while being asked about a
+        // related model. `trait` is the one linked type that normally resolves
+        // to an unconditional grant, so its linkage is fully emitted otherwise.
+        await withAccess('trait', () => { throw new Error('boom-in-access'); }, async () => {
+          const { status, body } = await getJson('/animals/1');
+
+          assert.strictEqual(status, 200, 'a throwing predicate is a denial, never a 500');
+          assert.notOk('errors' in body, 'and no `errors` member — the drop shape is unchanged');
+          assert.deepEqual(body.data.relationships.traits.data, [],
+            'the linkage it could not authorise is dropped (was: [{trait,1},{trait,2}])');
+          assert.ok(body.data.relationships.traits.links,
+            'and the links survive — built from the SERIALIZED record id, never the related one');
+          assert.ok(errorStub.getCalls().some(call => /access\(\) threw while resolving linkage/.test(call.args[0])),
+            'the denial is logged — an emptied relationship is otherwise indistinguishable from an empty one');
+        });
+
+        // BRANCH 2 — `access()` returns a per-record predicate and THAT throws.
+        // A different branch, reached only after a verdict has been granted.
+        //
+        // The target record is DERIVED, not hard-coded: animal 1's owner is
+        // angela, who is already filtered out, so asserting against it would be
+        // vacuously green. Find a record whose owner IS currently named.
+        const before = await getJson('/animals');
+        const withNamedOwner = before.body.data.find(record => record.relationships.owner.data);
+        assert.ok(withNamedOwner, 'precondition: some animal names a permitted owner, or the next assertion is vacuous');
+
+        const namedOwners = new Set(
+          before.body.data.map(record => record.relationships.owner.data?.id).filter(Boolean)
+        );
+        assert.ok(namedOwners.size > 0, `precondition: the collection names ${namedOwners.size} distinct owners`);
+
+        errorStub.resetHistory();
+
+        await withAccess('owner', () => () => { throw new Error('boom-per-record'); }, async () => {
+          const single = await getJson(`/animals/${withNamedOwner.id}`);
+
+          assert.strictEqual(single.status, 200, 'still 200');
+          assert.notOk('errors' in single.body, 'still no `errors` member');
+          assert.strictEqual(single.body.data.relationships.owner.data, null,
+            `the owner this record named seconds ago is withheld (was: ${JSON.stringify(withNamedOwner.relationships.owner.data)})`);
+
+          const collection = await getJson('/animals');
+          assert.strictEqual(collection.status, 200, 'and the collection surface too');
+          assert.deepEqual(collection.body.data.filter(record => record.relationships.owner.data), [],
+            `no record names any owner (was: ${namedOwners.size} distinct owners named)`);
+          assert.ok(errorStub.getCalls().some(call => /access filter threw while filtering linkage/.test(call.args[0])),
+            'logged, and with the OTHER message — the two branches are distinguishable in a log');
+        });
+
+        // Restored, and observably so — a throwing predicate must not be sticky.
+        const after = await getJson('/animals');
+        assert.deepEqual(
+          [...new Set(after.body.data.map(record => record.relationships.owner.data?.id).filter(Boolean))].sort(),
+          [...namedOwners].sort(),
+          'every owner the collection named before the throwing predicate is named again after it');
+      } finally {
+        errorStub.restore();
+      }
     });
 
     test('[GUARD] #234 AC6 — a filtered relationship is indistinguishable from an empty one', async function(assert) {

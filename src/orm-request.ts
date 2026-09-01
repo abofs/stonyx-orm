@@ -434,6 +434,13 @@ function buildResponse(
 
   const includedRecords = collectIncludedRecords(recordOrRecords, includes);
   if (includedRecords.length > 0) {
+    // NO `linkage` ARGUMENT, deliberately, and abofs/stonyx-orm#235 owns adding
+    // one. Until it does, a PERMITTED record here emits the full pre-#234
+    // document: `GET /animals/1?include=owner` filters the primary document's
+    // `owner.data` to `null` and then names `owner:angela` in `included`.
+    // Whether a resource reaches this array at all is a different question
+    // (membership, abofs/stonyx-orm#233) and closing that one does not close
+    // this one.
     response.included = includedRecords.map(record => record.toJSON?.({ baseUrl }));
   }
 
@@ -663,10 +670,21 @@ export default class OrmRequest extends Request {
       const baseUrl = getBaseUrl(request);
       const linkage = createLinkageFilter(request);
 
-      // `buildResponse` is deliberately NOT given the linkage filter. It builds
-      // `included`, and WHETHER A RESOURCE APPEARS THERE AT ALL is membership,
-      // which belongs to abofs/stonyx-orm#233 -- see this file's #234 note and
-      // the ownership boundary in that issue. Only the PRIMARY document's
+      // `buildResponse` is deliberately NOT given the linkage filter, and the
+      // residual that leaves is NOT the one #233 owns. Two different questions:
+      //
+      //   - WHETHER A RESOURCE APPEARS in `included` at all is MEMBERSHIP ->
+      //     abofs/stonyx-orm#233.
+      //   - What a record already IN `included` may NAME is LINKAGE -- the same
+      //     question #234 answers for the primary document -- and it is
+      //     abofs/stonyx-orm#235, which also owns createHandler/updateHandler.
+      //
+      // The residual, stated so the next reader does not have to derive it:
+      // `buildResponse` calls `record.toJSON?.({ baseUrl })` with no `linkage`
+      // argument, so a PERMITTED record in `included` emits the full pre-#234
+      // document. Measured: `GET /animals/1?include=owner` returns
+      // `owner.data: null` on the primary document and `owner:angela` in
+      // `included`. One query parameter deep. Only the PRIMARY document's
       // linkage is filtered here.
       return buildResponse(record.toJSON?.({ fields: modelFields, baseUrl, linkage }), request.query?.include, record, {
         links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
