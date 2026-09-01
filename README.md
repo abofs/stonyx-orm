@@ -985,10 +985,13 @@ per-record filter. An input you cannot identify must **deny**.
   "indistinguishable" as a property of the response — it is a property of the
   relationship member alone. The other channels in the same class are
   [#245](https://github.com/abofs/stonyx-orm/issues/245) (computed attributes,
-  which is the one measured above),
-  [#233](https://github.com/abofs/stonyx-orm/issues/233) (`included`
-  membership) and [#246](https://github.com/abofs/stonyx-orm/issues/246) (the
-  absence of `attributes.<fk>` on a `POST` response), all open. **Audit your
+  which is the one measured above) and
+  [#246](https://github.com/abofs/stonyx-orm/issues/246) (the
+  `attributes.<fk>` echo of an unresolved `belongsTo` target) — **both still
+  open**. `included` membership was the third,
+  [#233](https://github.com/abofs/stonyx-orm/issues/233), and it is **closed**:
+  a related record its own model's access class rejects is dropped at the
+  traversal's push site and is no longer a member. **Audit your
   computed properties before you treat a dropped member as unobservable.** Nothing on either family errors and no status changes — the
   status on these routes belongs to the **parent**, and `data` carries the
   answer about the related record. The `/relationships/` family built its `{type, id}` by
@@ -1046,24 +1049,35 @@ per-record filter. An input you cannot identify must **deny**.
   true for `GET /owners/{id}`, false for linkage, and false for a `hasMany`
   related-resource route.
 
-- **`?include=` records are still not filtered — the relationship routes now
-  are.** *Re-specified by [#232](https://github.com/abofs/stonyx-orm/issues/232);
-  the sentence this replaces said all three surfaces were unfiltered, and two of
-  them no longer are.* `GET /animals/1/owner` and
+- **`?include=` records are filtered on both questions now, and so are the
+  relationship routes.** *Re-specified twice, each time by the story that
+  falsified it, and recorded here rather than deleted. The original said all
+  three surfaces were unfiltered.
+  [#232](https://github.com/abofs/stonyx-orm/issues/232) made two of them
+  filtered and the bullet became "**`?include=` records are still not
+  filtered — the relationship routes now are**", with the body "**`?include=owner`
+  still does not**: it serializes the related record without resolving that
+  class, so a filter on `/owners` does not hide an owner reached through
+  `?include=` on `/animals`."
+  [#233](https://github.com/abofs/stonyx-orm/issues/233) falsified that half
+  too.* `GET /animals/1/owner` and
   `GET /animals/1/relationships/owner` resolve the related model's own access
-  class (see the bullet above). **`?include=owner` still does not**: it
-  serializes the related record without resolving that class, so a filter on
-  `/owners` does not hide an owner reached through `?include=` on `/animals`.
-  There are **two** open questions here and they are owned separately —
-  [#233](https://github.com/abofs/stonyx-orm/issues/233), the remaining child of
+  class (see the bullet above). **`?include=owner` now resolves it as well**,
+  at the traversal's push site, so a filter on `/owners` *does* hide an owner
+  reached through `?include=` on `/animals`: measured on this branch,
+  `GET /animals/1?include=owner` answers `200` with **no `included` array at
+  all**, where before it served the hidden owner's full document.
+  There were **two** questions here and they were owned separately — #233, the
+  remaining child of
   [#196](https://github.com/abofs/stonyx-orm/issues/196), owns whether a
   resource enters `included` **at all** (membership), and
   [#235](https://github.com/abofs/stonyx-orm/issues/235) owns the
   `relationships.*.data` emitted **inside** a record that is already there
-  (linkage). Neither closes the other, and following only #233 will not lead you
-  to the second. Membership — whether the related resource is served at all — is
-  a different question from which ids a document may *name*, immediately
-  below.
+  (linkage). **Both have now landed, and neither closed the other** — they are
+  still answered by different mechanisms at different sites, and a resource can
+  legitimately be a member while its own linkage is filtered. Membership —
+  whether the related resource is served at all — remains a different question
+  from which ids a document may *name*, immediately below.
 - **Relationship linkage is filtered on every request-bound surface that
   serializes a record — the reads, the two writes, and `included`.** A
   document's `relationships.*.data` used to publish the id of every related
@@ -1124,7 +1138,8 @@ per-record filter. An input you cannot identify must **deny**.
   answered by different mechanisms and neither closes the other — a resource
   can legitimately be a member while its own linkage is filtered. A related
   resource is judged by **its own** model's access class at the traversal's
-  push site, so a record hidden on its own route is not a member, and **the
+  push site, so a record that class's **per-record filter** rejects is not a
+  member, and **the
   subtree beneath it is never traversed**: dropping a parent *after* descending
   through it would publish that parent's exact child set. Measured on
   `dev @ c106cf9`, `GET /animals/1?include=owner,owner.pets` returned nine
@@ -1137,6 +1152,37 @@ per-record filter. An input you cannot identify must **deny**.
   sideload is byte-identical to a genuinely empty one — same `200`, the same
   top-level keys, no `included` member on either, no `errors` — so its absence
   carries no signal about whether the record exists.
+
+  **Read "per-record filter" literally — it is not "everything the
+  record-addressed route refuses", and the difference is measurable.** The
+  linkage ask carries `recordId: null`, so a deny expressed as a
+  request-scoped `return false` cannot fire on this path at all. The shipped
+  sample expresses the `archived` owner's deny that way, and measured
+  unauthenticated on this branch — byte-identically on `dev @ b23cfec`, so this
+  is not a regression this change introduces —
+  `GET /owners/archived` is `403` while `GET /animals/9500?include=owner`
+  answers `200` with her full document. That is
+  [#243](https://github.com/abofs/stonyx-orm/issues/243)'s mechanism, and #243
+  records it on `GET /owners` only; it reaches `included` membership and the
+  `#232` related-resource route the same way. **#233 does not close it, and a
+  consumer who needs `?include=` to honour a per-record deny must express that
+  deny as a filter.**
+
+  **And read "carries no signal" as a property of the `included` member, the
+  same way [Known limitations](#known-limitations) already asks you to read
+  "indistinguishable" — not as a property of the whole response.** The prune is
+  unobservable in `included`; the *rest* of the document is a separate
+  question, and the same computed-and-serialized-attribute channels recorded
+  above still apply to it. Measured counter-example on this very fixture pair:
+  `GET /traits/2?include=tag` prunes the unclaimed `tag` from `included` and
+  still serves `attributes.tag: "never-mounted"`, while `GET /traits/1` has no
+  `tag` key at all — an existence oracle in `attributes`, from
+  `src/serializer.ts` echoing the raw foreign key of a `belongsTo` target that
+  did not resolve. That is
+  [#246](https://github.com/abofs/stonyx-orm/issues/246)'s mechanism reached on
+  a **read**, with [#248](https://github.com/abofs/stonyx-orm/issues/248) as
+  its precondition — **audit your attributes before you treat a pruned
+  sideload as unobservable.**
 
   **That resolves the right class; it does not guarantee a model-correct
   answer, and the failure direction is not the safe one.** Only a predicate that
@@ -1733,20 +1779,41 @@ GET /animals/1
 2. Recursively traverses relationships depth-first
 3. Deduplication still by type+id (no duplicates in included array)
 4. Gracefully handles null/missing relationships at any depth
-5. Each included record gets full `toJSON()` representation
+5. Each related record is judged by **its own** model's access class at the
+   push site before it is added, so a denied record neither enters `included`
+   nor becomes a parent at the next depth
+   ([#233](https://github.com/abofs/stonyx-orm/issues/233)) — see the
+   Limitations below for what "denied" does and does not cover
+6. Each included record gets full `toJSON()` representation, with its
+   **linkage filtered** by the same verdict object the primary document was
+   serialized with ([#235](https://github.com/abofs/stonyx-orm/issues/235))
 
 #### Limitations
 
 - Only available on GET endpoints (not POST/PATCH)
-- **`included` is access-filtered on one of the two questions, not both.** What
-  a record already in `included` may **name** in its own
+- **`included` is access-filtered on both of the two questions.** *Re-specified
+  by [#233](https://github.com/abofs/stonyx-orm/issues/233). The sentence this
+  replaces said membership "is still unfiltered (#233): a record that is 404 on
+  its own routes is still served as an `included` resource, attributes and
+  all."* What a record already in `included` may **name** in its own
   `relationships.*.data` is filtered
   ([#235](https://github.com/abofs/stonyx-orm/issues/235)) — `?include=` no
   longer republishes ids the primary document withholds. Whether a resource
-  appears in `included` **at all** is *membership* and is still unfiltered
-  ([#233](https://github.com/abofs/stonyx-orm/issues/233)): a record that is
-  404 on its own routes is still served as an `included` resource, attributes
-  and all. See [Consumer Contracts](#consumer-contracts).
+  appears in `included` **at all** is *membership*, and #233 filters it: a
+  related resource is judged by **its own** model's access class at the
+  traversal's push site, so a record that class's **per-record filter** rejects
+  is not a member, and the subtree beneath it is never traversed.
+- **Membership is filtered by the per-record filter, not by everything a
+  record-addressed route refuses.** A deny expressed as a request-scoped
+  `return false` — the shape the shipped sample uses for the `archived`
+  owner — is **not** expressible on this path, because the linkage ask carries
+  `recordId: null`. Measured on this branch and byte-identically on `dev`:
+  `GET /owners/archived` is `403` while `GET /animals/9500?include=owner`
+  serves her document in full. That is
+  [#243](https://github.com/abofs/stonyx-orm/issues/243)'s mechanism, not
+  #233's, and it reaches every linkage surface rather than only `GET /owners`.
+  Express a per-record deny as a **filter** if you need `?include=` to honour
+  it. See [Consumer Contracts](#consumer-contracts).
 
 ## Lifecycle Hooks
 

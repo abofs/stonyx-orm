@@ -76,8 +76,18 @@
  * signal of is WHICH related record is being asked about -- `recordId` is
  * `null` there and `request.params` names a record of a different model. See
  * `AccessContext.recordId` in ./types/orm-types.ts for the full statement of
- * that limit. `?include=` is still unfiltered and is abofs/stonyx-orm#233 /
- * #235.
+ * that limit.
+ *
+ * AND THE `?include=` HALF IS NOW OUT OF DATE TOO, CORRECTED THE SAME WAY. It
+ * read: "`?include=` is still unfiltered and is abofs/stonyx-orm#233 / #235."
+ * Both have landed. #235 filters what a record already in `included` may NAME,
+ * and #233 filters MEMBERSHIP at the traversal's push site -- see
+ * `traverseIncludePath` below. The ask is the same shape as the
+ * related-resource one and carries the same limit: `recordId` is `null`, so a
+ * deny expressible only as a request-scoped `return false` -- which is how the
+ * shipped sample spells `/archived` -- still cannot fire on this path. That
+ * residual is abofs/stonyx-orm#243's, not #233's, and it is measured
+ * byte-identical on `dev`.
  *
  * SUPERSEDED 2026-09-01 BY abofs/stonyx-orm#236/#237, AND KEPT FOR THE
  * CONSTRAINT IT STATES RATHER THAN AS A DESCRIPTION OF THE CODE. The context
@@ -839,11 +849,17 @@ export default class OrmRequest extends Request {
       // is the SAME object the primary document is serialized with -- one
       // verdict per type for the whole response, sideload included.
       //
-      // The boundary that remains, so the next reader does not have to derive
-      // it: this closes what a record already in `included` may NAME. WHETHER a
+      // The boundary, so the next reader does not have to derive it: this
+      // closes what a record already in `included` may NAME. WHETHER a
       // resource appears in `included` at all is MEMBERSHIP and it is
-      // abofs/stonyx-orm#233's -- a hidden owner is still a member here.
-      // Neither question closes the other.
+      // abofs/stonyx-orm#233's. THAT IS NOW CLOSED TOO, and the same `linkage`
+      // object closes it: `buildResponse` hands this filter to
+      // `collectIncludedRecords`, which denies at the push site. Corrected
+      // rather than deleted -- this comment read "a hidden owner is still a
+      // member here", which is the sentence the identical copy in
+      // `buildResponse` carried and which #233 falsified in both places. They
+      // are still two questions and neither closes the other: a record can be
+      // a member while its own linkage is filtered.
       return buildResponse(record.toJSON?.({ fields: modelFields, baseUrl, linkage }), request.query?.include, record, {
         links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
         baseUrl,
