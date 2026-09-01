@@ -26,7 +26,7 @@ import QUnit from 'qunit';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
 import OrmRequest from '../../src/orm-request.js';
 
-const { module, test } = QUnit;
+const { module, test, todo } = QUnit;
 
 // The four verbs, and the ONLY four. Both copies of the documentation have to
 // name every one of them; a copy that names three has not documented the
@@ -100,6 +100,12 @@ module('[Unit] access() context argument (#202)', function(hooks) {
       'and the four operations are the four verbs, in method order GET/POST/PATCH/DELETE');
     assert.deepEqual([...new Set(seen.map(context => context.model))], ['animal'],
       'with `model` fixed at mount time on every one of them');
+  });
+
+  todo('AC1 (#236) — the auth-time context carries exactly `model`, `operation` and `recordId`', function(assert) {
+    // SCAFFOLD. Replaces the two-key pin in AC4 above; see the refinement
+    // comment on #228, §8 "#228a" assertion 1.
+    assert.ok(false, 'SCAFFOLD — not implemented');
   });
 
   test('AC6 — src/orm-request.ts documents the second argument, its keys and the four-verb vocabulary', async function(assert) {

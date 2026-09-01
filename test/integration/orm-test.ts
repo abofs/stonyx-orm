@@ -15,7 +15,7 @@ import RestServer from '@stonyx/rest-server';
 import OrmRequest from '../../dist/orm-request.js';
 import net from 'node:net';
 
-const { module, test } = QUnit;
+const { module, test, todo } = QUnit;
 let endpoint;
 
 //let endpoint;
@@ -1744,6 +1744,11 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(filtered.status, 404, 'and a record the per-record filter rejects is 404, not 403 — the two mechanisms stay distinguishable');
     });
 
+    todo('#237 — every percent-encoded spelling of /archived is refused, and a denied DELETE destroys nothing', async function(assert) {
+      // SCAFFOLD. Full ACs: the refinement comment on #228, §8 "#228b".
+      assert.ok(false, 'SCAFFOLD — not implemented');
+    });
+
     test('[DEFECT] a denied write runs no consumer hook, over the real dispatch', async function(assert) {
       // The published extension point. Measured firing at 2101335: a denied
       // DELETE returned 404, the record survived, sqlDb.persist was correctly
@@ -2591,6 +2596,11 @@ module('[Integration] ORM', function(hooks) {
       }
 
       assert.strictEqual(Orm.instance.getAccess('animal'), restore, 'the boot registry is left exactly as it was found');
+    });
+
+    todo('#236 — `recordId` is the DECODED route-parameter id, over the live router', async function(assert) {
+      // SCAFFOLD. Full ACs: the refinement comment on #228, §8 "#228a".
+      assert.ok(false, 'SCAFFOLD — not implemented');
     });
   });
   });
