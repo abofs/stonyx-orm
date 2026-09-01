@@ -7,6 +7,10 @@ import { setupIntegrationTests } from 'stonyx/test-helpers';
 import log from 'stonyx/log';
 import { raw, serialized } from '../sample/payload.js';
 import { dbKey } from '../../src/db.js';
+// The verdict interpreter itself, so `[GUARD] #233 AC9` can compare the
+// MEMBERSHIP answer the live router gives against this function's own reading
+// of the same value rather than against a transcription of it.
+import { interpretAccess } from '../../src/access-verdict.js';
 import { readFile, deleteFile } from '@stonyx/utils/file';
 import config from 'stonyx/config';
 import RestServer from '@stonyx/rest-server';
@@ -5935,39 +5939,514 @@ module('[Integration] ORM', function(hooks) {
   //
   module('Include Traversal Membership Access (#233)', function(includeHooks) {
     includeHooks.before(function() {
-      // TODO: idempotent fixture top-up, matching the #232/#235 modules.
+      // Idempotent, matching the #234, #240 and #235 modules above. Earlier
+      // modules in this file create most of this, and one of them -- `Data >
+      // removing records and recreating them from db storage` -- unloads the
+      // WHOLE store and rebuilds it from the saved db file, which carries no
+      // `tags` collection because an unclaimed model is not persisted. So the
+      // tag record has to be re-seeded here or AC3 measures the wrong store.
+      for (const category of serialized.categories) {
+        if (!store.get('category', category.id)) createRecord('category', category);
+      }
+      if (!store.get('tag', 'never-mounted')) {
+        createRecord('tag', { id: 'never-mounted', label: 'a collection the consumer never exposed' });
+      }
+      for (const owner of raw.owners) {
+        if (!store.get('owner', owner.name)) createRecord('owner', owner);
+      }
+      for (const animal of raw.animals) {
+        if (!store.get('animal', animal.id)) createRecord('animal', animal);
+      }
     });
 
-    test.todo('[DEFECT] #233 AC2 — a record hidden by its own model’s predicate is not a member of `included`', function(assert) {
-      assert.ok(false, 'TODO');
+    const getJson = async path => {
+      const response = await fetch(`${endpoint}${path}`);
+      const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
+
+      return { status: response.status, body };
+    };
+
+    // `included` is ABSENT, not `[]`, when a sideload produces nothing -- the
+    // shape this module already used for a genuinely empty relationship long
+    // before #233 (`empty relationships do not appear in included array`).
+    // Every assertion below reads membership through this, so "pruned" and
+    // "genuinely empty" are indistinguishable to the ASSERTIONS too, which is
+    // AC6/AC10's whole point.
+    const includedKeys = body => (body?.included ?? []).map(resource => `${resource.type}:${resource.id}`);
+
+    // Read a hasMany's member ids straight out of the store, so an expectation
+    // is never a transcription of the fixture file. Same construction as the
+    // #235 module's; deliberately a local copy rather than a hoist, because
+    // moving that helper would edit a module this story does not own.
+    const storeIds = (model, id, relationship) =>
+      [...(store.get(model, id)?.[relationship] ?? [])]
+        .map(member => member?.id ?? member)
+        .sort((a, b) => (a > b ? 1 : a < b ? -1 : 0));
+
+    /**
+     * Replace one registry entry for the duration of `fn`, then restore it.
+     * Same construction and the same reason as the #234 and #235 modules':
+     * `Orm.instance.accessFunctions` holds ONE function object under several
+     * model keys, so the replacement is written to a single KEY and every
+     * other model resolves through the untouched original.
+     */
+    const withAccess = async (model, replacement, fn) => {
+      const registry = Orm.instance.accessFunctions;
+      const had = Object.hasOwn(registry, model);
+      const original = registry[model];
+
+      if (replacement === undefined) delete registry[model];
+      else registry[model] = replacement;
+
+      try {
+        return await fn();
+      } finally {
+        if (had) registry[model] = original;
+        else delete registry[model];
+      }
+    };
+
+    test('[DEFECT] #233 AC2 — a record hidden by its own model’s predicate is not a member of `included`', async function(assert) {
+      // [DEFECT] Measured on dev @ c106cf9, over the live router:
+      //   GET /owners/angela           -> 404
+      //   GET /animals/1?include=owner -> 200, included = [{"type":"owner",
+      //     "id":"angela", attributes:{gender,age:36}, ...}]
+      // A record the addressed surface answers 404 for, served in FULL --
+      // attributes and all -- at one query parameter.
+      //
+      // KILLING MUTATION: drop the `linkage` argument from `buildResponse`'s
+      // `collectIncludedRecords` call in src/orm-request.ts. angela becomes a
+      // member again and the second assertion reds.
+      assert.strictEqual((await getJson('/owners/angela')).status, 404,
+        'precondition: angela is hidden on her OWN route — asserted, not assumed, because this module goes vacuously green if she stops being');
+
+      const { status, body } = await getJson('/animals/1?include=owner');
+
+      assert.strictEqual(status, 200, 'the PERMITTED parent still answers 200 — the drop is scoped to the sideload');
+      assert.strictEqual(body.data.id, 1, 'and it is still animal 1’s document');
+      assert.deepEqual(includedKeys(body), [],
+        'the hidden owner is NOT a member of `included` (was: her full document, attributes included)');
+
+      // NOT VACUOUS: the relationship the sideload was asked to follow is
+      // genuinely populated, so `included` is empty because of the verdict and
+      // not because animal 1 has no owner to sideload.
+      assert.strictEqual(store.get('animal', 1)?.owner?.id, 'angela',
+        'precondition: animal 1 really does have an owner in the store, so there WAS something to sideload');
     });
 
-    test.todo('[DEFECT] #233 AC2b — a hidden CHILD of a permitted parent is not a member either', function(assert) {
-      assert.ok(false, 'TODO');
+    test('[DEFECT] #233 AC2b — a hidden CHILD of a permitted parent is not a member either', async function(assert) {
+      // The severe half, and the one a membership filter keyed on the PARENT
+      // would miss entirely: gina is permitted, her `pets` hasMany is served,
+      // and one member of it -- animal 18, abofs/stonyx-orm#240 fixture 1 --
+      // is hidden by the ANIMAL predicate. Membership has to be decided per
+      // RELATED record against ITS OWN model, which is the argument-one
+      // contract this story implements.
+      //
+      // KILLING MUTATION: decide membership from the parent's verdict instead
+      // of the related record's own type -- gina is granted, so 18 returns.
+      assert.strictEqual((await getJson('/animals/18')).status, 404,
+        'precondition: animal 18 is hidden on its own route');
+      assert.strictEqual((await getJson('/owners/gina')).status, 200,
+        'precondition: and its PARENT gina is not — this is a hidden child under a PERMITTED parent');
+
+      const { status, body } = await getJson('/owners/gina?include=pets');
+      const petsInStore = storeIds('owner', 'gina', 'pets');
+
+      assert.strictEqual(status, 200);
+      assert.ok(petsInStore.includes(18),
+        `precondition: gina’s pets in the store DO include the hidden one (${petsInStore.join(', ')})`);
+
+      const included = includedKeys(body);
+
+      assert.notOk(included.includes('animal:18'),
+        'the hidden child is NOT a member of `included`');
+
+      // AND `included` IS NOT MERELY EMPTY. Every other one of gina's pets is
+      // still there, so this cannot go green by dropping the sideload.
+      assert.deepEqual(included.sort(),
+        petsInStore.filter(id => id !== 18).map(id => `animal:${id}`).sort(),
+        'and every OTHER pet of hers still is — the drop is per-record, not per-relationship');
     });
 
-    test.todo('[DEFECT] #233 AC3 — a model no access class claims is never disclosed as a sideloaded resource', function(assert) {
-      assert.ok(false, 'TODO');
+    test('[DEFECT] #233 AC3 — a model no access class claims is never disclosed as a sideloaded resource', async function(assert) {
+      // The MOST severe case in the family, not the least: `tag` is absent
+      // from `GlobalAccess.models`, so `setup-rest-server` mounts no route for
+      // it at all and `Orm.instance.getAccess('tag')` is `undefined`. It is a
+      // collection the consumer deliberately never exposed -- and until #233
+      // `?include=tag` published its records in full.
+      //
+      // [DEFECT] Measured on dev @ c106cf9:
+      //   GET /tags/never-mounted        -> 404 (no route exists)
+      //   GET /traits/2?include=tag      -> 200, included = [{"type":"tag",
+      //     "id":"never-mounted","attributes":{"label":"a collection the
+      //     consumer never exposed"}}]
+      //
+      // KILLING MUTATION: change the `undefined` predicate branch of
+      // `resolveVerdict` in src/access-verdict.ts from DENIED to GRANTED --
+      // the fail-closed rule AC5 pins at the unit tier. `tag` returns.
+      assert.strictEqual(Orm.instance.getAccess('tag'), undefined,
+        'precondition: no access class claims `tag`');
+      assert.strictEqual((await getJson('/tags/never-mounted')).status, 404,
+        'precondition: and nothing is mounted for it');
+      assert.strictEqual(store.get('trait', 2)?.tag?.id, 'never-mounted',
+        'precondition: trait 2 really does name the unclaimed record, so there IS something to disclose');
+
+      const direct = await getJson('/traits/2?include=tag');
+
+      assert.strictEqual(direct.status, 200, 'the permitted parent still answers 200');
+      assert.deepEqual(includedKeys(direct.body), [],
+        'the unclaimed model’s record is not a member of `included` (was: its full document)');
+
+      // AND AT DEPTH 2, where it is reached through a relationship rather than
+      // named directly. `traits.tag` is animal -> trait -> tag.
+      const nested = await getJson('/animals/1?include=traits.tag');
+      const nestedIncluded = includedKeys(nested.body);
+
+      assert.strictEqual(nested.status, 200);
+      assert.notOk(nestedIncluded.some(key => key.startsWith('tag:')),
+        'nor at depth 2, reached through `traits.tag`');
+
+      // NOT VACUOUS: the depth-1 hop that carries it still resolved, so the
+      // traversal really did reach the point where the tag would have been
+      // pushed.
+      assert.ok(nestedIncluded.includes('trait:2'),
+        `precondition: the trait that NAMES the unclaimed record is itself a member (${nestedIncluded.join(', ')}) — so the traversal reached the push site and declined it`);
     });
 
-    test.todo('[DEFECT] #233 AC4 — the subtree beneath a dropped parent is PRUNED, not traversed through', function(assert) {
-      assert.ok(false, 'TODO');
+    test('[DEFECT] #233 AC4 — the subtree beneath a dropped parent is PRUNED, not traversed through', async function(assert) {
+      // THE REASON THE FILTER IS AT THE PUSH SITE AND NOT ON
+      // `collectIncludedRecords`' RETURN VALUE. Filtering the return value
+      // closes membership and leaves the worse half open: dropping a parent
+      // AFTER traversing through it publishes that parent's exact child set.
+      //
+      // [DEFECT] Measured on dev @ c106cf9:
+      //   GET /animals/1?include=owner,owner.pets -> 200, included = 9
+      //     resources: ["owner:angela","animal:1","animal:3","animal:7",
+      //     "animal:10","animal:11","animal:15","animal:17","animal:20"]
+      //
+      // Those eight ids ARE angela's `pets` array, reconstructed for a caller
+      // who is 404 on the parent. A return-value filter would have removed
+      // `owner:angela` and left all eight standing.
+      //
+      // KILLING MUTATION: move the membership check out of the loop in
+      // `traverseIncludePath` and apply it to `collectIncludedRecords`' return
+      // value instead. The first assertion stays green; the second reds with
+      // angela's whole child set.
+      const expectedPets = storeIds('owner', 'angela', 'pets');
+
+      assert.ok(expectedPets.length > 1,
+        `precondition: angela really does own more than one animal (${expectedPets.join(', ')}) — so there is a child set to leak`);
+      assert.strictEqual((await getJson('/owners/angela')).status, 404,
+        'precondition: and the caller is 404 on the parent');
+
+      const { status, body } = await getJson('/animals/1?include=owner,owner.pets');
+      const included = includedKeys(body);
+
+      assert.strictEqual(status, 200);
+      assert.notOk(included.some(key => key.startsWith('owner:')),
+        'the dropped parent is not a member');
+      assert.deepEqual(included, [],
+        'and NEITHER IS ANY OF HER CHILDREN — the traversal never descended through her, so the child set is not merely unlisted, it was never collected');
     });
 
-    test.todo('[DEFECT] #233 AC4b — the prune holds at depth 2 and depth 3', function(assert) {
-      assert.ok(false, 'TODO');
+    test('[DEFECT] #233 AC4b — the prune holds at depth 2 and depth 3', async function(assert) {
+      // Two distinct depth claims, and they are not the same claim twice.
+      //
+      //   (a) A DROP AT DEPTH 1 STOPS EVERYTHING BELOW IT. `owner.pets.traits`
+      //       is three hops; angela is dropped at hop one, so hops two and
+      //       three must produce nothing at all.
+      //   (b) A RECORD HIDDEN AT DEPTH 2 AND AT DEPTH 3 IS DROPPED THERE TOO.
+      //       The filter is applied at EVERY level of the recursion, not only
+      //       at the top. `pets.owner.pets` reaches owners at depth 2 (angela
+      //       among them, via her animals) and animals again at depth 3
+      //       (animal 18 among them, via gina).
+      //
+      // KILLING MUTATION for (a): filter `collectIncludedRecords`' return
+      // value instead of the push site -- the eight animals return.
+      // KILLING MUTATION for (b): stop threading `linkage` through the
+      // recursive `traverseIncludePath` call, so only depth 0 is filtered --
+      // angela returns at depth 2 and animal 18 at depth 3.
+
+      // (a) depth 3 beneath a depth-1 drop.
+      const deep = await getJson('/animals/1?include=owner.pets.traits');
+
+      assert.strictEqual(deep.status, 200);
+      assert.deepEqual(includedKeys(deep.body), [],
+        'a drop at depth 1 prunes depth 2 AND depth 3 — nothing beneath the dropped parent is collected');
+
+      // NOT VACUOUS: the same three-hop shape DOES produce depth-3 resources
+      // when the depth-1 hop is permitted. Without this the assertion above
+      // would be green against a build that ignored `include=` entirely.
+      const permittedSubject = await permittedAnimalOwnedBy('gina');
+      assert.ok(permittedSubject, 'precondition: gina has a readable pet to act as the control');
+
+      const control = await getJson(`/animals/${permittedSubject}?include=owner.pets.traits`);
+      const controlIncluded = includedKeys(control.body);
+
+      assert.ok(controlIncluded.some(key => key.startsWith('trait:')),
+        `precondition: the SAME three-hop shape reaches depth 3 for a permitted parent (${controlIncluded.join(', ')})`);
+
+      // (b) hidden records AT depth 2 and AT depth 3.
+      const wide = await getJson('/owners?include=pets.owner.pets');
+      const wideIncluded = includedKeys(wide.body);
+
+      assert.strictEqual(wide.status, 200);
+      assert.ok(wideIncluded.includes('owner:gina'),
+        `precondition: depth 2 really is reached — a permitted owner is a member (${wideIncluded.join(', ')})`);
+      assert.notOk(wideIncluded.includes('owner:angela'),
+        'a record hidden by its own predicate is dropped at DEPTH 2');
+      assert.notOk(wideIncluded.includes('animal:18'),
+        'and at DEPTH 3 — where the same hidden child is reachable a second time, through a permitted owner');
+
+      // AND DEPTH 3 REALLY WAS TRAVERSED, so the assertion above is not green
+      // because the recursion stopped early. Animal 18's permitted siblings
+      // are reached at depth 3 through gina.
+      const ginaPets = storeIds('owner', 'gina', 'pets').filter(id => id !== 18);
+      assert.ok(ginaPets.every(id => wideIncluded.includes(`animal:${id}`)),
+        `precondition: every PERMITTED pet of gina’s is a member (${ginaPets.join(', ')}) — depth 3 ran`);
     });
 
-    test.todo('#233 AC6/AC10 — drop, never error: a pruned sideload is shaped exactly like a genuinely empty one', function(assert) {
-      assert.ok(false, 'TODO');
+    test('#233 AC6/AC10 — drop, never error: a pruned sideload is shaped exactly like a genuinely empty one', async function(assert) {
+      // DROP, NEVER ERROR. The two responses compared here differ in exactly
+      // one way that matters and in no way that is observable:
+      //
+      //   GET /traits/2?include=tag   trait 2 NAMES the unclaimed record
+      //                               `never-mounted` -- the sideload is
+      //                               PRUNED.
+      //   GET /traits/1?include=tag   trait 1's `tag` is `null` -- the sideload
+      //                               is GENUINELY EMPTY.
+      //
+      // If those two answers differ in status, in top-level key set, or in the
+      // shape of the relationship itself, then the absence of a record is
+      // reportable and `?include=` is an existence oracle for a collection the
+      // consumer never exposed.
+      //
+      // NO LATENCY ASSERTION. It is not deterministically assertable in this
+      // suite, and the structural proxy below is the one this repo already
+      // uses (`access-filter-enforcement-test.ts` assertion 41).
+      //
+      // KILLING MUTATION: return a 403, or push an `errors` member, or emit
+      // `included: []` on the pruned branch only. Each breaks a different one
+      // of the four comparisons.
+      assert.strictEqual(store.get('trait', 2)?.tag?.id, 'never-mounted',
+        'precondition: the PRUNED subject really does name a record');
+      assert.strictEqual(store.get('trait', 1)?.tag ?? null, null,
+        'precondition: and the EMPTY subject really does name nothing — otherwise both sides are the same case');
+
+      const pruned = await getJson('/traits/2?include=tag');
+      const empty = await getJson('/traits/1?include=tag');
+
+      assert.strictEqual(pruned.status, empty.status, 'same status');
+      assert.strictEqual(pruned.status, 200, 'and it is 200, not 403 — denial is not reportable');
+
+      assert.deepEqual(Object.keys(pruned.body).sort(), Object.keys(empty.body).sort(),
+        'same top-level key set — `included` is ABSENT on both, so its absence carries no signal');
+      assert.notOk('errors' in pruned.body, 'no `errors` member');
+      assert.notOk('included' in pruned.body, 'and no `included` member at all, rather than an empty array only the pruned branch emits');
+
+      assert.deepEqual(pruned.body.data.relationships.tag.data, empty.body.data.relationships.tag.data,
+        'and the relationship itself is byte-identical — `data: null` either way');
+
+      // THE STRUCTURAL PROXY FOR THE LATENCY CLAUSE. A denied sideload must not
+      // do MORE work than an empty one -- a store lookup issued only on the
+      // pruned branch is a timing oracle even without a timing assertion.
+      const storeSpy = sinon.spy(store, 'find');
+
+      try {
+        storeSpy.resetHistory();
+        await getJson('/traits/2?include=tag');
+        const prunedCalls = storeSpy.callCount;
+
+        storeSpy.resetHistory();
+        await getJson('/traits/1?include=tag');
+        const emptyCalls = storeSpy.callCount;
+
+        assert.strictEqual(prunedCalls, emptyCalls,
+          `the pruned sideload issues no additional store lookup (${prunedCalls} vs ${emptyCalls})`);
+      } finally {
+        storeSpy.restore();
+      }
     });
 
-    test.todo('[GUARD] #233 AC7 — negative control: permitted resources are still sideloaded, at every depth', function(assert) {
-      assert.ok(false, 'TODO');
+    test('[GUARD] #233 AC7 — negative control: permitted resources are still sideloaded, at every depth', async function(assert) {
+      // THE ASSERTION THAT KILLED ARGUMENT-ONE OPTION (b). Passing `undefined`
+      // as the predicate's first argument -- the "context-only" form -- makes
+      // the shipped sample's `recordId === undefined` guard fire and DENIES
+      // every owner, on every sideload, silently. Measured during refinement:
+      // `GET /animals/4?include=owner` returned `included=[]` under (b) and
+      // `included=["owner:gina"]` under the derived-request form that shipped.
+      //
+      // Without this test the whole module is satisfied by a build that drops
+      // `?include=` entirely, which is why it carries the [GUARD] label.
+      //
+      // KILLING MUTATION: `linkage: () => false` at the `collectIncludedRecords`
+      // call site, or reverting the argument-one contract to option (b).
+      const subject = await permittedAnimalOwnedBy('gina');
+      assert.ok(subject, 'precondition: gina has a readable pet to address');
+
+      // depth 1 — the permitted owner herself.
+      const one = await getJson(`/animals/${subject}?include=owner`);
+      const oneIncluded = one.body.included ?? [];
+      const includedGina = oneIncluded.find(resource => resource.type === 'owner' && resource.id === 'gina');
+
+      assert.strictEqual(one.status, 200);
+      assert.ok(includedGina, 'depth 1: a PERMITTED owner is still a member of `included`');
+      assert.ok(includedGina.attributes && Object.keys(includedGina.attributes).length > 0,
+        'and with her attributes — a member stripped to a bare identifier is not a sideload');
+
+      // depth 2 — her permitted pets, through the same query shape the prune
+      // tests use.
+      const two = await getJson(`/animals/${subject}?include=owner,owner.pets`);
+      const twoIncluded = includedKeys(two.body);
+      const permittedPets = storeIds('owner', 'gina', 'pets').filter(id => id !== 18);
+
+      assert.ok(permittedPets.length > 1, `precondition: gina has more than one PERMITTED pet (${permittedPets.join(', ')})`);
+      assert.deepEqual(twoIncluded.sort(), ['owner:gina', ...permittedPets.map(id => `animal:${id}`)].sort(),
+        'depth 2: every permitted pet reached `included` through the nested hop, and exactly those');
+
+      // depth 3 — traits of those pets.
+      const three = await getJson(`/animals/${subject}?include=owner.pets.traits`);
+      const threeIncluded = includedKeys(three.body);
+
+      assert.ok(threeIncluded.some(key => key.startsWith('trait:')),
+        `depth 3: the third hop still resolves for a permitted subtree (${threeIncluded.join(', ')})`);
+
+      // AND THE COLLECTION SURFACE, which resolves through a different handler
+      // (`getCollectionHandler`) than the three above (`getSingleHandler`).
+      // Both must supply the filter, and a collection that came back empty
+      // would be the over-denial this control exists to catch.
+      const collection = await getJson('/owners?include=pets');
+      const collectionIncluded = includedKeys(collection.body);
+
+      assert.strictEqual(collection.status, 200);
+      assert.ok(collectionIncluded.length > 1,
+        `the collection handler still sideloads too (${collectionIncluded.length} resources)`);
+      assert.ok(permittedPets.every(id => collectionIncluded.includes(`animal:${id}`)),
+        'and gina’s permitted pets are among them');
     });
 
-    test.todo('[GUARD] #233 AC8 — one verdict per type and one decision per (type, id) across the whole traversal', function(assert) {
-      assert.ok(false, 'TODO');
+    test('[GUARD] #233 AC8 — one verdict per type and one decision per (type, id) across the whole traversal', async function(assert) {
+      // #233 CONSUMES #234's CACHES AND ADDS NEITHER. The membership decision
+      // is made with the SAME filter object the primary document and
+      // `included`'s linkage are serialized with, so adding a membership
+      // question per traversed record must add ZERO verdict resolutions.
+      //
+      // `Orm.instance.getAccess` is called from exactly one place in `src`
+      // (`resolveVerdict`), so its call count IS the number of verdict
+      // resolutions.
+      //
+      // KILLING MUTATION for the per-TYPE half: build a fresh
+      // `createLinkageFilter(request)` inside `traverseIncludePath`, or pass a
+      // new one to `collectIncludedRecords` instead of the handler's. The
+      // count goes from one-per-type to one-per-record.
+      // KILLING MUTATION for the per-(type, id) half: add the denied record to
+      // `seen`, or key the `decisions` map on `` `${type}:${id}` `` -- the
+      // second re-ask of the same animal stops hitting the cache.
+      const path = '/owners?include=pets.owner.pets';
+      const getAccessSpy = sinon.spy(Orm.instance, 'getAccess');
+      let distinctTypes;
+
+      try {
+        getAccessSpy.resetHistory();
+        const { body } = await getJson(path);
+
+        distinctTypes = [...new Set(getAccessSpy.getCalls().map(call => call.args[0]))].sort();
+
+        // NOT VACUOUS: the traversal really did ask about more than one type.
+        assert.deepEqual(distinctTypes, ['animal', 'owner', 'trait'],
+          `the three-hop traversal asked about exactly the types it reaches (${distinctTypes.join(', ')})`);
+        assert.strictEqual(getAccessSpy.callCount, distinctTypes.length,
+          `exactly one verdict resolution per distinct type (${distinctTypes.length} types, ${getAccessSpy.callCount} resolutions) across the primary document, included membership AND included linkage`);
+
+        // AND THE TRAVERSAL GENUINELY REVISITS, so "one decision per
+        // (type, id)" has something to collapse. Animal 8 is reachable twice:
+        // once at depth 1 as gina's pet, and again at depth 3 as gina's pet
+        // through her own record at depth 2.
+        const included = includedKeys(body);
+        const ginaIncluded = (body.included ?? []).find(resource => resource.type === 'owner' && resource.id === 'gina');
+
+        assert.ok(ginaIncluded, 'precondition: gina is a member at depth 2');
+        assert.ok(ginaIncluded.relationships.pets.data.some(member => included.includes(`animal:${member.id}`)),
+          'precondition: and she names a pet that is ALSO a depth-1 member — so the same (type, id) is reachable at two depths');
+      } finally {
+        getAccessSpy.restore();
+      }
+
+      // ONE DECISION PER (type, id). Counted by wrapping the ANIMAL predicate
+      // rather than by reasoning about the cache: `narrow`-style, so the real
+      // fixture rule still runs and an assertion cannot pass because the
+      // predicate was swapped for something permissive.
+      const asked = [];
+      const original = Orm.instance.accessFunctions['animal'];
+
+      await withAccess('animal', function(request, context) {
+        const access = original.call(this, request, context);
+        if (typeof access !== 'function') return access;
+
+        return record => {
+          asked.push(record?.id);
+
+          return access(record);
+        };
+      }, async () => {
+        await getJson(path);
+      });
+
+      assert.ok(asked.length > 1, `precondition: the animal predicate was consulted at all (${asked.length} times)`);
+      assert.strictEqual(asked.length, new Set(asked).size,
+        `the animal predicate was asked at most once per id — ${asked.length} calls, ${new Set(asked).size} distinct ids (${asked.join(', ')})`);
+      assert.ok(asked.includes(18),
+        'and the hidden child is among them, so the cache is not hiding a record that was never asked about');
+    });
+
+    test('[GUARD] #233 AC9 — one interpreter: the six verdict shapes decide MEMBERSHIP exactly as they decide auth', async function(assert) {
+      // AC9 IS "DOES NOT RE-IMPLEMENT", AND THE ONLY NON-CIRCULAR WAY TO SHOW
+      // IT IS BEHAVIOURAL. A static assertion that `interpretAccess` is
+      // imported proves an import, not a use -- and this repo has a standing
+      // rule about exactly that. So each of the six return shapes the contract
+      // admits is fed to a real model's registry entry, over the live router,
+      // and the MEMBERSHIP answer is compared against `interpretAccess`'s own
+      // classification of the same value. If the traversal carried a second
+      // reading of any shape, the two columns diverge on that row.
+      //
+      // `category` is the subject because `GlobalAccess` answers for it with a
+      // permission ARRAY -- so replacing that entry cannot accidentally leave a
+      // per-record function in play -- and because `traits.category` is the
+      // fixture's only two-hop chain reaching it.
+      //
+      // KILLING MUTATION: replace the `linkage(type, relatedRecord)` call in
+      // `traverseIncludePath` with an inline `access === true ||
+      // Array.isArray(access)` test. The `'read'` and `42` rows diverge
+      // immediately.
+      const shapes = [
+        ['false', false],
+        ["'read'", 'read'],
+        ["['read']", ['read']],
+        ['true', true],
+        ['{}', {}],
+        ['42', 42]
+      ];
+
+      const observed = [];
+      const expected = [];
+
+      for (const [label, shape] of shapes) {
+        const member = await withAccess('category', () => shape, async () => {
+          const { body } = await getJson('/animals/1?include=traits.category');
+
+          return includedKeys(body).some(key => key.startsWith('category:'));
+        });
+
+        observed.push(`${label} -> ${member ? 'member' : 'dropped'}`);
+        expected.push(`${label} -> ${interpretAccess(shape, 'read').granted ? 'member' : 'dropped'}`);
+      }
+
+      // NOT VACUOUS: the six shapes do not all agree, so this cannot pass by
+      // both columns being constant.
+      assert.strictEqual(new Set(expected).size > 1, true,
+        `precondition: the interpreter itself distinguishes these shapes (${expected.join('; ')})`);
+      assert.deepEqual(observed, expected,
+        'membership reads every verdict shape exactly as `interpretAccess` does — one interpreter, not two');
     });
   });
 });
