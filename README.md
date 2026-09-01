@@ -1325,6 +1325,32 @@ or an `errors` member for the withheld case makes the route an **existence
 oracle** — see [Filter functions](#filter-functions) for the rule and for the
 measurement that closed it on this route.
 
+**A per-record deny for a *related* resource cannot be expressed, and nothing
+tells you so at the point you would write it.** `createLinkageFilter` resolves
+the related model's access class by **type**: `context.recordId` is `null`, and
+`request.params` names a record of a **different model** — the one the route is
+addressed to. So `access()` is handed the model, the operation and the request,
+and **a rule that has to know *which* related record it is being asked about
+cannot be written**. Model-level denies (`return false` for a model) work.
+Request-level denies (a header, a tenant, the method) work. The per-record
+**filter** shape works too — `access()` may return a function, and that function
+receives the whole record, id included. What does not work is branching on the
+record's identity *before* returning, because `access()` is not told it.
+
+This is a fixed property of the mechanism rather than a defect awaiting a fix.
+The verdict is resolved **once per type** and cached before any record has been
+examined, so seeding `recordId` from a record would let the first member of a
+`hasMany` decide the context for all of them. The rule the framework holds to is
+**`recordId` may name a record only where the route addresses exactly one record
+of the model being asked about** — true for `GET /owners/{id}`, false for
+linkage, and false for a `hasMany` related-resource route. The consumer-facing
+consequence is the part to check: a predicate that branches on `recordId` sees
+`null` here and takes whichever branch `null` takes, with no warning, and if
+that branch grants then it **grants**. Express the rule as a returned filter
+function instead. Stated again, with the same label, under
+[Known limitations](#known-limitations)
+([#232](https://github.com/abofs/stonyx-orm/issues/232)).
+
 Do this:
 
 ```js
