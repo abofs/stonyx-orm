@@ -5580,49 +5580,96 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('[DEFECT] #235 I1 — a record already in `included` names no hidden id', async function(assert) {
-      const hidden = await getJson('/owners/angela');
-      assert.strictEqual(hidden.status, 404, 'precondition: GET /owners/angela is 404');
+      // ---------------------------------------------------------------------
+      // RE-SPECIFIED BY abofs/stonyx-orm#233. THE SUBJECT WAS DELETED BY #233,
+      // NOT THE CRITERION.
+      // ---------------------------------------------------------------------
+      // What it was, recorded rather than dropped, with the measurement that
+      // justified it:
+      //
+      //     const { status, body } = await getJson('/animals/1?include=owner,owner.pets');
+      //     const includedAnimals = body.included.filter(resource => resource.type === 'animal');
+      //     assert.ok(includedAnimals.length > 1,
+      //       `precondition: permitted animal records ARE present in included`);
+      //     const naming = includedAnimals
+      //       .filter(resource => resource.relationships.owner?.data !== null)
+      //       .map(...);
+      //     assert.deepEqual(naming, [],
+      //       'no record already in `included` names the hidden owner in its own linkage');
+      //
+      //   Measured on dev @ 8dda5d6: 8 included animals, each naming
+      //   {"type":"owner","id":"angela"}, in an `included` of 9 resources.
+      //
+      // WHY IT HAD TO GO. That whole subject reached `included` by traversing
+      // THROUGH angela, and #233 prunes exactly that: `GET
+      // /animals/1?include=owner,owner.pets` now publishes no `included` array
+      // at all. The old body is therefore unrunnable -- `body.included` is
+      // `undefined` -- and its own precondition ("permitted records ARE
+      // present") is the thing #233 removed. An assertion that a pruned
+      // subtree still contains permitted records is an assertion that #233 has
+      // not landed.
+      //
+      // WHAT IT PINS INSTEAD, WHICH DOES NOT EXPIRE: the criterion itself --
+      // a record that IS a member of `included` names no id this caller is
+      // refused -- carried on a subject #233 does not prune. The hidden id
+      // moves from an owner (angela, whose denial now removes the whole
+      // subtree) to a hidden CHILD of a permitted parent (animal 18,
+      // abofs/stonyx-orm#240 fixture 1): gina is permitted, so she is a member
+      // of `included`, and her own `pets` linkage inside that member must not
+      // name 18.
+      //
+      // TAMPER TEST FOR THE REPLACEMENT (both run, both red it):
+      //   - remove the `linkage` option from `buildResponse`'s `included`
+      //     map -> gina's included `pets` names 18 -> `namedIds` probe fails.
+      //   - make the membership filter drop gina too -> the "gina IS a member"
+      //     precondition fails, so this cannot go green by emptying `included`.
+      const subject = await permittedAnimalOwnedBy('gina');
+      assert.ok(subject, 'precondition: gina has a readable pet to address');
 
-      const { status, body } = await getJson('/animals/1?include=owner,owner.pets');
+      const hiddenPet = await getJson('/animals/18');
+      assert.strictEqual(hiddenPet.status, 404, 'precondition: animal 18 is a hidden CHILD of the permitted owner gina');
+
+      const { status, body } = await getJson(`/animals/${subject}?include=owner,owner.pets`);
       assert.strictEqual(status, 200);
-
-      const includedAnimals = body.included.filter(resource => resource.type === 'animal');
 
       // THE PRECONDITION THAT KEEPS THIS CRITERION #235's AND NOT #233's.
       // Phrased as "no hidden id appears anywhere in `included`", this
       // assertion would be satisfied incidentally by #233 simply REMOVING
       // members. It is asserted on records that are PERMITTED AND PRESENT, and
       // their presence is a precondition in this same test.
-      assert.ok(includedAnimals.length > 1,
-        `precondition: permitted animal records ARE present in included (saw ${includedAnimals.length})`);
+      const includedOwner = body.included.find(resource => resource.type === 'owner' && resource.id === 'gina');
+      assert.ok(includedOwner, 'precondition: the PERMITTED owner IS a member of `included`');
+      assert.ok(includedOwner.relationships.pets.data.length > 0,
+        'precondition: and her `pets` linkage inside `included` is not empty to begin with');
 
-      // [DEFECT] Measured on dev @ 8dda5d6: 8 included animals, each naming
-      // {"type":"owner","id":"angela"}. `included` holds 9 RESOURCES -- those
-      // 8 animals plus the hidden owner, who is a member by #233 and is not
-      // an animal.
-      const naming = includedAnimals
-        .filter(resource => resource.relationships.owner?.data !== null)
-        .map(resource => `${resource.type}:${resource.id} -> ${JSON.stringify(resource.relationships.owner?.data)}`);
+      // [DEFECT] on dev @ 8dda5d6 the `included` copy of gina named every one
+      // of her pets, animal 18 among them, while `GET /animals/18` is 404.
+      assert.notOk(includedOwner.relationships.pets.data.some(member => String(member.id) === '18'),
+        'the member of `included` does not name the hidden child in its own linkage');
 
-      assert.deepEqual(naming, [],
-        'no record already in `included` names the hidden owner in its own linkage');
-
-      // ASSERT THE EFFECT, NOT THE ABSENCE OF ONE STRING: every owner id still
-      // named anywhere in `included` is one this caller can actually read. This
-      // is derived from the response, so a fixture change cannot make it
-      // vacuous in the way a hard-coded 'angela' could.
-      const namedOwnerIds = new Set();
+      // ASSERT THE EFFECT, NOT THE ABSENCE OF ONE ID: every id named anywhere
+      // in `included`, in any relationship, is one this caller can actually
+      // read. Derived from the response, so a fixture change cannot make it
+      // vacuous in the way a hard-coded '18' could.
+      const namedIds = new Set();
       for (const resource of body.included) {
-        const owner = resource.relationships?.owner?.data;
-        if (owner) namedOwnerIds.add(owner.id);
+        for (const relationship of Object.values(resource.relationships ?? {})) {
+          const members = Array.isArray(relationship?.data) ? relationship.data : [relationship?.data];
+          for (const member of members) {
+            if (member) namedIds.add(`${member.type}|${member.id}`);
+          }
+        }
       }
 
-      for (const ownerId of namedOwnerIds) {
-        const probe = await getJson(`/owners/${ownerId}`);
-        assert.strictEqual(probe.status, 200, `an owner id named inside included (${ownerId}) is readable by this caller`);
+      assert.ok(namedIds.size > 0, 'precondition: `included` names at least one related id, so the probe below is not vacuous');
+
+      for (const key of namedIds) {
+        const [type, id] = key.split('|');
+        const probe = await getJson(`/${type === 'phone-number' ? 'phone-numbers' : `${type}s`}/${id}`);
+        assert.strictEqual(probe.status, 200, `an id named inside included (${type}:${id}) is readable by this caller`);
       }
 
-      // And the sideload itself still happened, so the assertion above is not
+      // And the sideload itself still happened, so the assertions above are not
       // green because `included` was emptied.
       assert.ok(body.included.length > 1, 'the sideload still produced an included array');
     });
