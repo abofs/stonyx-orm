@@ -185,7 +185,7 @@ import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
 import type { OrmRecord, AccessContext, AccessFunction, AccessMethod, AccessOperation } from './types/orm-types.js';
-import { isOrmRecord } from './utils.js';
+import { isOrmRecord, NO_FREE_ID_ERROR } from './utils.js';
 
 interface OrmRequest$ extends Request {
   protocol?: string;
@@ -762,7 +762,41 @@ export default class OrmRequest extends Request {
       // only O(1) signal that distinguishes an insert from an overwrite.
       const slotsBefore = store.get(model)?.size ?? 0;
 
-      const created = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false, _skipAutoPersist: true });
+      // THE ONE `createRecord` FAILURE THIS ROUTE ANSWERS RATHER THAN
+      // PROPAGATES, and it is narrow on purpose.
+      //
+      // `assignRecordId` throws when it cannot derive a free store key for a
+      // server-assigned id. Unguarded that rejection is auto-forwarded -- there
+      // is no catch here, none in @stonyx/rest-server's dispatcher
+      // (dist/request.js:41-70), and express 5 hands it to its default error
+      // handler, which serialises the STACK, with absolute install paths and the
+      // internal module graph, to an unauthenticated caller outside
+      // NODE_ENV=production. That is the hazard :553-558 already names in this
+      // file, and every sibling refusal in this handler returns an integer
+      // status instead. So this one returns 409, matching the client-duplicate
+      // refusal at :713: the caller asked for a record and the collection has no
+      // id to give it.
+      //
+      // MATCHED ON THE SHARED PREFIX, not on a literal, and NOT by catching
+      // everything: `createRecord` also throws for "ORM is not ready", a
+      // read-only view and an unregistered model store, and turning any of those
+      // into a 409 would report a configuration fault as a conflict. Anything
+      // else is re-thrown unchanged.
+      let created;
+
+      try {
+        created = createRecord(model, recordAttributes as { [key: string]: unknown }, { serialize: false, _skipAutoPersist: true });
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.startsWith(NO_FREE_ID_ERROR)) throw error;
+
+        // Not silently. A collection that can no longer assign an id is a
+        // configuration fault (a non-injective id transform), and a bare 409
+        // with no diagnostic is indistinguishable from an ordinary duplicate.
+        log.error?.(`[@stonyx/orm] ${error.message}`);
+
+        return 409; // Conflict
+      }
+
       const record = isOrmRecord(created) ? created : null;
       if (!record) return 500;
 
@@ -787,11 +821,32 @@ export default class OrmRequest extends Request {
         //
         // Both conditions are required and neither implies the other:
         //   createdNewSlot -- the store grew, so this request inserted rather
-        //                     than overwrote. Guards `assignRecordId` picking an
-        //                     id that is already taken (it returns
-        //                     last-INSERTED + 1, not max + 1, so a store whose
-        //                     insertion order is not ascending collides) -- see
-        //                     abofs/stonyx-orm#203.
+        //                     than overwrote. SURVIVOR AS OF #203, AND THAT IS
+        //                     WHAT THIS NOTE IS FOR. It used to be killable:
+        //                     `assignRecordId` returned last-INSERTED + 1, so a
+        //                     server-assigned id could land on an occupied slot,
+        //                     `createRecord` updated in place, and removing this
+        //                     half turned access-filter-enforcement-test.ts
+        //                     assertion 31 red. #203 closed that: the
+        //                     server-assigned path now walks past occupied keys,
+        //                     so no create reaching here can overwrite. Measured
+        //                     -- delete `createdNewSlot &&` below: `dev` gives
+        //                     55 pass / 1 fail with assertion 31 RED, this tree
+        //                     gives 56 pass / 0 fail, GREEN.
+        //                     KEPT ANYWAY, AND NOT FOR THE OLD REASON. Without
+        //                     it a denied create becomes `store.remove` on a key
+        //                     the caller may have influenced, which :779-786
+        //                     records as having been an unauthenticated deletion
+        //                     primitive across the whole id space. BECOMES
+        //                     KILLABLE AGAIN the moment any caller-supplied id
+        //                     can reach `createRecord` from this handler --
+        //                     which is exactly what has-many.ts:65 and
+        //                     belongs-to.ts:45 already do for ANOTHER model's
+        //                     store (abofs/stonyx-orm#207), and what a third
+        //                     un-stripped id channel would do for this one
+        //                     (#204). Do not delete it on the strength of #203
+        //                     being closed; that is the reasoning :801-808 warns
+        //                     about, one level up.
         //   identity       -- the slot still holds the object we just created,
         //                     so nothing between createRecord and here replaced
         //                     it. Deleting this half SURVIVES the suite, and it

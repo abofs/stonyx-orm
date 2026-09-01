@@ -8,6 +8,10 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+// `./utils.js` pulls in `@stonyx/utils/string` and nothing else -- no ORM
+// bootstrap, no `@stonyx/orm` index, no side effects -- so the "no framework
+// dependencies" property above still holds.
+import { maxNumericId } from './utils.js';
 
 interface StandaloneDBOptions {
   dbPath?: string;
@@ -131,12 +135,19 @@ export default class StandaloneDB {
     const records = await this.readCollection(collection);
 
     if (!data.id) {
-      const maxId = records.reduce((max, r) => {
-        const rid = typeof r.id === 'number' ? r.id : 0;
-        return rid > max ? rid : max;
-      }, 0);
-
-      data.id = maxId + 1;
+      // SHARED WITH `assignRecordId` (src/manage-record.ts), which is the other
+      // place this repo picks a server-assigned id. It was a second copy of the
+      // reduce, and nothing here pointed at it — a maintainer editing this
+      // method could not discover the other existed. See `maxNumericId` for why
+      // it is not `Math.max` (abofs/stonyx-orm#203).
+      //
+      // THE TWO ARE NOT THE SAME FUNCTION beyond this line, deliberately.
+      // `StandaloneDB` has no model, id-type or transform concept, so `maxId + 1`
+      // IS its store key; `assignRecordId` has to map the candidate through the
+      // model's declared id transform first, and then walk past occupied keys.
+      // Transplanting this method's remaining logic into the ORM reproduces
+      // #203's landing-key defect exactly — which is what AC4 pins.
+      data.id = maxNumericId(records) + 1;
     }
 
     // Check for duplicate id
