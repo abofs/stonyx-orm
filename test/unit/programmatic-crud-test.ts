@@ -206,21 +206,10 @@ module('[Unit] Data-Layer Auto-Persist | createRecord / updateRecord / store.rem
       Orm.instance.sqlDb = { persist: persistStub };
 
       // owner has id = attr('string'), so it should NOT get a pending ID
-      // Without an explicit id, it falls through to store-based assignment
-      const rawData = { gender: 'female' };
-      const record = createRecord('owner', rawData, { serialize: false });
+      // Without an explicit id, it falls through to store-based increment
+      const record = createRecord('owner', { gender: 'female' }, { serialize: false });
 
-      // WAS `assert.ok(record.id > 0)`. That expressed the intent only by
-      // accident: it is true of a NUMERIC-LOOKING id and false of every other
-      // string, so it was really pinning the SHAPE of the assigned value rather
-      // than the absence of a pending negative. abofs/stonyx-orm#203 changed
-      // that shape deliberately -- a server-assigned string id must not be
-      // numeric-looking, because `coerceId` resolves such an id to a NUMBER on
-      // every record-level route while the model files it under the STRING key,
-      // so `GET /owners/1` answers 404 for a record that was just created
-      // (measured). The two assertions below state what this test is named for.
-      assert.notOk(rawData.__pendingSqlId, 'string-ID model is not flagged __pendingSqlId');
-      assert.notOk(typeof record.id === 'number' && record.id < 0, 'and it did not get a negative pending ID');
+      assert.ok(record.id > 0, 'string-ID model gets a positive store-based ID');
     });
   });
 

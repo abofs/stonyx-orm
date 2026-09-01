@@ -148,253 +148,25 @@ await Orm.db.save();
 
 ## 7. Access Control
 
-> **DO NOT RECONSTRUCT THE REQUEST PATH — and since
-> [#202](https://github.com/abofs/stonyx-orm/issues/202) you do not have to.**
-> `access()` receives a second argument, `{ model, operation }`, and `model`
-> already names the collection. Every version of this example that worked the
-> collection out from the request target instead failed **open** — five distinct
-> variants (mount-relative `url`, query string, case, mount prefix, and an
-> absolute-form request-target), each found only after the previous was fixed.
-> The five are recorded in the sample below as **history, not as rules to
-> follow**: they are unconstructible against a predicate that reads `model`. See
-> README "Identifying the collection", which replaces any
-> matching at all with the model, operation and record.
->
-> **One read of argument one survives, and it must:** `request.path`, for the
-> `/archived` sub-path deny. The context names which model and which verb, not
-> which route, so that deny cannot be expressed from the context alone and a
-> context-only rewrite would silently turn it into an allow. Guard it where it
-> is read — a fail-closed check on the *context* does not protect a read of the
-> *request*.
->
-> **Case-folding is not a sufficient normalisation.** `request.path` is the raw,
-> undecoded pathname while the router decodes `:id`, so `/owners/%61rchived`
-> steps around a `path === '/archived'` deny. Live in the sample below, tracked
-> as [#228](https://github.com/abofs/stonyx-orm/issues/228), not fixed here.
->
-> **This file does not ship.** `npm pack` includes `dist`, `src`, `config` and
-> `README.md` only, so a consumer sees the README section and the header of
-> `src/orm-request.ts` — the two copies that must stay complete. Treat this as
-> the working notes, not the delivered warning.
-
 ```javascript
-// This is the shipped fixture (test/sample/access/global-access.ts) and the
-// README sample, which are asserted to be the same code line for line.
+// test/sample/access/global-access.js
 export default class GlobalAccess {
   models = ['owner', 'animal']; // or '*' for all
 
-  access(request, { model, operation, recordId }) {
-    // WHY THERE IS NO MATCHING HERE. `model` is the model name
-    // setup-rest-server mounted this route for, assigned once at mount time.
-    // No request can influence it, so there is nothing to parse and no variant
-    // to miss. Before #202 this method identified its collection from the
-    // request target, and VARIANTS 1, 2, 4 AND 5 WERE ALL THE SAME MISTAKE:
-    //
-    //   1. `request.url` is mount-relative — RestServer.mountRoute mounts each
-    //      model as an Express sub-app, so GET /owners/angela arrives with
-    //      url === '/angela'. A prefix match against it is ALWAYS false, the
-    //      branch never fires, and access() falls through to the CRUD array
-    //      below with no filter on any surface.
-    //   2. `request.originalUrl` carries the query string, so a bare
-    //      `=== '/owners'` misses /owners?filter[age]=30 and that collection
-    //      comes back UNFILTERED.
-    //   3. A case-SENSITIVE matcher is stricter than the router that dispatched
-    //      the request (RestServer mounts with a bare express(), whose default
-    //      is caseSensitive:false), so it can be stepped around:
-    //        GET /owners/angela -> 404   but  GET /OwNeRs/angela -> 200, in full
-    //        DELETE /animals/22 -> 404   but  DELETE /ANIMALS/22 -> 204, destroyed
-    //      Router-side fix: abofs/stonyx-rest-server#47.
-    //   4. A hard-coded '/owners' matches nothing under ORM_REST_ROUTE=/api.
-    //      And the documented remediation was itself broken:
-    //      `${config.orm.restServer.route}owners` is '/apiowners', so a reader
-    //      who followed the correction still failed open.
-    //   5. HTTP/1.1 permits an ABSOLUTE-FORM request-target. Express routes on
-    //      parseurl(req).pathname so the request dispatches normally, but
-    //      originalUrl is the RAW target:
-    //        GET http://anything.example/owners/angela
-    //      has no '/owners' prefix. Measured: angela came back in full, DELETE
-    //      succeeded, and it walked past the hard `return false` deny too.
-    //
-    // An intermediate revision read `request.baseUrl`, the mount Express
-    // MATCHED, which closed all five. It was still a transport artifact
-    // standing in for a structural fact. `model` is the structural fact, so
-    // VARIANTS 1, 2, 4 AND 5 are now unconstructible rather than handled — and
-    // neither `baseUrl` nor `originalUrl` appears below. THE STRING COMPARISON
-    // VARIANT 3 LIVED IN IS GONE TOO, as of abofs/stonyx-orm#236: the sub-path
-    // rule is now a comparison against `recordId`, the record this route was
-    // ADDRESSED TO — decoded by the router and coerced to the key the store
-    // lookup uses. Nothing below reads argument one at all. (Retiring the
-    // "variant 3 survives" wording across the copies that still carry it is
-    // abofs/stonyx-orm#238.)
-    //
-    // `operation` is destructured to name the whole contract at the point of
-    // use; this sample's rules are per-model and per-record, so the verb is
-    // answered by the permission array at the bottom.
+  access(request) {
+    // Deny specific access
+    if (request.url.endsWith('/owner/angela')) return false;
 
-    // FAIL CLOSED ON AN UNIDENTIFIABLE MODEL. `String(request.originalUrl ?? '')`
-    // was once added to stop a TypeError and traded fail-closed for fail-OPEN:
-    // '' matched no collection, so access() fell through and granted full CRUD.
-    // The same rule applies to the context — an input this function cannot
-    // identify DENIES.
-    if (typeof model !== 'string' || model === '') return false;
-
-    if (model === 'owner') {
-      // FAIL CLOSED ON AN ABSENT `recordId` TOO, AND `undefined` IS THE ONLY
-      // SPELLING OF ABSENT. `auth()` ALWAYS sets the key — `null` on a
-      // collection route, which is addressed to no record — so `undefined`
-      // means the context did not come from `auth()`: it was hand-assembled by
-      // a caller resolving this predicate through the documented
-      // `Orm.instance.getAccess()` path. Letting that through falls straight to
-      // the per-record filter below: a DENY becoming an ALLOW. This is the same
-      // rule the old guard on `request.path` enforced, moved to the argument
-      // this predicate now actually reads.
-      if (recordId === undefined) return false;
-
-      // THE /archived DENY, AGAINST THE DECODED ID. It was
-      // `request.path.toLowerCase()` compared against '/archived', and that was
-      // wrong in BOTH directions at once.
-      //
-      // TOO PERMISSIVE: express sets `request.path` from the RAW pathname while
-      // the router DECODES `:id`, so GET /owners/%61rchived reached the
-      // comparison as /%61rchived, walked past the deny and was dispatched as
-      // the record `archived` — 200 with the record in full, and DELETE
-      // answered 204 with the record DESTROYED, unauthenticated. 255
-      // non-canonical spellings of that 8-character id decode to the same key.
-      //
-      // TOO STRICT: a record id is a VALUE, not a literal route segment, and
-      // express's `case sensitive routing` governs literal segments only. With
-      // a distinct owner seeded at ARCHIVED the .toLowerCase() 403'd
-      // GET /owners/ARCHIVED — the wrong record — while still admitting
-      // GET /owners/%41RCHIVED, the same record encoded.
-      //
-      // SO DO NOT NORMALISE `recordId`: it is already decoded, exactly once,
-      // which is what a route parameter means. /owners/%2561rchived is the
-      // legitimate id %61rchived and decoding until stable would deny it; do
-      // not case-fold; do not rebuild it from `request.path`, which decodes
-      // THEN splits while the router splits THEN decodes and so over-denies the
-      // distinct record at /owners/archived%2fx.
-      //
-      // THE DENY IS NOW EXPRESSIBLE FROM THE CONTEXT ALONE — that is what
-      // `recordId` bought — and it still must not be dropped. Deleting it does
-      // not remove a rule, it turns a deny into an ALLOW, silently.
-      if (recordId === 'archived') return false;
-
-      // Per-record filter. Enforced on every surface ADDRESSED TO a record —
-      // the collection, GET/PATCH/DELETE by id, and both relationship route
-      // families — and, since #232, on every surface that reaches one of these
-      // records as another model's RELATED resource. A rejected ADDRESSED
-      // record is 404 on record routes (indistinguishable from a record that
-      // does not exist) and 403 on POST; a rejected RELATED record is
-      // `data: null` at 200 (indistinguishable from a relationship that is
-      // genuinely empty). Neither spelling is an existence oracle, which is the
-      // property both are chosen for.
-      //
-      // NOTE: with a filter in force, a POST carrying a client-supplied `id` is
-      // refused with 403 whatever the payload, and BEFORE any store lookup —
-      // that is what stops POST being an id-enumeration oracle, in status and in
-      // latency. Let the server assign the id.
-      //
-      // "Whatever the payload" is a claim about the `id` member of the resource
-      // object, and it holds only because that is the sole channel a caller id
-      // can arrive on for THIS model's create route. `attributes.id` and
-      // `relationships.id` are both stripped for that reason. A `relationships`
-      // key that is NOT a declared relationship is still applied —
-      // abofs/stonyx-orm#204.
-      //
-      // AND IT IS NOT A GUARANTEE THAT A HIDDEN RECORD CANNOT BE MODIFIED. A
-      // write to ANOTHER collection can re-parent one and de-hide it —
-      // abofs/stonyx-orm#207, blocked on #196.
-      return record => record.id !== 'angela' && record.id !== 'restricted';
+    // Filter collections
+    if (request.url.endsWith('/owner')) {
+      return record => record.id !== 'angela';
     }
 
-    // `record.owner` resolves to an OrmRecord, not to the owner's id string.
-    // Comparing it directly against a string is never equal, which is the bug
-    // that made this predicate inert while looking like it worked.
-    // `record.id !== 18` hides one animal whose OWNER is permitted. It is the
-    // fixture that makes the `hasMany` half of the relationship-route rules
-    // observable: gina is served, animal 18 is not, and every surface that
-    // names gina's pets has to drop it.
-    if (model === 'animal') return record => record.owner?.id !== 'restricted' && record.id !== 18;
-
-    // Grant CRUD permissions. A bare string ('read') is ONE permission, not a
-    // grant of all four. Any shape that is not a boolean, a string, an array or
-    // a function returns 403 — unknown shapes fail closed.
+    // Grant CRUD permissions
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
-
-
-### What #232 changed, and the limit it leaves
-
-Both relationship route families resolve the **related** model's own access
-class ([#232](https://github.com/abofs/stonyx-orm/issues/232)):
-
-```javascript
-// The related resource is this route's PRIMARY data, so the filter decides
-// MEMBERSHIP, not just which ids a document may name.
-GET /owners/gina/pets                 // hidden children dropped from the array
-GET /owners/gina/relationships/pets   // same, on the hand-built linkage
-GET /animals/1/owner                  // denied belongsTo target -> 200, data: null
-GET /traits/2/tag                     // a model NO access class claims -> 200, data: null
-```
-
-A denied `hasMany` member is **dropped**, and nothing in the relationship marks
-the drop: same status, `links` intact, no `errors` member, and an array of
-survivors shaped exactly like one from a parent that only ever had those
-members. A denied `belongsTo` target is **200 with `data: null`**,
-byte-identical to a target that is genuinely absent. The status on these routes
-belongs to the **parent** — 404 there means the parent is missing or hidden — so
-`data`, and not the status, carries the answer about the related record.
-
-**Read that as a claim about the relationship, not about the document.** The
-sample `owner` model declares `get totalPets() { return this.pets.length; }`,
-which reads the store and is never filtered. Measured, unauthenticated, zero
-query parameters:
-
-```
-GET /owners/gina   ->  attributes.totalPets: 5
-                       relationships.pets.data: [8, 13, 24, 4]   (four)
-GET /owners/gina/pets                 ->  four records
-GET /owners/gina/relationships/pets   ->  the same four
-```
-
-The relationship discloses nothing and the document discloses that one child was
-withheld. That channel is [#245](https://github.com/abofs/stonyx-orm/issues/245);
-`included` membership is [#233](https://github.com/abofs/stonyx-orm/issues/233)
-and the `POST` `attributes.<fk>` absence is
-[#246](https://github.com/abofs/stonyx-orm/issues/246). All three are open. Audit
-your computed properties before treating a dropped member as unobservable.
-
-An earlier revision answered `404` for a denied `belongsTo` target, and it was
-measured as an oracle before it shipped. Unauthenticated, zero query parameters,
-one request each, on a model with no route mounted at all:
-
-```
-GET /traits/1/tag   [target absent]  ->  200  application/json  68 bytes
-GET /traits/2/tag   [target denied]  ->  404  text/plain         9 bytes
-```
-
-`GET /traits/1` and `GET /traits/2` already report
-`relationships.tag = {"data":null}` byte-identical modulo the id, because #234
-closed that oracle deliberately — so this route was the last way to ask which of
-those two nulls was a denial. Both now answer identically.
-
-**Per-record denies for a related resource are not expressible.** On these routes a predicate is
-handed `recordId: null` and a `request` whose `params` name a record of a
-**different model**. Model-level denies work; request-level denies work; the
-per-record **filter** shape works (`access()` may return a function, and it
-receives the whole record). What cannot be written is a rule that branches on
-*which* related record is being asked about before returning, because `access()`
-is not told.
-
-The reason is structural rather than an omission: the verdict is resolved **once
-per type** and cached before any record is examined, and a `hasMany`
-related-resource route returns many records of one type — so seeding `recordId`
-from a record would let the first one answer for all of them. The framework's
-rule is that **`recordId` may name a record only where the route addresses
-exactly one record of the model being asked about.**
-
 
 ## 8. REST API (Auto-generated)
 
@@ -453,18 +225,7 @@ GET /scenes/e001-s001?include=slides.dialogue.character
 2. `traverseIncludePath()` recursively traverses relationships depth-first
 3. Deduplication still by type+id (no duplicates in included array)
 4. Gracefully handles null/missing relationships at any depth
-5. Each included record gets a full `toJSON()` representation, and its
-   **linkage is filtered** (abofs/stonyx-orm#235). `buildResponse` now takes the
-   caller's `linkage` verdict through to the `included` map, so a permitted
-   sideloaded record no longer names ids the primary document withheld. It is
-   the **same filter object** the primary document was serialized with, which is
-   what keeps the resolution at one per related type for the whole response
-   rather than one per included record.
-
-   **Whether the resource is included at all is a separate question and it is
-   still unfiltered** (abofs/stonyx-orm#233). A record hidden on its own
-   surfaces is still a *member* of `included`; what it may *name* is what #235
-   closed. Neither closes the other.
+5. Each included record gets full `toJSON()` representation
 
 **Key Functions:**
 - `parseInclude()` - Splits comma-separated includes and parses nested paths
