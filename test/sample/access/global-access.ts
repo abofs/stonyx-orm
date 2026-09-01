@@ -81,13 +81,28 @@
  * `#### What the context does not tell you: which surface`, which records the six
  * owner surfaces that produce one identical context.
  *
+ * SURVIVING IS NOT THE SAME AS BEING SOUND. The `.toLowerCase()` below matches
+ * the case-insensitive router, and that is the only gap it closes. Express sets
+ * `request.path` from the RAW pathname while the router DECODES `:id`, so
+ * `GET /owners/%61rchived` reaches the comparison as `/%61rchived`, walks past
+ * the deny, and is dispatched as the record `archived` — measured, 200 on GET
+ * and 204 on DELETE with the record destroyed. That is VARIANT 3 in a spelling
+ * this sample does not handle; it is pre-existing, it is NOT fixed here, and it
+ * is tracked as abofs/stonyx-orm#228. Read the line below as a rule that must
+ * normalise the way the router does, not as a recipe that already has.
+ *
  * `?? ''` IS NOT A DEFENCE, and that lesson still applies to the one read that
  * is left. A previous revision wrote `String(request.originalUrl ?? '')`, which
  * turns an absent request target into an empty string, which matches no
  * collection, which falls through to the CRUD grant. A guard added to stop a
  * throw traded fail-closed for fail-open. An input this function cannot
  * identify DENIES — which is why an absent `model` returns `false` below rather
- * than falling through.
+ * than falling through, AND why an absent or non-string `request.path` does
+ * too. Since #202 the guard and the read can sit on DIFFERENT ARGUMENTS, and a
+ * guard on argument two does not protect a read of argument one: with the
+ * context supplied and `request.path` absent, `?? ''` matched no sub-path rule
+ * and fell through to the per-record filter — a DENY became an ALLOW. Both
+ * arguments are guarded below.
  *
  * AND IT IS NOT A GUARANTEE THAT A HIDDEN RECORD CANNOT BE MODIFIED. `restricted`
  * is hidden on every ANIMAL surface, but a write to `/owners` can re-parent
@@ -111,19 +126,24 @@ export default class GlobalAccess {
     // `model` is the model this route was mounted for. It is assigned once, at
     // mount time, and no request can influence it — not a mount prefix, not a
     // query string, not a case-varied path, not an absolute-form request
-    // target. Nothing below parses anything, so none of the five fail-open
-    // variants recorded in the header is constructible against this predicate
-    // any more; they are history, not rules to follow.
+    // target. Nothing below parses anything, so variants 1, 2, 4 and 5 are not
+    // constructible against this predicate any more — they are history, not
+    // rules to follow. VARIANT 3 IS THE EXCEPTION AND THE CLAIM IS NARROWER
+    // THAN IT WAS: a matcher stricter than the router can still be stepped
+    // around, because the sub-path rule below is still a string comparison.
+    // Case is handled; percent-encoding is not — abofs/stonyx-orm#228.
     //
     // `operation` is destructured to name the whole contract at the point of
     // use. This sample's rules are per-model and per-sub-path rather than
     // per-verb, so it does not branch on it; the permission array at the bottom
     // is where the verb is answered.
 
-    // FAIL CLOSED. `model` is absent for any caller that resolved this
-    // predicate without supplying the context, and a request this function
-    // cannot identify DENIES rather than falling through to the CRUD grant at
-    // the bottom. An unidentifiable input must never be the permissive path.
+    // FAIL CLOSED ON ARGUMENT TWO. `model` is absent for any caller that
+    // resolved this predicate without supplying the context, and a request this
+    // function cannot identify DENIES rather than falling through to the CRUD
+    // grant at the bottom. An unidentifiable input must never be the permissive
+    // path. Argument ONE is guarded at its own read, below — this guard does
+    // not cover it.
     if (typeof model !== 'string' || model === '') return false;
 
     if (model === 'owner') {
@@ -131,14 +151,35 @@ export default class GlobalAccess {
       // distinct owner surfaces produce one identical context, so a rule that
       // depends on the SUB-PATH still needs argument one. `request.path` is
       // mount-relative and query-free, and it is the one read of the raw
-      // request the README sanctions. Lower-cased because the router matched
-      // case-insensitively, so a case-sensitive rule here would be stricter
-      // than the router and could be stepped around. false → 403 for the whole
-      // request.
+      // request the README sanctions. false → 403 for the whole request.
       //
       // THIS DENY CANNOT BE EXPRESSED FROM THE CONTEXT ALONE. Migrating it away
       // does not remove a rule, it turns a deny into an ALLOW, silently.
-      const path = String(request.path ?? '').toLowerCase();
+      //
+      // FAIL CLOSED ON ARGUMENT ONE TOO. The guard above covers the context;
+      // this one covers the request, and since #202 they are two different
+      // objects. A caller that resolves this predicate through the documented
+      // `Orm.instance.getAccess()` path and hand-assembles a request can supply
+      // a perfectly valid context with no usable `path` — and
+      // `String(request.path ?? '')` is then `''`, which matches no sub-path
+      // rule and falls straight through to the per-record filter below. That is
+      // a DENY becoming an ALLOW. An input this function cannot identify DENIES,
+      // whichever ARGUMENT it arrived on — which is also why the `?? ''` this
+      // file's header condemns does not appear below.
+      if (typeof request?.path !== 'string' || request.path === '') return false;
+
+      // Lower-cased because the router matched case-insensitively, so a
+      // case-sensitive rule here would be stricter than the router and could be
+      // stepped around.
+      //
+      // CASE-FOLDING ALONE IS NOT A SUFFICIENT NORMALISATION, and this line is
+      // not a recipe for one. Express sets `request.path` from the RAW pathname
+      // while the router DECODES `:id`, so `GET /owners/%61rchived` reaches this
+      // comparison as `/%61rchived`, walks past the deny, and is dispatched as
+      // the record `archived` — abofs/stonyx-orm#228. A matcher must normalise
+      // the way the router that dispatched the request does. Record ids are
+      // case-sensitive and must be compared at their real case.
+      const path = request.path.toLowerCase();
 
       if (path === '/archived' || path.startsWith('/archived/')) return false;
 

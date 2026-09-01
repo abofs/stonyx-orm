@@ -153,7 +153,10 @@
  *      `return false` deny the same way.
  *
  * The fix is not a sixth rule, and it is not a better string to match. It is to
- * stop identifying the collection at all: read `context.model`.
+ * stop identifying the collection at all: read `context.model`. That is a claim
+ * about IDENTIFYING THE COLLECTION, not about the sample as a whole -- the
+ * `/archived` SUB-PATH rule is still a string match, and abofs/stonyx-orm#228 is
+ * a sixth spelling that gets past it.
  *
  *   An intermediate revision of the sample read `request.baseUrl` -- the mount
  *   Express ACTUALLY MATCHED. That closed all five variants (no query string,
@@ -168,14 +171,23 @@
  * beneath the mount. The context names which model and which verb, NOT which
  * route, so the sample's `/archived` deny cannot be expressed from the context
  * alone and a context-ONLY rewrite would silently turn that deny into an allow.
- * Lower-case it before comparing -- the router matched case-insensitively -- and
- * compare record ids at their real case.
+ *
+ * NORMALISE THE WAY THE ROUTER DOES, AND CASE-FOLDING ALONE IS NOT THAT. The
+ * sample lower-cases before comparing, because a matcher stricter than the
+ * case-insensitive router can be stepped around. That closes the case gap only.
+ * Express sets `request.path` from the RAW, UNDECODED pathname while the router
+ * DECODES `:id`, so `GET /owners/%61rchived` reaches a `path === '/archived'`
+ * comparison as `/%61rchived` and walks past the deny. That gap is live in the
+ * sample and is tracked as abofs/stonyx-orm#228; the `.toLowerCase()` is not a
+ * complete normalisation recipe. Compare record ids at their real case.
  *
  * `?? ''` is not a defence. It converts an absent request target into an empty
  * string, which matches no collection, which falls through to the permission
  * array -- a total grant. An input you cannot identify must DENY, and that
- * applies to the context too: the sample returns `false` for an absent `model`
- * rather than falling through.
+ * applies to BOTH arguments: since #202 the guard and the read can sit on
+ * different objects, and a guard on argument two does not protect a read of
+ * argument one. The sample returns `false` for an absent `model` AND for an
+ * absent or non-string `request.path`, rather than falling through either way.
  *
  * THE REAL FIX IS abofs/stonyx-orm#202: `access()` should receive the model,
  * the operation and the record. Prefer the array shape (`['read']`) or `false`

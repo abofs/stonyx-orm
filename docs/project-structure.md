@@ -246,7 +246,9 @@ Access control is defined via access classes in the configured `paths.access` di
 export default class GlobalAccess {
   models = ['owner', 'animal']; // or '*' for all
   access(request, { model, operation }) {
-    // `model` names the collection — do not derive it from the request target
+    // `model` names the collection — do not derive it from the request target.
+    // It does NOT name the route: a sub-path rule still needs `request.path`,
+    // guarded at its own read. See README "Identifying the collection".
     // Return false → 403 Forbidden
     // Return ['read', 'create', 'update', 'delete'] → allowed methods
     // Return (record) => boolean → per-record filter, applied to every surface
