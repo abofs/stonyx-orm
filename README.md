@@ -318,8 +318,12 @@ Access classes define models and provide custom filtering/authorization logic.
 > after the previous was fixed, by five different people. That section is now a
 > record of what not to do, not a matching recipe: the sample below reads `model`
 > from [the access context](#the-access-context-second-argument) and never looks
-> at the mount at all, so all five variants are **unconstructible** against it
-> rather than merely handled.
+> at the mount at all, so variants 1, 2, 4 and 5 are **unconstructible** against
+> it rather than merely handled. **Variant 3 survives.** It is the general shape
+> "a hand-written matcher normalises differently from the router", and the
+> migrated sample still runs one string comparison — the `/archived` sub-path
+> deny — which folds case but does not decode, so `GET /owners/%61rchived` steps
+> past it ([#228](https://github.com/abofs/stonyx-orm/issues/228)).
 >
 > That is still a stopgap. **The real fix is
 > [#202](https://github.com/abofs/stonyx-orm/issues/202)** — `access()` should
@@ -712,9 +716,12 @@ configured `ORM_REST_ROUTE` prefix (variant 4 — there is nothing left to deriv
 so `/apiowners` is unconstructible), and it is unaffected by an absolute-form
 target (variant 5). It was still a transport artifact standing in for a
 structural fact, and it is **no longer what the sample does**: the sample reads
-`model`, so all five variants are unconstructible against it rather than
-handled. The table below is retained as the measured evidence behind the five
-variants, not because any of these values should be matched on:
+`model`, so variants 1, 2, 4 and 5 are unconstructible against it rather than
+handled. **Variant 3 survives**, in the one string comparison the migration
+leaves behind: the `/archived` sub-path deny folds case but does not decode
+([#228](https://github.com/abofs/stonyx-orm/issues/228)). The table below is
+retained as the measured evidence behind the five variants, not because any of
+these values should be matched on:
 
 | request | `request.url` | `request.originalUrl` | `request.baseUrl` | `request.path` |
 |---|---|---|---|---|

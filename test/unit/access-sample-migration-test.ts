@@ -268,6 +268,54 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
         `${label} — the copy a consumer installs — still carries the banner in full`);
     }
 
+    // AND THE NARROWED VARIANT CLAIM IS PINNED. abofs/stonyx-orm#228 is a
+    // spelling of VARIANT 3 — a hand-written matcher normalising differently
+    // from the router — that the migrated sample does not handle, so "all five
+    // variants are unconstructible" is FALSE wherever it is said of the migrated
+    // predicate. After the first #227 fix round four sites still said it:
+    // README.md twice, src/orm-request.ts, and the fixture's own header, fifteen
+    // lines above a paragraph saying the opposite. Three of those four SHIP.
+    // Nothing in the tree asserted the narrowing, so it could drift back with
+    // the suite green — which is what this loop closes.
+    //
+    // The PAST-tense form ("that closed all five variants", said of the
+    // WITHDRAWN `request.baseUrl` revision) is true and is deliberately not
+    // matched: the negative anchor is `all five variants are`, which only ever
+    // occurs in the present-tense claim about the migrated predicate.
+    //
+    // KILLING MUTATION: restore any of the four sites to "all five variants are
+    // unconstructible" or to "variants 1, 2, 3, 4 and 5".
+    const ormRequest = await readRepoFile('../../src/orm-request.ts');
+
+    const narrowedClaims = [
+      ['README.md — the `access()` sample banner', readme,
+        'so variants 1, 2, 4 and 5 are **unconstructible** against'],
+      ['README.md — "Identifying the collection"', readme,
+        'so variants 1, 2, 4 and 5 are unconstructible against it rather than'],
+      ['src/orm-request.ts — the DO NOT RECONSTRUCT banner', ormRequest,
+        'IS the structural fact, so variants 1, 2, 4 and 5 are'],
+      ['the shipped fixture header', fixture,
+        'structural fact, so variants 1, 2, 4 and 5 are unconstructible against'],
+    ];
+
+    for (const [label, source, narrowed] of narrowedClaims) {
+      assert.ok(source.includes(narrowed),
+        `${label} narrows the unconstructible claim to variants 1, 2, 4 and 5`);
+    }
+
+    for (const [label, source] of [
+      ['README.md', readme],
+      ['src/orm-request.ts', ormRequest],
+      ['the shipped fixture', fixture],
+    ]) {
+      assert.notOk(source.includes('all five variants are'),
+        `${label} does not claim all five variants are unconstructible against the migrated predicate — variant 3 is live, as #228`);
+      assert.notOk(source.includes('1, 2, 3, 4 and 5'),
+        `${label} does not carry the un-narrowed enumeration either`);
+      assert.ok(/variant 3 survives/i.test(source),
+        `${label} says which one survives, in as many words`);
+    }
+
     // The header keeps the five variants as HISTORY, so `baseUrl` appearing in
     // the FILE is expected and is not what the body assertions above measure.
     // This confirms they are measuring the body and not the file.

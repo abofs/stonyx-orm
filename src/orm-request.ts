@@ -163,8 +163,15 @@
  *   not mount-relative, unaffected by absolute-form, already carrying the
  *   configured `ORM_REST_ROUTE` prefix), but it was a transport artifact
  *   standing in for a structural fact and the sample no longer does it.
- *   `context.model` IS the structural fact, so all five variants are
+ *   `context.model` IS the structural fact, so variants 1, 2, 4 and 5 are
  *   unconstructible against a migrated predicate rather than handled.
+ *
+ *   VARIANT 3 SURVIVES, and is deliberately not in that list. It is the general
+ *   shape "a hand-written matcher normalises differently from the router", and a
+ *   migrated predicate still runs one string comparison for any SUB-PATH rule --
+ *   in the shipped sample, the `/archived` deny. That comparison folds case but
+ *   does not decode, so `GET /owners/%61rchived` steps past it. See the
+ *   normalisation paragraph below and abofs/stonyx-orm#228.
  *
  * ONE READ OF ARGUMENT ONE SURVIVES, AND IT MUST: `request.path`. It is
  * mount-relative and query-free, and it is for rules that distinguish SUB-PATHS

@@ -66,9 +66,12 @@
  * MOUNT AT ALL. An intermediate revision read `request.baseUrl`, the mount
  * Express actually matched. That closed all five variants, but it was a
  * transport artifact standing in for a structural fact; `model` IS the
- * structural fact, so variants 1, 2, 3, 4 and 5 are all unconstructible against
+ * structural fact, so variants 1, 2, 4 and 5 are unconstructible against
  * this predicate rather than merely handled. `request.baseUrl` and
  * `request.originalUrl` do not appear below, and neither does `stonyx/config`.
+ * VARIANT 3 IS ABSENT FROM THAT LIST DELIBERATELY: variant 3 survives, in the
+ * one string comparison this migration leaves behind. Read SURVIVING IS NOT THE
+ * SAME AS BEING SOUND, below, before quoting the sentence above.
  *
  * ONE READ OF ARGUMENT ONE SURVIVES, AND IT MUST. The context names which model
  * and which verb, NOT which route — `GET /owners`, `GET /owners/gina` and
