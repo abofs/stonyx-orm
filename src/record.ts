@@ -7,6 +7,18 @@ import type Serializer from './serializer.js';
 interface ToJSONOptions {
   fields?: Set<string>;
   baseUrl?: string;
+  /**
+   * An ALREADY-RESOLVED linkage decision, supplied by a caller that holds the
+   * request (abofs/stonyx-orm#234). Returning `false` for a related record
+   * drops that record's `{ type, id }` from `relationships.*.data`.
+   *
+   * This method APPLIES a verdict; it never RESOLVES one -- see
+   * `src/access-verdict.ts` for the two measured reasons it cannot. ABSENT is
+   * the default and the default is TODAY'S DOCUMENT, unchanged, because
+   * `toJSON` is also the `JSON.stringify` hook and an implicit caller has no
+   * syntactic place to pass this (abofs/stonyx-orm#230).
+   */
+  linkage?: (type: string, record: unknown) => boolean;
 }
 
 interface SerializeOptions {
@@ -116,7 +128,13 @@ export default class Record {
   toJSON(options: ToJSONOptions = {}): JSONAPIResult {
     if (!this.__serialized) throw new Error('Record must be serialized before being converted to JSON');
 
-    const { fields, baseUrl } = options;
+    // DESTRUCTURED FROM A VALUE THAT IS NOT ALWAYS AN OBJECT. `toJSON` is the
+    // ECMAScript serialization hook, so `JSON.stringify({ data: record })`
+    // arrives here as `toJSON('data')` -- a STRING in the options slot.
+    // Destructuring a string yields `undefined` for every key, which is exactly
+    // the no-argument default, so the implicit path keeps working and keeps
+    // emitting today's document (abofs/stonyx-orm#230).
+    const { fields, baseUrl, linkage } = options;
     const { __data: data } = this;
     const modelName = this.__model.__name;
     const pluralizedModelName = getPluralName(modelName);
@@ -138,9 +156,21 @@ export default class Record {
     for (const [key, childRecord] of Object.entries(this.__relationships)) {
       if (fields && !fields.has(key)) continue;
 
+      // The linkage decision is applied HERE, alongside the existing
+      // `__model` liveness check, and it produces exactly the shapes that
+      // check already produces: a dropped hasMany member leaves `data: []`,
+      // a dropped belongsTo leaves `data: null`. Both already ship -- a
+      // genuinely-empty hasMany emits `data: []` with links, and a cleaned
+      // belongsTo emits `data: null` -- so a filtered relationship is
+      // BYTE-IDENTICAL to an empty one and there is no new wire shape and no
+      // oracle. It never throws: a throw here escapes the enclosing
+      // `JSON.stringify` and takes `console.log` and `Orm.db.save()`'s
+      // neighbours with it, which is a far worse failure mode than a status.
+      const isLinkable = (r: Record) => !linkage || linkage(r.__model.__name, r);
+
       const relationshipData = Array.isArray(childRecord)
-        ? childRecord.filter((r: Record) => r?.__model).map((r: Record) => ({ type: r.__model.__name, id: r.id }))
-        : (childRecord && (childRecord as Record).__model) ? { type: (childRecord as Record).__model.__name, id: (childRecord as Record).id } : null;
+        ? childRecord.filter((r: Record) => r?.__model).filter(isLinkable).map((r: Record) => ({ type: r.__model.__name, id: r.id }))
+        : (childRecord && (childRecord as Record).__model && isLinkable(childRecord as Record)) ? { type: (childRecord as Record).__model.__name, id: (childRecord as Record).id } : null;
 
       // Dasherize the key for URL paths (e.g., accessLinks -> access-links)
       const dasherizedKey = camelCaseToKebabCase(key);

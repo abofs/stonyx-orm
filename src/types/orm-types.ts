@@ -89,7 +89,15 @@ export interface OrmRecord {
   __model?: { __name: string };
   __data: Record<string, unknown> & { id?: string | number; __pendingSqlId?: boolean };
   __relationships: Record<string, unknown>;
-  toJSON?(options?: { fields?: Set<string>; baseUrl?: string }): Record<string, unknown>;
+  /**
+   * `linkage` is an ALREADY-RESOLVED decision supplied by a caller that holds
+   * the request (abofs/stonyx-orm#234): return `false` for a related record and
+   * its `{ type, id }` is dropped from `relationships.*.data`. Omitting it is
+   * the default, and the default is the pre-#234 document unchanged -- this
+   * method is also the `JSON.stringify` hook, so an implicit caller has no
+   * syntactic place to pass it (abofs/stonyx-orm#230).
+   */
+  toJSON?(options?: { fields?: Set<string>; baseUrl?: string; linkage?: (type: string, record: unknown) => boolean }): Record<string, unknown>;
   [key: string]: unknown;
 }
 
