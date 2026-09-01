@@ -1061,12 +1061,42 @@ Not this:
 const linkage = (type, r) => Orm.instance.getAccess(type)?.(request)?.(r) ?? true;
 ```
 
-**`linkage` is validated, and an unusable value DENIES.** `undefined` means "no
-verdict supplied" and emits today's document. Any other non-function — `null`,
-`0`, `false`, `''`, `true`, a string, an object — drops **all** linkage on that
-document and logs. This matters because `null` is the natural return of a
-resolver that could not resolve a session: it used to be read as "absent" and
-emit the full document silently.
+**`createLinkageFilter` requires a live request, and there is no safe call
+without one.** `request` is the only authorization input the filter has — it is
+handed straight to your `access()` predicates, and a predicate that does not
+*read* it cannot fail closed when it is missing. Passing `undefined`, `null` or
+any non-object therefore denies **all** linkage and logs, once, at construction.
+Measured before that guard existed, `createLinkageFilter(undefined)` granted
+four of the five models in this repository's own fixture, silently.
+
+**This is the catch for the request-less contexts named above.** In a queue
+consumer or a websocket handler there is no live request, so there is nothing to
+authorize against and nothing this package can resolve for you. Either carry the
+originating request through to the point of serialization, or publish no linkage
+at all — `record.toJSON({ linkage: () => false })` emits the document with every
+relationship empty. A stand-in is **not** a substitute: `{}` is an object
+and passes the guard, and any predicate that ignores its request will grant.
+
+**`linkage` itself is validated, and an unusable value DENIES.** `undefined`
+means "no verdict supplied" and emits today's document. Anything else must be a
+**synchronous function that answers with a boolean**. Each of the following
+drops **all** linkage on that document and logs once:
+
+- **A non-function** — `null`, `0`, `false`, `''`, `true`, a string, an object.
+  `null` is the natural return of a resolver that could not resolve a session:
+  it used to be read as "absent" and emit the full document silently.
+- **An `async` function, a generator function, or any predicate that returns a
+  promise or thenable.** `toJSON` is the `JSON.stringify` hook and cannot await
+  a verdict, and **an `async` resolver returns a promise, a promise is
+  truthy**, so every related id was published, silently, exactly as if this fix
+  were not here. If your
+  authorization lookup is asynchronous, `await` it *before* you serialize and
+  close over the result.
+- **Any answer that is not a boolean** — `{}`, `'no'`, `1`, `undefined`. A
+  non-boolean is a resolver that did not answer, and a truthy one granted.
+- **A predicate that throws**, including a `class` passed by mistake. It is
+  caught and denied; it used to escape the enclosing `JSON.stringify` and take
+  the rest of that serialization down with it.
 
 #### A predicate that ignores `context.model` makes cross-model resolution GRANT
 

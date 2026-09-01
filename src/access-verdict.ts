@@ -206,8 +206,42 @@ function resolveVerdict(request: unknown, type: string): AccessVerdict {
  * SCOPE IS ONE REQUEST. The filter closes over the request and must not outlive
  * it -- a verdict cached across requests would answer a second caller with the
  * first caller's authorization.
+ *
+ * A REQUEST IS REQUIRED, AND ITS ABSENCE IS CHECKED HERE RATHER THAN DELEGATED.
+ * This function is EXPORTED (src/index.ts), and the README's Consumer Contracts
+ * section points consumers at exactly the contexts that have no live request --
+ * a queue payload, a websocket frame, a custom route. Without one there is no
+ * caller to authorise against, and this file's header already says so: the
+ * shipped sample reads `request.path` and fail-closes when it is absent, so
+ * `getAccess('owner')(undefined, ...)` is `false`, while
+ * `getAccess('animal')(undefined, ...)` returns a per-record predicate and
+ * GRANTS. Measured on this repo's own fixture before this guard existed:
+ *
+ *   createLinkageFilter(undefined | null | {} | 'x' | 0)
+ *     -> owner=false animal=TRUE trait=TRUE category=TRUE phone-number=TRUE
+ *
+ * Four of five claimed models granted, with no log, because whether an absent
+ * request fails closed was left ENTIRELY to consumer predicates -- and a
+ * predicate that ignores its request cannot fail closed on one that is missing.
+ * A nullish or primitive `request` therefore denies every model outright and
+ * says so once, at construction, so the signal exists even for a caller that
+ * goes on to serialize nothing.
+ *
+ * WHAT THIS CANNOT CHECK: `{}` is an object and passes. There is no request
+ * contract this module owns -- `auth()` reads `.method`, the shipped sample
+ * reads `.path`, a consumer's reads whatever it likes -- so anything past
+ * "is it an object" would be this module inventing a shape for someone else's
+ * framework. The residual is documented in the README under Consumer Contracts.
  */
 export function createLinkageFilter(request: unknown): LinkageFilter {
+  if (typeof request !== 'object' || request === null) {
+    log.error?.(`[@stonyx/orm] createLinkageFilter() was called with no request (received ${request === null ? 'null' : typeof request}) -- there is no caller to authorise against, so ALL relationship linkage it is asked about is denied.`);
+
+    return function isLinkable(_type: string, _record: unknown): boolean {
+      return false;
+    };
+  }
+
   const byType = new Map<string, { verdict: AccessVerdict; decisions: Map<unknown, boolean> }>();
 
   return function isLinkable(type: string, record: unknown): boolean {

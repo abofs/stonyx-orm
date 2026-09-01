@@ -208,21 +208,91 @@ module('[Unit] #234 linkage verdict', function(hooks) {
       'the function shape is carried through by identity, not wrapped');
   });
 
-  test('[DEFECT] #234 AC10 — a supplied-but-unusable `linkage` denies, and cannot throw out of JSON.stringify', function(assert) {
+  test('[DEFECT] #234 AC10 — an unusable `linkage` denies whether it is a non-function, an async or generator function, a non-boolean answer or a throw, and none of them escapes JSON.stringify', function(assert) {
     // `linkage` is PUBLIC (`OrmRecord.toJSON`, src/types/orm-types.ts) and the
     // README tells consumers to pass one, so it arrives from outside this
-    // package and may be any value. Measured on the pre-fix build, both halves
-    // silently wrong in opposite directions:
+    // package and may be any value — and whatever it is, `toJSON` INVOKES it.
     //
-    //   toJSON({ linkage: null })  -> owner {"type":"owner","id":"..."}   FULL PRE-#234 LEAK
-    //   toJSON({ linkage: true })  -> THREW TypeError: linkage is not a function
+    // `typeof linkage === 'function'` is NOT the question "can this answer a
+    // synchronous boolean", and BOTH pre-fix outcomes were measured surviving a
+    // typeof-only check. All four rows are real measurements on this record:
     //
-    // The first is the shape a resolver takes when it cannot resolve a session
-    // -- the fail-closed INTENT -- read as "no verdict supplied". The second is
-    // the outcome src/record.ts's own comment promises cannot happen, because a
-    // throw here escapes the enclosing `JSON.stringify`.
+    //   toJSON({ linkage: null })              -> FULL PRE-#234 LINKAGE, no log
+    //   toJSON({ linkage: true })              -> THREW TypeError
+    //   toJSON({ linkage: async () => false }) -> FULL PRE-#234 LINKAGE, no log
+    //   toJSON({ linkage: class Klass {} })    -> THREW out of JSON.stringify
+    //
+    // The async row is the one this table exists for. A promise is TRUTHY, so
+    // an awaited resolver — the natural shape in the queue-payload and
+    // websocket contexts the README's Consumer Contracts section points
+    // consumers at — published every related id, byte-identical to unpatched
+    // dev, with ZERO signal. That is the same argument that convicts `null` (a
+    // resolver's natural failure shape must not be read as the permissive
+    // path), one branch over, landing on the GRANT side.
+    //
+    // AND `Boolean(...)` ALONE DOES NOT CLOSE IT — measured, not reasoned. With
+    // `Boolean(verdict)` plus a try/catch in place, every `'leak'` row below
+    // STILL emitted the full pre-#234 linkage with no log, because truthiness
+    // is exactly what those values already had. The answer must BE a boolean.
     const record = seed();
     const errorStub = sinon.stub(log, 'error');
+
+    class Klass {}
+
+    // label, value, the reason the single log line must give, and what this
+    // shape did BEFORE this validation existed:
+    //   'leak'  — emitted the full pre-#234 document, silently
+    //   'throw' — raised out of the enclosing JSON.stringify
+    //   'quiet' — denied already, but with no signal at all
+    const unusable = [
+      // NON-FUNCTION. The falsy half leaked; the truthy half threw.
+      ['null', null, /must be a function/, 'leak'],
+      ['0', 0, /must be a function/, 'leak'],
+      ['false', false, /must be a function/, 'leak'],
+      ["''", '', /must be a function/, 'leak'],
+      ['NaN', NaN, /must be a function/, 'leak'],
+      ['true', true, /must be a function/, 'throw'],
+      ["'x'", 'x', /must be a function/, 'throw'],
+      ['{}', {}, /must be a function/, 'throw'],
+      ['[]', [], /must be a function/, 'throw'],
+      ["Symbol('s')", Symbol('s'), /must be a function/, 'throw'],
+      ['10n', 10n, /must be a function/, 'throw'],
+      ['an object whose valueOf AND toString both throw',
+        { valueOf() { throw new Error('vo'); }, toString() { throw new Error('ts'); } },
+        /must be a function/, 'throw'],
+
+      // FUNCTION-SHAPED, DEFERRED ANSWER. Passes `typeof`; answers with a
+      // promise, which is truthy, which GRANTED.
+      ['async () => false', async () => false, /SYNCHRONOUS function/, 'leak'],
+      ['async () => true', async () => true, /SYNCHRONOUS function/, 'leak'],
+      ['function* () { yield false; }', function* () { yield false; }, /SYNCHRONOUS function/, 'leak'],
+      ['async function* () { yield false; }', async function* () { yield false; }, /SYNCHRONOUS function/, 'leak'],
+      ['() => Promise.resolve(false)', () => Promise.resolve(false), /Promise \(or other thenable\)/, 'leak'],
+      ['() => ({ then() {} })', () => ({ then() {} }), /Promise \(or other thenable\)/, 'leak'],
+
+      // FUNCTION-SHAPED, NON-BOOLEAN ANSWER. A resolver that did not answer.
+      ['() => ({})', () => ({}), /a value of type object rather than a boolean/, 'leak'],
+      ["() => 'no'", () => 'no', /a value of type string rather than a boolean/, 'leak'],
+      ['() => 1', () => 1, /a value of type number rather than a boolean/, 'leak'],
+      ['() => []', () => [], /an array rather than a boolean/, 'leak'],
+      ['() => null', () => null, /null rather than a boolean/, 'quiet'],
+      ['() => undefined', () => undefined, /a value of type undefined rather than a boolean/, 'quiet'],
+
+      // FUNCTION-SHAPED, THROWS. Every one of these escaped the JSON.stringify.
+      ['class Klass {}', Klass, /it threw \(Class constructor/, 'throw'],
+      ['Klass.bind(null)', Klass.bind(null), /it threw \(Class constructor/, 'throw'],
+      ["() => { throw new Error('fn-boom'); }", () => { throw new Error('fn-boom'); }, /it threw \(fn-boom\)/, 'throw'],
+      // The REPORT is itself a throw site: `String(Object.create(null))` throws
+      // "Cannot convert object to primitive value", so a naive catch body would
+      // throw out of the catch that exists so that nothing throws.
+      ['() => { throw Object.create(null); }', () => { throw Object.create(null); }, /could not be described/, 'throw'],
+    ];
+
+    const PRE_FIX = {
+      leak: 'the FULL pre-#234 linkage, silently',
+      throw: 'a throw out of the enclosing JSON.stringify',
+      quiet: 'a denial with no signal at all'
+    };
 
     try {
       // ABSENT is the one value that still means "no verdict". Load-bearing:
@@ -231,13 +301,7 @@ module('[Unit] #234 linkage verdict', function(hooks) {
         'an ABSENT linkage is still today\'s document — `undefined` is not "unusable"');
       assert.strictEqual(errorStub.callCount, 0, 'and absent is not an error');
 
-      // Everything else is supplied-and-unusable. Falsy leaked; truthy threw.
-      const unusable = [
-        ['null', null], ['0', 0], ['false', false], ["''", ''],
-        ['true', true], ["'x'", 'x'], ['{}', {}], ['[]', []],
-      ];
-
-      for (const [label, value] of unusable) {
+      for (const [label, value, reason, preFix] of unusable) {
         errorStub.resetHistory();
 
         let document;
@@ -245,34 +309,59 @@ module('[Unit] #234 linkage verdict', function(hooks) {
           `toJSON({ linkage: ${label} }) returns a document rather than throwing`);
 
         assert.strictEqual(document.relationships.owner.data, null,
-          `${label} DENIES the belongsTo (was: the full pre-#234 linkage, or a TypeError)`);
+          `${label} DENIES the belongsTo (before: ${PRE_FIX[preFix]})`);
         assert.deepEqual(document.relationships.traits.data, [],
           `${label} DENIES the hasMany`);
 
         // The wire shape is deliberately indistinguishable from a genuinely
         // empty relationship, so the log is the ONLY signal a consumer whose
-        // resolver quietly returned `null` will ever get. Once per DOCUMENT --
-        // this record has TWO relationships, so a per-key or per-record log
-        // would count higher and a missing one would count zero.
+        // resolver quietly returned `null` — or a promise — will ever get.
+        // Once per DOCUMENT: this record has TWO relationships, so a per-key or
+        // per-record log would count higher and a missing one would count zero.
+        // The throwing rows are the ones that make that non-trivial — they fail
+        // once per related record, and are still reported once.
         assert.strictEqual(errorStub.callCount, 1,
-          `${label} is reported exactly once per document, not once per relationship`);
-        assert.ok(/must be a function/.test(errorStub.firstCall.args[0]),
-          `${label} says what was wrong with it`);
+          `${label} is reported exactly once per document, not once per relationship or per related record`);
+        assert.ok(reason.test(String(errorStub.firstCall.args[0])),
+          `${label} says WHICH way it was unusable (expected ${reason}, got: ${errorStub.firstCall.args[0]})`);
       }
 
       // And the promise src/record.ts makes: no value of this option throws out
       // of the enclosing `JSON.stringify`, which would take `console.log` and
-      // `Orm.db.save()`'s neighbours down with it.
+      // `Orm.db.save()`'s neighbours down with it. The assertion NAME used to
+      // guarantee this while three function shapes still broke it.
       for (const [label, value] of unusable) {
         const wrapper = { toJSON: () => record.toJSON({ linkage: value }) };
         assert.strictEqual(typeof JSON.stringify({ data: wrapper }), 'string',
           `JSON.stringify survives a linkage of ${label}`);
       }
 
-      // CONFIRMS THE CHECK COULD HAVE FAILED: a usable verdict is still applied
-      // rather than everything being denied wholesale.
+      // WHAT THIS TABLE COVERS, NAMED. A list of eight non-function values
+      // reads as complete and is not: it was, and the function half was wide
+      // open behind it. Anyone narrowing this table has to delete a name.
+      const covered = unusable.map(([label]) => label);
+
+      assert.deepEqual(
+        ['async () => false', 'function* () { yield false; }', '() => Promise.resolve(false)',
+          '() => ({})', "() => 'no'", 'class Klass {}', 'Klass.bind(null)',
+          "() => { throw new Error('fn-boom'); }"].filter(label => !covered.includes(label)),
+        [],
+        `the table covers the FUNCTION-shaped hazards a typeof check lets through — async, async generator, generator, thenable-returning, object/string/number-returning, class, bound class and throwing — as well as non-functions. All ${covered.length} shapes verified here: ${covered.join(' | ')}`);
+
+      // CONFIRMS THE CHECK COULD HAVE FAILED, on both halves. Without these,
+      // every assertion above is equally green against a build that denies all
+      // linkage unconditionally.
+      errorStub.resetHistory();
       assert.deepEqual(record.toJSON({ linkage: () => true }).relationships, PRE_CHANGE_RELATIONSHIPS,
-        'a FUNCTION that grants still emits the full linkage');
+        'a plain function ANSWERING `true` still emits the full linkage');
+      assert.strictEqual(errorStub.callCount, 0, 'and is not reported');
+
+      const partial = record.toJSON({ linkage: type => type !== 'owner' });
+      assert.strictEqual(partial.relationships.owner.data, null,
+        'and a per-type boolean answer is still applied per type');
+      assert.deepEqual(partial.relationships.traits.data, [{ type: 'trait', id: RELATED_ID }],
+        'with the sibling relationship kept');
+      assert.strictEqual(errorStub.callCount, 0, 'and neither usable shape is reported');
     } finally {
       errorStub.restore();
       unseed();
@@ -416,7 +505,7 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     }
   });
 
-  test('[GUARD] #234 AC14 — the one interpreter is reachable from the package entry point', function(assert) {
+  test('[GUARD] #234 AC14 — the one interpreter is reachable from the package entry point, and denies every CLAIMED model when there is no request', async function(assert) {
     // The README tells a consumer serializing a `Record` outside the REST layer
     // to pass their own resolved `linkage`. Without an exported factory the
     // only way to follow that advice is to write a SECOND reading of `access()`
@@ -436,6 +525,89 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     // surfaces use, not a laxer public wrapper.
     assert.strictEqual(filter('zz-234-model-claimed-by-nothing', { id: 1 }), false,
       'and it fails closed on a model no access class claims');
+
+    // THAT PATH WAS ALREADY TRIVIALLY SAFE — `getAccess(type)` returns
+    // `undefined` and three lines later it is a denial, with no consumer code
+    // involved. It says nothing about a CLAIMED model, which is where the
+    // export is actually used, and where the factory was NOT fail-closed.
+    // Measured on the shipped fixture before the guard in createLinkageFilter:
+    //
+    //   createLinkageFilter(undefined | null | 'x' | 0)
+    //     -> owner=false animal=TRUE trait=TRUE category=TRUE phone-number=TRUE
+    //
+    // `owner` denied only because the shipped sample guards its own
+    // `request.path` read; the other four predicates ignore the request
+    // entirely, and a predicate that never READS the request cannot fail closed
+    // when it is missing. Whether an absent request denies was delegated, in
+    // full, to consumer code — by a factory whose stated purpose is
+    // fail-closed, exported into exactly the request-less contexts (a queue
+    // payload, a websocket frame) the README's Consumer Contracts section
+    // points consumers at.
+    const CLAIMED = ['owner', 'animal', 'trait', 'category', 'phone-number'];
+    const errorStub = sinon.stub(log, 'error');
+
+    try {
+      // CONFIRMS THE CHECK BELOW COULD HAVE FAILED. With a live request at
+      // least one CLAIMED model grants, so a blanket denial is not what is
+      // being measured.
+      assert.ok(CLAIMED.some(model => filter(model, { id: 1 }) === true),
+        'precondition: with a live request, at least one claimed model GRANTS');
+
+      for (const [label, value] of [['undefined', undefined], ['null', null], ["'x'", 'x'], ['0', 0], ['true', true]]) {
+        errorStub.resetHistory();
+
+        const requestless = ormPackage.createLinkageFilter(value);
+
+        assert.strictEqual(errorStub.callCount, 1,
+          `createLinkageFilter(${label}) reports the missing request ONCE, at construction — so the signal exists even for a caller that goes on to serialize nothing`);
+        assert.ok(/no request/.test(String(errorStub.firstCall.args[0])),
+          `createLinkageFilter(${label}) says the request is what was missing`);
+
+        for (const model of CLAIMED) {
+          assert.strictEqual(requestless(model, { id: 1 }), false,
+            `createLinkageFilter(${label}) denies CLAIMED model "${model}" (before: owner denied, but animal/trait/category/phone-number all GRANTED)`);
+        }
+
+        assert.strictEqual(errorStub.callCount, 1,
+          `createLinkageFilter(${label}) does not re-report once per model`);
+      }
+
+      // THE RESIDUAL, PINNED AS DOCUMENTED RATHER THAN LEFT TO BE REDISCOVERED.
+      // `{}` is an object and passes. This module owns no request contract —
+      // `auth()` reads `.method`, the shipped sample reads `.path`, a
+      // consumer's predicate reads whatever it likes — so anything past "is it
+      // an object" would be this package inventing a shape for someone else's
+      // framework. A stand-in object is therefore NOT a safe substitute for a
+      // live request, and the README says so.
+      errorStub.resetHistory();
+
+      const standIn = ormPackage.createLinkageFilter({});
+
+      assert.strictEqual(errorStub.callCount, 0, 'an object-shaped stand-in is not reported');
+      assert.ok(CLAIMED.some(model => standIn(model, { id: 1 }) === true),
+        'and is NOT covered by the guard — a predicate that ignores its request still grants, which is why the README requires a LIVE request rather than any object');
+    } finally {
+      errorStub.restore();
+    }
+
+    // AND THE OBLIGATION IS WRITTEN DOWN WHERE A CONSUMER WILL FIND IT.
+    // quality.md rule 2: one findable place, not only a code comment.
+    const readme = await readFile(new URL('../../README.md', import.meta.url), 'utf8');
+    const start = readme.indexOf('### Consumer Contracts');
+    assert.ok(start > -1, 'precondition: the Consumer Contracts section exists');
+
+    const section = readme.slice(start, readme.indexOf('\n### ', start + 4));
+
+    assert.ok(/requires a live request, and there is no safe call\s+without one/.test(section),
+      'the section states that `createLinkageFilter` requires a live request');
+    assert.ok(/denies \*\*all\*\* linkage and logs/.test(section),
+      'and states what happens without one, rather than leaving it to be discovered');
+    assert.ok(/`\{\}` is an object\s*\n?\s*and passes the guard/.test(section),
+      'and names the residual: an object stand-in passes the guard and is not a substitute');
+    assert.ok(/queue\s+consumer or a websocket handler/.test(section),
+      'and answers the request-less contexts this same section sends consumers to');
+    assert.ok(/an `async` resolver returns a promise, a promise is\s+truthy/.test(section),
+      'the async-resolver hazard is stated for consumers, not only in a code comment');
   });
 
   test('[GUARD] #234 AC8 — README Known limitations records the linkage and format() scope', async function(assert) {
