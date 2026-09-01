@@ -162,7 +162,37 @@ function resolveVerdict(request: unknown, type: string): AccessVerdict {
   let access: AccessMethod;
 
   try {
-    access = predicate(request, { model: type, operation: 'read' });
+    // `recordId: null`, AND NOT `request.params.id`. THE TEMPTING WRONG ANSWER
+    // IS RIGHT THERE, so this is pinned by assertion as well as by comment --
+    // test/unit/linkage-verdict-test.ts, `#234 + #241 -- recordId is null`.
+    //
+    // `AccessContext.recordId` (src/types/orm-types.ts, abofs/stonyx-orm#236 /
+    // #241) means "the record THIS ROUTE WAS ADDRESSED TO, as the store key of
+    // the model being authorised", and `null` means "addressed to no record".
+    // The id sitting on the request in hand names the PRIMARY record, which
+    // belongs to a DIFFERENT model -- `GET /owners/gina` carries
+    // `params.id === 'gina'`, and the ask being made HERE is about `animal` or
+    // `trait`. Filling this in from the request would hand the related model's
+    // predicate an id belonging to another model, which is byte-for-byte the
+    // cross-model confusion abofs/stonyx-orm#202 introduced this context to
+    // eliminate: the predicate would compare an owner's id against its own
+    // records and answer a question nobody asked. There is no record of THIS
+    // model addressed by this request, so `null` is the honest value -- the
+    // same spelling `auth()` uses for a collection route.
+    //
+    // NOR ANY RECORD'S OWN ID, WHICH IS THE SECOND-MOST TEMPTING ANSWER. This
+    // verdict is resolved ONCE PER TYPE and cached in `byType` below, before
+    // any record has been looked at; there is no per-record `AccessContext`
+    // built anywhere on this path. Seeding it from the first record of a type
+    // would let that record's identity answer for every later record of the
+    // same type -- the same "one record's verdict answers for another" defect
+    // the `decisions` raw-key argument below exists to prevent, just one level
+    // coarser. And it is unnecessary: `AccessContext` deliberately carries no
+    // `record` because auth-time and record-time are separate decision points,
+    // and the per-record point already receives the WHOLE record, id included,
+    // through `verdict.filter(record)`. A predicate that wants a record's id
+    // has the contract's own channel for it.
+    access = predicate(request, { model: type, operation: 'read', recordId: null });
   } catch (error) {
     log.error?.(`[@stonyx/orm] access() threw while resolving linkage for model "${type}" -- denying. ${error instanceof Error ? error.message : String(error)}`);
 

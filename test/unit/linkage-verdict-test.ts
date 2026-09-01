@@ -496,10 +496,98 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     try {
       assert.strictEqual(createLinkageFilter(READ_REQUEST)(PROBE, { id: 1 }), true, 'precondition: the probe grants');
       assert.strictEqual(seen.length, 1, 'the consumer predicate was asked exactly once');
-      assert.deepEqual(seen[0].context, { model: PROBE, operation: 'read' },
+      assert.deepEqual(seen[0].context, { model: PROBE, operation: 'read', recordId: null },
         'asked about the RELATED model, for a read — naming an id is a read, whatever verb the request carries');
       assert.strictEqual(seen[0].request, READ_REQUEST,
         'and handed the live request by identity, not a fabricated one');
+    } finally {
+      delete registry[PROBE];
+    }
+  });
+
+  test('[GUARD] #234 + #241 — recordId is null on the cross-model ask, and is NOT the request\'s route-parameter id', function(assert) {
+    // WHY THIS TEST EXISTS AS A SEPARATE ASSERTION, next to an AC13 deepEqual
+    // that already names `recordId: null`. AC13 drives the filter with
+    // `READ_REQUEST`, whose `params` is `{}` — so the mutation this whole test
+    // is aimed at, `recordId: request.params.id` in `resolveVerdict`, produces
+    // `undefined` there and AC13 dies on a technicality about SPELLING rather
+    // than about the cross-model leak. Measured: with `params: {}` the wrong
+    // construction and the right one differ only by `undefined` vs `null`.
+    //
+    // So this drives it with the shape the LIVE router produces for a
+    // single-record route — `GET /owners/gina` — where the route parameter
+    // names an OWNER while the ask below is about a DIFFERENT model. Now the
+    // wrong construction yields the string `'gina'` and the assertion dies on
+    // the thing that actually matters: one model's id reaching another model's
+    // predicate, the abofs/stonyx-orm#202 defect class.
+    //
+    // MUTATIONS THIS KILLS (each measured against this test):
+    //
+    //   recordId: request.params.id            -> 'gina'   FAIL
+    //   recordId: getId(request.params)        -> 'gina'   FAIL
+    //   recordId: record?.id                   -> 9234     FAIL
+    //   recordId: undefined                    -> absent-shaped, FAIL
+    //   (key omitted entirely)                 -> tsc TS2345, and FAIL here
+    const registry = Orm.instance.accessFunctions;
+    const PROBE = 'zz-234-recordid-probe';
+    const seen = [];
+
+    // The live shape of `GET /owners/gina`: the route parameter names the
+    // PRIMARY record, an owner. The linkage ask below is about `PROBE`.
+    const PRIMARY_REQUEST = { method: 'GET', path: '/gina', params: { id: 'gina' }, query: {} };
+    const RELATED_RECORD = { id: 9234 };
+
+    registry[PROBE] = (request, context) => { seen.push(context); return true; };
+
+    try {
+      assert.strictEqual(createLinkageFilter(PRIMARY_REQUEST)(PROBE, RELATED_RECORD), true,
+        'precondition: the probe grants, so the predicate really was reached');
+      assert.strictEqual(seen.length, 1, 'and asked exactly once');
+
+      assert.strictEqual(seen[0].recordId, null,
+        'recordId is null: this request addresses no record OF THIS MODEL');
+      assert.notStrictEqual(seen[0].recordId, PRIMARY_REQUEST.params.id,
+        'and is NOT the route-parameter id, which names a record of ANOTHER model (#202)');
+      assert.notStrictEqual(seen[0].recordId, RELATED_RECORD.id,
+        'and is NOT the record under decision either — the verdict is cached per TYPE, before any record is seen');
+
+      // `null`, not merely nullish. `undefined` is the spelling that means
+      // "this context was hand-assembled and did not come from `auth()`"
+      // (AccessContext.recordId, src/types/orm-types.ts), and it is not even
+      // assignable to `string | number | null`.
+      assert.true('recordId' in seen[0], 'the key is always PRESENT, the rule the contract states');
+      assert.strictEqual(seen[0].recordId === undefined, false, 'and is null, not undefined');
+
+      // The other two facts must still be model-correct alongside it.
+      assert.strictEqual(seen[0].model, PROBE, 'the ask is still about the RELATED model');
+      assert.strictEqual(seen[0].operation, 'read', 'for a read');
+    } finally {
+      delete registry[PROBE];
+    }
+  });
+
+  test('[GUARD] #234 + #241 — a predicate that authorises on recordId cannot be tricked into answering about the primary record', function(assert) {
+    // The assertion above pins the VALUE. This one pins the CONSEQUENCE, so
+    // the reason the value matters survives even if someone decides the shape
+    // assertion is over-specified and deletes it.
+    //
+    // The probe is the shipped sample's own shape: deny the record named
+    // `gina`. Asked about a RELATED model on a request addressed to owner
+    // `gina`, it must NOT deny — `gina` is not a record of this model, and a
+    // predicate handed the primary id would empty the whole relationship for
+    // every record of the related type at once.
+    const registry = Orm.instance.accessFunctions;
+    const PROBE = 'zz-234-recordid-consequence';
+
+    registry[PROBE] = (request, context) => context.recordId !== 'gina';
+
+    try {
+      const filter = createLinkageFilter({ method: 'GET', path: '/gina', params: { id: 'gina' }, query: {} });
+
+      assert.strictEqual(filter(PROBE, { id: 9234 }), true,
+        'the related model is still linkable — the owner id `gina` never reached its predicate');
+      assert.strictEqual(filter(PROBE, { id: 'gina' }), true,
+        'and not even a related record that happens to SHARE the id is judged by the route parameter');
     } finally {
       delete registry[PROBE];
     }
