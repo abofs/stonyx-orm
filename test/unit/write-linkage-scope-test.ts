@@ -61,25 +61,71 @@ const withoutLineComments = source => source
   .join('\n');
 
 module('[Unit] #235 write & included linkage — cross-file scope', function() {
-  test('[GUARD] #235 X1c — #233’s `included` membership pin is still present in orm-test.ts', async function(assert) {
-    // The behavioural half is `[GUARD] #235 X1`, which asserts over the live
-    // router that a hidden owner is STILL a member of `included`. That
-    // assertion is #233's reproduction held green, and #235 must not close
-    // #233 incidentally — so it also must not be DELETED by #235, which would
-    // leave #233 with nothing to turn red in Sprint 87.
+  test('[GUARD] #235 X1c — the nested-include test still asserts membership in BOTH directions', async function(assert) {
+    // -----------------------------------------------------------------------
+    // RE-SPECIFIED BY abofs/stonyx-orm#233, AND THE TEST NAME CHANGED WITH IT.
+    // -----------------------------------------------------------------------
+    // THE NAME USED TO BE `#233's included membership pin is still present in
+    // orm-test.ts`. The name is changed rather than kept because the thing it
+    // guards changed: there is no longer a pin asserting the hidden owner IS a
+    // member, so a body still called "the membership pin is present" would be
+    // checking something its name no longer describes. That is the failure
+    // mode `[GUARD] #235 X2` was re-specified into once already.
     //
-    // SCOPED TO THE NESTED-INCLUDE TEST'S BODY, NOT TO THE WHOLE FILE, AND
-    // THAT CORRECTION CAME OUT OF ATTACKING THIS GUARD RATHER THAN READING IT.
-    // The first draft searched the whole file for
-    // `included.find(r => r.type === 'owner' && r.id === 'angela')`. That
-    // literal occurs TWICE — the `get call with include parameter sideloads
-    // relationships` test at :582 carries an identical line — so deleting the
-    // one this guard is about would have left the guard green. A file-wide
-    // `includes()` on a line that is not unique pins nothing.
+    // What it was, recorded rather than deleted, with the measurement that
+    // justified it:
     //
-    // TAMPER TESTED: commenting the line out (`withoutLineComments` removes it
-    // before the search), and deleting it while the identical line in the
-    // other test remains (the slice below excludes that one).
+    //     const membershipLine = "const owner = included.find(r => r.type ===
+    //       'owner' && r.id === 'angela');";
+    //     assert.strictEqual(source.split(membershipLine).length - 1, 2,
+    //       'precondition: the membership literal occurs TWICE in the file');
+    //     assert.strictEqual(body.split(membershipLine).length - 1, 1,
+    //       'and the slice isolates exactly ONE of them');
+    //     assert.ok(body.includes(membershipLine),
+    //       "the nested-include test still SELECTS the hidden owner out of
+    //        `included`");
+    //     assert.ok(body.includes("assert.ok(owner, 'owner is included');"),
+    //       "and still asserts she is a member -- that is #233's reproduction");
+    //
+    //   Measured at #235's merge: both literals present, the file-wide count
+    //   exactly 2 (the nested-include test and the `get call with include
+    //   parameter sideloads relationships` twin at :573).
+    //
+    // WHY IT HAD TO GO. Its job was "#233 must still have something to turn
+    // red in Sprint 87" -- an anti-deletion guard on a REPRODUCTION. #233 has
+    // now landed, so the reproduction is gone by design: `assert.ok(owner,
+    // 'owner is included')` is precisely the assertion the fix falsifies, and
+    // a guard demanding its presence is a guard demanding the bug.
+    //
+    // WHAT IT PINS INSTEAD, WHICH DOES NOT EXPIRE. The job generalises exactly
+    // one step and then stops expiring: the nested-include test must assert
+    // membership in BOTH DIRECTIONS, and neither half may be deleted. Before
+    // #233 the two directions were "she is a member" and nothing; after #233
+    // they are "the hidden owner is NOT a member" and "a PERMITTED owner
+    // still IS". A repair that keeps only the negative is satisfied by a build
+    // that never sideloads anything; a repair that keeps only the positive no
+    // longer distinguishes the fix from `dev`. That is a property of the TEST,
+    // not of any particular fixture id, so it survives the next fixture change
+    // as well as this one.
+    //
+    // ONE NEEDLE PER CLAIM, KEYED ON THAT CLAIM'S OWN ASSERTION MESSAGE, AND
+    // THAT IS A CORRECTION RATHER THAN A STYLE CHOICE. A guard in this family
+    // was previously written as a COUNT of a string that three unrelated call
+    // sites also matched, so deleting the thing it guarded left it green. Each
+    // needle below is the message of exactly one assertion, so its count is
+    // one-to-one with that assertion's existence.
+    //
+    // STILL SLICED TO ONE TEST BODY, AND THE PRECONDITION THAT JUSTIFIES THE
+    // SLICE IS STILL LIVE. `precondition: angela really does own more than one
+    // animal` occurs TWICE in the file -- here and in `[DEFECT] #233 AC4`,
+    // which asserts the same store-derived fact for its own reason. A
+    // file-wide `includes()` would therefore pin neither copy, exactly as the
+    // original recorded. Widen the slice back to the whole file and the second
+    // assertion below reads 2.
+    //
+    // TAMPER TESTED: commenting out either direction's assertion
+    // (`withoutLineComments` removes it before the search), and deleting the
+    // positive control while leaving the negative.
     const source = withoutLineComments(await readRepoFile('../integration/orm-test.ts'));
 
     const testStart = source.indexOf("test('get call with nested include parameter sideloads deep relationships'");
@@ -87,63 +133,102 @@ module('[Unit] #235 write & included linkage — cross-file scope', function() {
     const body = source.slice(testStart, source.indexOf("\n    test(", testStart + 10));
     assert.ok(body.length > 0 && body.length < 4000, 'precondition: the slice is one test body, not the rest of the file');
 
-    // PRECONDITION MADE KILLABLE. This read:
-    //
-    //     assert.notOk(body.includes("test('get call with include parameter
-    //       sideloads relationships'"), 'precondition: and it does NOT contain
-    //       the OTHER test ...');
-    //
-    // which cannot fail. The slice above terminates at the next `\n    test(`,
-    // so no second test opener can be inside it by construction -- and the
-    // twin sits at :573, BEFORE the slice even begins. It was decoration on an
-    // assertion that can fail, and decoration reads as coverage.
-    //
-    // What it was trying to certify is real and IS checkable: the reason this
-    // guard is sliced at all is that the membership literal is NOT UNIQUE in
-    // the file, so a file-wide `includes()` would pin neither copy. Asserting
-    // the two counts states that reason and fails when it stops holding --
-    // widen the slice back to the whole file and the second assertion reads 2.
-    const membershipLine = "const owner = included.find(r => r.type === 'owner' && r.id === 'angela');";
-    assert.strictEqual(source.split(membershipLine).length - 1, 2,
-      'precondition: the membership literal occurs TWICE in the file — which is why a file-wide includes() would pin neither');
-    assert.strictEqual(body.split(membershipLine).length - 1, 1,
+    const sliceJustifier = 'precondition: angela really does own more than one animal';
+    assert.strictEqual(source.split(sliceJustifier).length - 1, 2,
+      'precondition: the store-derived precondition occurs TWICE in the file — which is why a file-wide includes() would pin neither');
+    assert.strictEqual(body.split(sliceJustifier).length - 1, 1,
       'and the slice isolates exactly ONE of them, so deleting THIS test’s copy reds this guard');
 
-    assert.ok(body.includes(membershipLine),
-      "the nested-include test still SELECTS the hidden owner out of `included`");
-    assert.ok(body.includes("assert.ok(owner, 'owner is included');"),
-      'and still asserts she is a member — that is #233’s reproduction, and #235 leaves it standing');
+    const negative = 'the hidden owner is NOT a member of `included` (was: her full document)';
+    const positive = 'a PERMITTED owner is still a member of `included`';
+
+    assert.strictEqual(body.split(negative).length - 1, 1,
+      'the NEGATIVE direction is asserted exactly once — the hidden owner is not a member');
+    assert.strictEqual(body.split(positive).length - 1, 1,
+      'and the POSITIVE direction exactly once — a permitted owner still is, so this is not green against a build that never sideloads');
   });
 
-  test('[GUARD] #235 R1c — the nested-include leak-pinning selector is re-specified, not deleted', async function(assert) {
-    // `included.filter(r => r.type === 'animal' && r.relationships.owner?.data?.id === 'angela')`
-    // was THE LEAK WRITTEN AS A REQUIREMENT: it asserted that eight permitted
-    // animals each publish the id of an owner the caller gets a 404 for. #235
-    // nulls that linkage, so the old selector matches nothing and the
-    // assertion goes red for the right reason.
+  test('[GUARD] #235 R1c — the nested-include leak assertion is re-specified a second time, not deleted', async function(assert) {
+    // -----------------------------------------------------------------------
+    // RE-SPECIFIED BY abofs/stonyx-orm#233. THIS IS THE SECOND TIME THE SAME
+    // ASSERTION HAS MOVED, AND BOTH MOVES ARE RECORDED HERE.
+    // -----------------------------------------------------------------------
+    // MOVE 1 (#235). `included.filter(r => r.type === 'animal' &&
+    // r.relationships.owner?.data?.id === 'angela')` was THE LEAK WRITTEN AS A
+    // REQUIREMENT: it asserted that eight permitted animals each publish the
+    // id of an owner the caller gets a 404 for. #235 nulls that linkage, so
+    // the selector matched nothing. It was re-specified, not deleted, to
+    // `const angelaPets = included.filter(r => r.type === 'animal');` feeding
+    // `assert.ok(angelaPets.length > 1, 'owner pets are included via nested
+    // relationship');`, with `assert.ok(expectedPets.length > 1, ...)` as the
+    // precondition that stopped it passing against an empty `included`.
     //
-    // It had to be RE-SPECIFIED rather than deleted — the test's actual
-    // subject, that the nested `owner.pets` hop traversed, is still worth
-    // asserting. This pins both halves of that: the leak selector is gone AND
-    // the sideload assertion survives.
+    // MOVE 2 (#233), and what it was immediately before this change:
     //
-    // TAMPER TESTED: deleting the assertion outright instead of re-specifying
-    // it (the second assertion below fails), and commenting the re-specified
-    // selector out while leaving the old one (the first fails).
+    //     assert.ok(source.includes("const angelaPets = included.filter(r =>
+    //       r.type === 'animal');"),
+    //       'the re-specified selector is present');
+    //     assert.ok(source.includes("assert.ok(angelaPets.length > 1, 'owner
+    //       pets are included via nested relationship');"),
+    //       'and the assertion it feeds still exists');
+    //     assert.ok(source.includes("assert.ok(expectedPets.length > 1,
+    //       'precondition: angela really does own more than one animal');"),
+    //       'the re-specification carries a precondition');
+    //
+    //   Measured on dev @ c106cf9: `GET /animals/1?include=owner,owner.pets`
+    //   returned `included` = 9 resources, of which 8 were angela's animals
+    //   `[1, 3, 7, 10, 11, 15, 17, 20]` -- which IS her `pets` array.
+    //
+    // WHY IT HAD TO MOVE AGAIN. `angelaPets.length > 1` is the SUBTREE, and
+    // #233 prunes the subtree: those eight animals reached `included` only by
+    // traversing THROUGH a parent the caller is 404 on, so asserting more than
+    // one of them survives is asserting the leak. The variable is still called
+    // `angelaPets` and the assertion on it is now `deepEqual(angelaPets, [])`.
+    //
+    // WHAT IT PINS INSTEAD, WHICH DOES NOT EXPIRE. The invariant across BOTH
+    // moves is the same one, and it is the only part that never expired: this
+    // test must still SELECT the records that would leak, must still assert
+    // something about them that a leak would falsify, and must still carry a
+    // precondition proving the selection is non-empty in the store -- so that
+    // no re-specification, this one included, can pass by emptying `included`.
+    // The direction of the assertion is the part that belongs to whichever
+    // story last touched it; the three structural halves are not.
+    //
+    // ONE NEEDLE PER CLAIM, KEYED ON THAT CLAIM'S OWN ASSERTION MESSAGE --
+    // see the note in `X1c` above for the guard in this family that was
+    // written as a count over a string three unrelated call sites matched.
+    //
+    // TAMPER TESTED: deleting the prune assertion outright (needle 2 reds),
+    // deleting the positive control while leaving the prune (needle 4 reds --
+    // which is the mutation that would otherwise leave this green against a
+    // build that never sideloads), and commenting the store-derived
+    // precondition out (`withoutLineComments` removes it, needle 3 reds).
     const source = withoutLineComments(await readRepoFile('../integration/orm-test.ts'));
 
+    const testStart = source.indexOf("test('get call with nested include parameter sideloads deep relationships'");
+    assert.ok(testStart > -1, 'precondition: the nested-include test is findable by name');
+    const body = source.slice(testStart, source.indexOf("\n    test(", testStart + 10));
+    assert.ok(body.length > 0 && body.length < 4000, 'precondition: the slice is one test body, not the rest of the file');
+
+    // 1. THE ORIGINAL LEAK SELECTOR IS STILL GONE. Unchanged from #235, and
+    // deliberately file-wide rather than sliced: no assertion ANYWHERE may
+    // select sideloaded records by the hidden owner's id.
     assert.notOk(source.includes("r.relationships.owner?.data?.id === 'angela'"),
       'no assertion selects sideloaded records BY the hidden owner’s id any more');
 
-    assert.ok(source.includes("const angelaPets = included.filter(r => r.type === 'animal');"),
-      'the re-specified selector is present — the sideload is still asserted');
-    assert.ok(source.includes("assert.ok(angelaPets.length > 1, 'owner pets are included via nested relationship');"),
-      'and the assertion it feeds still exists, so this was a re-specification and not a deletion');
+    // 2. THE SUBTREE IS STILL SELECTED AND STILL ASSERTED ABOUT.
+    assert.strictEqual(body.split('and NONE of her pets reached `included` either').length - 1, 1,
+      'the subtree assertion is present exactly once — the records that would leak are still selected and still asserted about');
 
-    // AND IT MUST NOT BE RE-SPECIFIED INTO SOMETHING THAT PASSES ON AN EMPTY
-    // `included`. The store-derived membership check is what rules that out.
-    assert.ok(source.includes("assert.ok(expectedPets.length > 1, 'precondition: angela really does own more than one animal');"),
-      'the re-specification carries a precondition, so it cannot pass against an empty included array');
+    // 3. AND IT STILL CARRIES THE STORE-DERIVED PRECONDITION, so it cannot
+    // pass against an empty `included` — the property that survived both moves.
+    assert.strictEqual(body.split('precondition: angela really does own more than one animal').length - 1, 1,
+      'and the store-derived precondition survived the second move, so an empty `included` is not a pass');
+
+    // 4. AND THE POSITIVE CONTROL, which is what stops #3 being satisfied by a
+    // build that sideloads nothing at all.
+    assert.strictEqual(body.split('owner pets are still included via the nested relationship').length - 1, 1,
+      'and the positive control is present exactly once — a permitted owner’s pets DO still reach `included` via the nested hop');
   });
 
   test('[GUARD] #235 X2c — the relationships-linkage route carries its #232 scope note', async function(assert) {
