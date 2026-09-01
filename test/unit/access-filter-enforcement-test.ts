@@ -88,7 +88,15 @@ const MODEL_BY_MOUNT = {
 };
 const OPERATION_BY_METHOD = { GET: 'read', POST: 'create', PATCH: 'update', DELETE: 'delete' };
 
-function contextFor(request) {
+// NAMED `accessContextFor`, not `contextFor`. This module ships TWO context
+// vocabularies on identically shaped objects: the ACCESS context (`{ model,
+// operation }`, argument two of `access()`) and the HOOK context
+// (`context.recordId` / `context.oldState` / `context.state`, used bare as
+// `context` throughout this file). README "`operation` is not the hook
+// `operation`" records that collision as fail-open shaped, so the helper carries
+// the framework's own name for the thing it builds (`AccessContext`,
+// src/types/orm-types.ts).
+function accessContextFor(request) {
   const mount = typeof request?.baseUrl === 'string' ? request.baseUrl.toLowerCase() : '';
 
   return {
@@ -108,12 +116,12 @@ function contextFor(request) {
 // one-argument harness keeps working -- was rejected deliberately: it drops
 // `Function.length` to 1, and the shipped sample would then trip #221's own
 // boot-time arity warning. The harness is what had to change.
-const access = (request, context) => globalAccess.access(request, context ?? contextFor(request));
+const access = (request, context) => globalAccess.access(request, context ?? accessContextFor(request));
 
 // Builds the request shape @stonyx/rest-server hands `auth()` and the handlers.
 //
 // Since #222 the shipped matcher reads `request.path` and NOTHING else off this
-// object -- `baseUrl` is here because express supplies it, because `contextFor`
+// object -- `baseUrl` is here because express supplies it, because `accessContextFor`
 // above uses it to pick the model the way a real mount does, and because
 // several assertions below pin that varying it changes no verdict. `path` is
 // the one field the predicate still reads. Both are produced the way Express
@@ -1767,7 +1775,7 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
 
       for (const mount of ['/api/owners', '/api/animals', '/API/Owners', '/deeply/nested/api/owners', '/apiowners', '/owners']) {
         assert.strictEqual(typeof globalAccess.access(makeRequest({ url: `${mount}/angela`, mount }), ownerContext), 'function',
-          `a model mounted at ${mount} yields a per-record filter (was: an array — no filter — for four of these six)`);
+          `a model mounted at ${mount} yields a per-record filter (was: an array — no filter — for five of these six)`);
       }
 
       // The fixture must not have (re)acquired a config dependency: changing the
@@ -1796,15 +1804,36 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // bodies are extracted, comments and blank lines stripped, and compared
       // line for line. Editing one without the other turns this red.
       //
-      // RE-ANCHORED BY #222, NOT LOOSENED. This extractor anchored on the
-      // literal `'  access(request) {'`, so the migration would have failed it
-      // on EXTRACTION (start === -1) rather than on comparison. The anchor is
-      // moved to the new signature and is still a single exact literal: a regex
-      // matching both forms would keep the test green through a half-migration,
-      // in which one copy is migrated and the other is not — which is the exact
-      // condition (two divergent copies) this assertion exists to catch.
-      // It also doubles as the arity pin's shape half: this literal cannot be
-      // satisfied by `access(request, ctx = {})` or by `access(...args)`.
+      // RE-ANCHORED BY #222, NOT LOOSENED — AND HERE IS THE ACCURATE REASON.
+      // This extractor anchored on the literal `'  access(request) {'`, so the
+      // migration would have failed it on EXTRACTION (start === -1) rather than
+      // on comparison. The anchor is moved to the new signature and is still a
+      // single exact literal.
+      //
+      // AN EARLIER REVISION OF THIS COMMENT — repeated in
+      // test/unit/access-sample-migration-test.ts, in commit 62c8e80's message
+      // and in the #227 PR body — justified the exact literal by claiming a
+      // both-forms regex "would keep the test green through a half-migration,
+      // in which one copy is migrated and the other is not". THAT CLAIM IS
+      // FALSE AND WAS MEASURED FALSE. Loosening the extractor to a regex that
+      // matches BOTH signatures (the exact pattern is spelled out in
+      // access-sample-migration-test.ts AC3/3, which is also the file that
+      // asserts no such pattern exists here) AND reverting the README block to
+      // the unmigrated copy gives 955 / 3, with this assertion among the reds:
+      // `extract()` slices FROM `start`, which includes the signature line, so
+      // two divergent copies red on the deepEqual whichever anchor is used. The
+      // half-migration is caught either way.
+      //
+      // The exact literal is still correct, for two reasons that ARE true here:
+      //   1. DIAGNOSTIC. A failed extraction reds as `start === -1` and names
+      //      WHICH copy lost the signature, in one line, instead of a ten-line
+      //      array diff that a reader has to decode.
+      //   2. SHAPE PIN. The literal cannot be satisfied by
+      //      `access(request, ctx = {})` or by `access(...args)`, so it carries
+      //      the arity pin's shape half — which a both-forms regex gives up.
+      // (This is the one full write-up; the copy in
+      // access-sample-migration-test.ts AC3/3 points here rather than restating
+      // it.)
       const { readFile } = await import('node:fs/promises');
 
       const ACCESS_SIGNATURE = '  access(request, { model, operation }) {';
@@ -1893,10 +1922,27 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // The path is lower-cased because the router matched case-insensitively,
       // so a case-SENSITIVE sub-path rule is stricter than the router and can be
       // stepped around. This is now the ONLY lower-casing left in the sample —
-      // the mount half went with #222 — which is the fact abofs/stonyx-orm#216
-      // needs to be re-refined against: the surviving call serves the job
-      // stonyx-rest-server#47 retires, not the mixed-case-mount job #216 argues
-      // it also does.
+      // the mount half went with #222.
+      //
+      // WHAT abofs/stonyx-orm#216 MUST BE RE-REFINED AGAINST, in both
+      // directions. Job 2 (matching lowercase literals against a mixed-case
+      // MOUNT) is genuinely gone, because the predicate no longer reads the
+      // mount. But the surviving call is NOT thereby retired by
+      // stonyx-rest-server#47: `/owners/archived` does not match a route
+      // LITERAL, it matches `'/:id'` — a route PARAMETER — and express's
+      // `case sensitive routing` setting governs literal segments only.
+      // Measured on express 5.2.1 with caseSensitive=true, `GET /owners/ARCHIVED`
+      // still dispatches with `path === '/ARCHIVED'`. So the call does a THIRD
+      // job neither #216 nor its first correction named — normalising a
+      // route-parameter VALUE against a consumer's literal sub-path rule — and
+      // deleting it walks past the deny AFTER #47 ships, not before.
+      //
+      // AND IT DOES THAT THIRD JOB INCORRECTLY. `request.path` is the raw,
+      // UNDECODED pathname while the router decodes `:id`, so case-folding
+      // without decoding is not a sound comparison: `/owners/%61rchived` steps
+      // around this deny (abofs/stonyx-orm#228). The line is simultaneously
+      // load-bearing and insufficient, which is why it must be neither deleted
+      // nor cited as a normalisation recipe.
       assert.strictEqual(verdict(globalAccess.access(makeRequest({ url: '/owners/ARCHIVED', mount: '/owners', path: '/ARCHIVED' }), ownerContext)),
         'false', 'and a case-varied sub-path cannot step around it either');
 
@@ -1906,16 +1952,51 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // a throw traded fail-closed for fail-open. An input the predicate cannot
       // identify DENIES.
       //
-      // RE-POINTED BY #222. The thing the predicate can now fail to identify is
-      // the MODEL, not the mount, so the guard is driven through the context.
-      // Driving it through `baseUrl` after the migration would have measured
-      // this file's own `contextFor` helper rather than the fixture.
+      // RE-POINTED BY #222 — AND SUPPLEMENTED, NOT RETARGETED. The thing the
+      // predicate can now fail to identify is the MODEL, so the first sweep is
+      // driven through the context. Driving it through `baseUrl` after the
+      // migration would have measured this file's own `accessContextFor` helper
+      // rather than the fixture.
+      //
+      // But the ORIGINAL sweep varied a field of ARGUMENT ONE, and moving it
+      // wholesale onto argument two left the input that can still fail open
+      // uncovered. Measured on the first #227 head, with the guard on argument
+      // two and the `/archived` read on argument one behind `?? ''`:
+      //
+      //   origin/dev  access({})                                  -> DENY
+      //   that head   access({}, { model: 'owner', ... })         -> ALLOW
+      //
+      // — a deny converted into an allow, unreachable through `auth()` (express
+      // always populates `path`) but reachable through the documented
+      // `Orm.instance.getAccess()` path, whose consumers (#196, #207) exist to
+      // refuse. BOTH sweeps are therefore kept, and the sample guards BOTH
+      // arguments at their own read.
       const request = makeRequest({ url: '/owners/angela', path: '/angela' });
+      const DEGENERATE = [undefined, null, '', 42, {}];
 
-      for (const value of [undefined, null, '', 42, {}]) {
+      for (const value of DEGENERATE) {
         assert.strictEqual(verdict(globalAccess.access(request, { model: value, operation: 'read' })), 'false',
           `an absent or non-string model (${String(value)}) denies (was: full CRUD, no filter)`);
       }
+
+      // ARGUMENT ONE, same value set, with a VALID context held fixed — so a
+      // guard that only covers the context cannot satisfy it.
+      const ownerRead = { model: 'owner', operation: 'read' };
+
+      for (const value of DEGENERATE) {
+        assert.strictEqual(verdict(globalAccess.access({ ...request, path: value }, ownerRead)), 'false',
+          `an absent or non-string request.path (${String(value)}) denies too, with a valid context (was: a per-record filter — the /archived deny simply gone)`);
+      }
+
+      // And the whole of argument one absent, which is the shape a programmatic
+      // caller assembling only a context produces.
+      assert.strictEqual(verdict(globalAccess.access({}, ownerRead)), 'false',
+        'a request object with no path at all denies (was: a per-record filter)');
+
+      // CONFIRM THIS COULD FAIL: the same valid context with a real path is
+      // still authorised, so the sweep above is not satisfied by deny-all.
+      assert.strictEqual(typeof globalAccess.access(request, ownerRead), 'function',
+        'while a request carrying a real path is still authorised');
 
       // And a caller that resolves the predicate and omits the context ENTIRELY
       // must not be granted either. The migrated signature destructures, so this

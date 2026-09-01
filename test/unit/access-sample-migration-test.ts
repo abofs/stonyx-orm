@@ -109,12 +109,23 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
     // #213's claim that assertion 46 stays "unchanged" was not achievable.
     //
     // The correct repair is to move the anchor. The tempting one is to widen it
-    // to a regex matching both signatures, and that is a REGRESSION: a
-    // both-forms anchor stays green through a HALF-migration, in which the
-    // fixture is migrated and the README copy is not — two divergent copies,
-    // which is the exact condition assertion 46 exists to catch, and the
-    // condition under which variant 5 was found in the shipped copy while the
-    // tested copy was being mutated eight ways.
+    // to a regex matching both signatures, and it is rejected — but NOT for the
+    // reason an earlier revision of this comment gave.
+    //
+    // WHAT THAT REVISION CLAIMED, AND WHY IT WAS WRONG. It said a both-forms
+    // anchor "stays green through a HALF-migration, in which the fixture is
+    // migrated and the README copy is not". Measured: loosening the extractor
+    // AND reverting the README block to the unmigrated copy gives 955 / 3, with
+    // assertion 46 among the reds. `extract()` slices FROM `start`, which
+    // includes the signature line, so two divergent copies red on the deepEqual
+    // whichever anchor is used. The same false claim is in commit 62c8e80's
+    // message and in the original #227 PR body; both are superseded.
+    //
+    // THE REASONS THAT HOLD are written out in full at the assertion itself
+    // (test/unit/access-filter-enforcement-test.ts, assertion 46): a precise
+    // single-line diagnostic on `start === -1`, and the literal doubling as a
+    // shape pin that `access(request, ctx = {})` and `access(...args)` cannot
+    // satisfy. This file asserts the mechanism; it does not restate the reason.
     //
     // KILLING MUTATION: replace `indexOf(ACCESS_SIGNATURE)` with a
     // `/access\(request(,.*)?\)\s*\{/` search.
@@ -128,14 +139,30 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
     // Still an exact-literal search, not a pattern.
     assert.ok(source.includes('const start = source.indexOf(ACCESS_SIGNATURE);'),
       'the extractor is still an exact indexOf, not a regex matching both forms');
-    assert.notOk(/access\\\(request\(\?:|new RegExp\(.*access\(request/.test(source),
-      'and no both-forms pattern was introduced');
+    // AND NO PATTERN OVER THE SIGNATURE WAS INTRODUCED ANYWHERE IN THAT FILE.
+    //
+    // This replaces an assertion that could not fire. It read
+    // `/access\\\(request\(\?:|new RegExp\(.*access\(request/`, whose first
+    // alternative requires the seven characters `access\(request(?:` — so the
+    // killing mutation named above, which has no `(?:`, passed it, as did a
+    // string-form `new RegExp` and a prefix `indexOf` loosening. Measured: all
+    // three green. `pr-lifecycle.md`'s confirm-this-could-fail rule applies to
+    // negative assertions too, and this file's whole premise is that a static
+    // assertion must name the mutation that kills it.
+    //
+    // The escape sequence `access\(request` cannot occur in ordinary source —
+    // it only appears inside a regular expression (or an escaped string built to
+    // become one) matching the signature. The named mutation contains it
+    // verbatim, so introducing that mutation reds this line, independently of
+    // :129 above, which reds on the removal of the `indexOf` call instead.
+    assert.notOk(/access\\\(request/.test(source),
+      'and no regular expression over the access() signature was introduced anywhere in that file');
 
     // And the hard guard survives. Without it a start of -1 slices from the end
     // of the file and the comparison becomes two empty arrays — deepEqual green,
     // asserting nothing.
     assert.ok(source.includes('assert.ok(start !== -1,'),
-      'and `assert.ok(start !== -1)` is still a hard guard, so a failed extraction cannot pass as an empty match');
+      'and `assert.ok(start !== -1)` still reports a failed extraction, so it is named rather than silently compared as an empty match');
   });
 
   test('AC1/5 — the sample body drops baseUrl and originalUrl, and KEEPS request.path', async function(assert) {
@@ -154,26 +181,95 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
     // the first half reds; (b) delete the `/archived` branch and read nothing
     // off argument one — the second half reds, and so does the live-router 403
     // in test/integration/orm-test.ts.
+    // THREE COPIES, NOT TWO. `docs/usage-patterns.md` carries a complete third
+    // copy of this sample. Assertion 46 pins exactly one pair (README ↔
+    // fixture), so before #227's fix round the line-for-line mechanism reached
+    // one of the three full copies while the PR title said "and its five
+    // duplicated copies" — the same shape as the failure this whole story
+    // records, where variant 5 survived four rounds because it lived in the copy
+    // nothing mutated.
+    //
+    // KILLING MUTATION: migrate two copies and leave the third on the old
+    // signature, or edit the guard in one copy only. `extractAccessBody` throws
+    // on a missing signature, and the three-way comparison below reds on a
+    // divergent body.
     const fixture = await readRepoFile('../sample/access/global-access.ts');
     const readme = await readRepoFile('../../README.md');
+    const usagePatterns = await readRepoFile('../../docs/usage-patterns.md');
 
-    const blockStart = readme.indexOf('export default class GlobalAccess');
-    assert.ok(blockStart !== -1, 'precondition: the README carries the GlobalAccess sample');
-    const readmeBlock = readme.slice(blockStart, readme.indexOf('\n```', blockStart));
+    const fencedSample = (source, label) => {
+      const blockStart = source.indexOf('export default class GlobalAccess');
+      assert.ok(blockStart !== -1, `precondition: ${label} carries the GlobalAccess sample`);
 
-    for (const [label, source] of [['the shipped fixture', fixture], ['the README sample', readmeBlock]]) {
-      const body = extractAccessBody(source, label);
+      return source.slice(blockStart, source.indexOf('\n```', blockStart));
+    };
 
-      assert.notOk(body.includes('baseUrl'), `${label}'s access() body does not read request.baseUrl`);
-      assert.notOk(body.includes('originalUrl'), `${label}'s access() body does not read request.originalUrl`);
-      assert.ok(body.includes('request.path'), `${label}'s access() body DOES still read request.path — the sanctioned read`);
-      assert.ok(body.includes("'/archived'"), `${label}'s access() body still carries the /archived deny`);
-      assert.ok(/if \(model === 'owner'\)/.test(body), `${label} branches on the context's model, not on a mount string`);
-      assert.ok(/if \(model === 'animal'\)/.test(body), `${label} branches on model for animals too`);
+    const copies = [
+      ['the shipped fixture', fixture],
+      ['the README sample', fencedSample(readme, 'the README')],
+      ['the docs/usage-patterns.md sample', fencedSample(usagePatterns, 'docs/usage-patterns.md')],
+    ];
+
+    // COMMENTS STRIPPED, deliberately. All three copies carry long comment
+    // blocks that NAME `baseUrl` and `originalUrl` as history — the third copy
+    // reproduces the whole five-variant table inside `access()` — so a
+    // `body.includes('baseUrl')` over the raw slice would measure the prose, not
+    // the code. What these assert is that nothing is READ, which is a claim
+    // about code lines. The rationale comments are pinned separately, below.
+    const codeLines = ([label, source]) => extractAccessBody(source, label)
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('//'));
+
+    for (const copy of copies) {
+      const [label] = copy;
+      const code = codeLines(copy).join('\n');
+
+      assert.notOk(code.includes('baseUrl'), `${label}'s access() body does not read request.baseUrl`);
+      assert.notOk(code.includes('originalUrl'), `${label}'s access() body does not read request.originalUrl`);
+      assert.ok(code.includes('request.path'), `${label}'s access() body DOES still read request.path — the sanctioned read`);
+      assert.ok(code.includes("'/archived'"), `${label}'s access() body still carries the /archived deny`);
+      assert.ok(/if \(model === 'owner'\)/.test(code), `${label} branches on the context's model, not on a mount string`);
+      assert.ok(/if \(model === 'animal'\)/.test(code), `${label} branches on model for animals too`);
+
+      // BOTH ARGUMENTS ARE GUARDED. The fail-closed check on `model` protects
+      // argument two; it does not protect the `request.path` read, and on the
+      // first #227 head it did not — `access({}, { model: 'owner', ... })`
+      // returned a per-record filter where `origin/dev` returned `false`.
+      assert.ok(code.includes("if (typeof model !== 'string' || model === '') return false;"),
+        `${label} fails closed on an unidentifiable model (argument two)`);
+      assert.ok(code.includes("if (typeof request?.path !== 'string' || request.path === '') return false;"),
+        `${label} fails closed on an unidentifiable request.path too (argument one) — the guard and the read are on the same object`);
+      assert.notOk(/request\.path \?\? ''/.test(code),
+        `${label} does not reach the sub-path rule through \`?? ''\`, which this sample's own header condemns`);
+    }
+
+    // The three bodies are ONE matcher, code line for code line. Assertion 46
+    // (test/unit/access-filter-enforcement-test.ts) pins README ↔ fixture at the
+    // enforcement tier; this extends that to the third copy, which nothing
+    // pinned.
+    const [fixtureLines, readmeLines, usageLines] = copies.map(codeLines);
+
+    assert.deepEqual(readmeLines, fixtureLines, 'the README sample and the shipped fixture are the same matcher, line for line');
+    assert.deepEqual(usageLines, fixtureLines, 'and so is the docs/usage-patterns.md copy (was: pinned by nothing)');
+
+    // THE RATIONALE IS PINNED TOO, because assertion 46's extractor strips `//`
+    // lines and therefore compares no comments at all. The sentence below is the
+    // one thing stopping a future contributor from "finishing the migration" by
+    // deleting the `request.path` read — and it could be removed from the
+    // SHIPPED copy with the suite staying green.
+    for (const [label, source] of copies) {
+      assert.ok(source.includes('turns a deny into an ALLOW, silently'),
+        `${label} still carries the sentence that says migrating this read away is a silent deny-to-allow`);
+    }
+
+    for (const [label, source] of copies.slice(0, 2)) {
+      assert.ok(source.includes('CANNOT BE EXPRESSED FROM THE CONTEXT ALONE'),
+        `${label} — the copy a consumer installs — still carries the banner in full`);
     }
 
     // The header keeps the five variants as HISTORY, so `baseUrl` appearing in
-    // the FILE is expected and is not what the two assertions above measure.
+    // the FILE is expected and is not what the body assertions above measure.
     // This confirms they are measuring the body and not the file.
     assert.ok(fixture.includes('baseUrl'),
       'the fixture header still records the baseUrl revision as history — so the body assertions above really are scoped to the body');
@@ -196,9 +292,9 @@ module('[Unit] access sample migrated to the { model, operation } contract (#222
 
     assert.notOk(source.includes('const access = request => globalAccess.access(request);'),
       ':73 is no longer the one-argument harness');
-    assert.ok(source.includes('const access = (request, context) => globalAccess.access(request, context ?? contextFor(request));'),
+    assert.ok(source.includes('const access = (request, context) => globalAccess.access(request, context ?? accessContextFor(request));'),
       'and passes a context through: a real OrmRequest context when there is one, a mount-derived one otherwise');
-    assert.ok(source.includes('function contextFor(request) {'),
+    assert.ok(source.includes('function accessContextFor(request) {'),
       'and the fallback context is a named helper, so what it derives is reviewable');
 
     // The context it supplies is a REAL one — the same two keys, the same four
