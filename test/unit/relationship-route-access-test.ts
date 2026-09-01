@@ -203,7 +203,43 @@ module('[Unit] relationship route access -- source pins (#232, #240)', function(
     // disclosure that is present, uncommented and WRONG.
     const LABEL = '**Per-record denies for a related resource are not expressible.**';
 
-    const stripComments = source => source.replace(/<!--[\s\S]*?-->/g, '');
+    // STRIPPED TO A FIXED POINT, NOT IN ONE PASS, AND THE SINGLE PASS WAS
+    // BYPASSABLE RATHER THAN MERELY UNTIDY.
+    //
+    // This read `source.replace(/<!--[\s\S]*?-->/g, '')` -- one pass. CodeQL
+    // flags that shape as `js/incomplete-multi-character-sanitization` because
+    // deleting an inner match can splice the surrounding text into a NEW
+    // opener, and here that is a live hole in this very ledger. Measured, with
+    // LABEL as the needle:
+    //
+    //     '<!<!-- -->-- ' + LABEL + ' ... -->'
+    //
+    //   one pass  -> '<!-- ' + LABEL + ' ... -->'   indexOf(LABEL) FINDS it
+    //   fixed pt  -> ''                             indexOf(LABEL) is -1
+    //
+    // The tampered document is a genuine HTML comment start to finish, so
+    // GitHub renders nothing and a consumer sees no disclosure. MEASURED OVER
+    // THE LIVE SUITE, with that wrap applied to README.md's copy of the
+    // disclosure: single-pass helper -> 1031 / 0, this test GREEN; fixed-point
+    // helper -> 1030 / 1, this test RED. That is exactly the tamper the block
+    // above claims to catch ("wrap it in an HTML comment -> also red"), so the
+    // claim was false for one spelling of the wrap and is true now.
+    //
+    // BEHAVIOUR-NEUTRAL ON THE REAL INPUTS, measured rather than assumed:
+    // single-pass output === fixed-point output on both documents at this
+    // head, byte for byte (111346 and 25098 characters, unchanged from raw --
+    // neither file carries an HTML comment today, which is why only the tamper
+    // path distinguishes the two forms).
+    const stripComments = source => {
+      let previous;
+
+      do {
+        previous = source;
+        source = source.replace(/<!--[\s\S]*?-->/g, '');
+      } while (source !== previous);
+
+      return source;
+    };
 
     const documents = [
       ['README.md', stripComments(await readRepoFile('../../README.md'))],
