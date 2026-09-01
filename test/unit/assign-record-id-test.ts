@@ -521,32 +521,41 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
     });
   });
 
-  test('[GUARD] AC4 — the occupancy guard is evaluated on the LANDING key', function(assert) {
+  test('[GUARD] AC4 — the occupancy guard is evaluated on the LANDING key', async function(assert) {
     // LABELLED [GUARD], and this is the seam the story exists to keep closed.
     //
-    // GREEN on unfixed dev by coincidence: `'1' + 1` is `'11'`, which happens
-    // to miss. It is red under a fix that computes the max correctly but writes
-    // its occupancy guard against the RAW assigned value:
-    //
-    //     if (storeMap.has(rawData.id)) ...        // checks the NUMBER 1
-    //     ...                                      // record lands under '1'
-    //
-    // `StandaloneDB` (src/standalone-db.ts:130-146) is the working reference
-    // for max selection and NaN-safety, but it has no model or id-type concept
-    // at all, so its reduce maps every string id to 0 and its `maxId + 1` is
-    // the NUMBER 1 — which on a string-id model lands under the STRING key
-    // '1'. Transplanting it whole reproduces exactly this.
-    //
-    // Measured under that raw-value guard: owner '1' age 55 -> 9, store size
-    // unchanged, HTTP 200, no error. That is #205's lookup-key / landing-key
+    // `createRecord` looks a record up under `rawData.id` (manage-record.ts:50)
+    // and WRITES it under `record.id` (:69), after the model's declared id
+    // transform has run inside `serialize`. A guard written against the RAW
+    // candidate therefore checks a key the record will never occupy, misses an
+    // occupied slot and overwrites it — silently, with a 200 and no change in
+    // store size. That is abofs/stonyx-orm#205's lookup-key/landing-key
     // divergence reappearing INSIDE #203's own fix. #203 and #205 are sequenced
     // apart deliberately; this assertion is what keeps them apart.
+    //
+    // KILLING MUTATION (C): `while (storeMap.has(landingKey))` at
+    // manage-record.ts:389 -> `while (storeMap.has(toCandidate(candidate)))`.
+    // AC4.2 goes red: `OWNER-1` age 12 -> 9, store size unchanged, no error.
+    //
+    // WHY AC4.1 IS NOT THAT ASSERTION ANY MORE, STATED RATHER THAN LEFT AS AN
+    // UNKILLED SURVIVOR. AC4.1 is the scenario this AC was written for — an
+    // owner already filed under `'1'`, with `StandaloneDB`'s reduce
+    // (src/standalone-db.ts:137-150) transplanted whole, which has no id-type
+    // concept and hands back the NUMBER 1 that lands under `'1'`. Measured under
+    // that transplant: owner `'1'` age 55 -> 9, size unchanged, HTTP 200. Since
+    // a string-keyed candidate is now `<model>-<n>` (#209 — see AC3), a
+    // number-derived key can no longer collide with a caller's `'1'` at all, so
+    // AC4.1 is GREEN under every mutation in this file's matrix. It is kept as a
+    // regression control on the original scenario; AC4.2 is what carries the
+    // landing-key property, and it uses a transform whose output actually
+    // differs from its input, which is the only shape where raw and landing
+    // diverge.
     withIsolatedOwnerStore(() => {
       seedOwner('1', 55);
 
       const owners = store.get('owner');
       const sizeBefore = owners.size;
-      assert.strictEqual(sizeBefore, 1, 'precondition: the owner store holds exactly the landing key "1"');
+      assert.strictEqual(sizeBefore, 1, 'precondition: the owner store holds exactly the key "1"');
       assert.strictEqual(store.get('owner', '1').age, 55, 'precondition: and that record has a known age');
 
       let refusal;
@@ -557,21 +566,49 @@ module('[Unit] assignRecordId — server-assigned id selection (#203)', function
         refusal = error;
       }
 
-      // AC4.1 — the assertion that fails silently under a raw-value guard.
+      // AC4.1 — the original scenario, kept as a control.
       assert.strictEqual(store.get('owner', '1').age, 55,
-        'the pre-existing owner "1" was NOT overwritten (was, under a raw-value guard: age 55 -> 9, silently, with a 200)');
-      assert.strictEqual(store.get('owner', '1').gender, 'female', 'and its other attributes are intact too');
+        'AC4.1 — the pre-existing owner "1" was NOT overwritten (was, under a transplanted StandaloneDB reduce: age 55 -> 9, silently, with a 200)');
+      assert.strictEqual(store.get('owner', '1').gender, 'female', 'AC4.1 — and its other attributes are intact too');
 
-      // AC4.2 — either outcome is acceptable; SILENCE is not. This branch also
-      // records which policy the fix chose, so a later change of policy is a
-      // deliberate edit to this assertion rather than an unnoticed drift.
+      // Either outcome is acceptable; SILENCE is not. This branch also records
+      // which policy the fix chose, so a later change of policy is a deliberate
+      // edit to this assertion rather than an unnoticed drift.
       if (refusal) {
-        assert.strictEqual(owners.size, sizeBefore, 'REFUSAL POLICY: the create was refused with a defined error and nothing was written');
+        assert.strictEqual(owners.size, sizeBefore, 'AC4.1 — REFUSAL POLICY: the create was refused with a defined error and nothing was written');
       } else {
-        assert.strictEqual(owners.size, sizeBefore + 1, 'NEXT-FREE-KEY POLICY: the create landed on a free key and the store grew by exactly one');
-        assert.notStrictEqual(created.id, '1', 'and it did not land on the occupied key');
+        assert.strictEqual(owners.size, sizeBefore + 1, 'AC4.1 — NEXT-FREE-KEY POLICY: the create landed on a free key and the store grew by exactly one');
+        assert.notStrictEqual(created.id, '1', 'AC4.1 — and it did not land on the occupied key');
       }
     });
+
+    // AC4.2 — THE LANDING KEY, with a transform whose output differs from its
+    // input. Substituted into `Orm.instance.transforms` (main.ts:70) because
+    // that is the one registry BOTH `storeKeyDeriver` and `ModelProperty.value`
+    // (model-property.ts:33) read, so the derivation and the actual landing
+    // write move together — which is the property under test.
+    const originalTransform = Orm.instance.transforms.string;
+
+    try {
+      withIsolatedOwnerStore(() => {
+        Orm.instance.transforms.string = value => (value as string)?.toUpperCase();
+        seedOwner('OWNER-1', 12);
+
+        const owners = store.get('owner');
+        const sizeBefore = owners.size;
+        assert.strictEqual(sizeBefore, 1, 'precondition: the store holds exactly the LANDING key the first candidate produces');
+        assert.notOk(owners.has('owner-1'), 'precondition: and it does NOT hold the RAW candidate, so the two are distinguishable');
+
+        const created = createRecord('owner', { gender: 'male', age: 9, pets: [], phoneNumbers: [] }, { serialize: false, _skipAutoPersist: true });
+
+        assert.strictEqual(store.get('owner', 'OWNER-1').age, 12,
+          'AC4.2 — the occupied LANDING key was not overwritten (under a raw-candidate guard: age 12 -> 9, size unchanged, no error)');
+        assert.strictEqual(owners.size, sizeBefore + 1, 'AC4.2 — and the create inserted rather than overwrote');
+        assert.strictEqual(created.id, 'OWNER-2', 'AC4.2 — on the next free landing key');
+      });
+    } finally {
+      Orm.instance.transforms.string = originalTransform;
+    }
   });
 
   test('AC5 — negative controls: the existing contracts survive', function(assert) {
