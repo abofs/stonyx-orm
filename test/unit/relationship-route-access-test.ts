@@ -128,17 +128,24 @@ module('[Unit] relationship route access -- source pins (#232, #240)', function(
     // the integration suite stays fully green.
     const source = await readRepoFile('../integration/orm-test.ts');
 
+    // KEYED ON EACH REPAIR'S OWN ASSERTION MESSAGE, ONE NEEDLE PER REPAIR.
+    //
+    // THE FIRST VERSION OF THIS PIN DID NOT WORK AND THE MUTATION IS WHY IT WAS
+    // REPLACED. It counted occurrences of the URL `/animals/1/owner` and
+    // required at least two. There are THREE in the file -- the two repairs and
+    // an unrelated `links` comparison in #234 AC6 -- so deleting one repair's
+    // negative half left two and the pin stayed green. Measured: 1015 / 0 with
+    // the tamper applied. A count threshold over a needle that other code also
+    // matches is a threshold over the wrong population.
     const negatives = [
-      ["`${endpoint}/animals/1/owner`", 'GET /animals/:id/owner keeps a denied-subject assertion'],
-      ["`${endpoint}/animals/1/relationships/owner`", 'GET /animals/:id/relationships/owner keeps one'],
+      ['is 404 here too (was: 200 with full attributes)', 'GET /animals/:id/owner'],
+      ['is 404 on the linkage route too (was: 200 with', 'GET /animals/:id/relationships/owner'],
+      ['a denied related resource is 404, not a 200 with links', 'GET related resource response includes links.self'],
+      ['a denied linkage target is 404, not a 200 with links', 'GET relationship linkage response includes links.self and links.related'],
     ];
 
-    for (const [needle, message] of negatives) {
-      // Two tests each read these paths -- the relationship-route pair and the
-      // links pair -- so the count, not merely the presence, is what pins all
-      // four repairs.
-      const occurrences = source.split(needle).length - 1;
-      assert.ok(occurrences >= 2, `${message} (found ${occurrences}, expected at least 2)`);
+    for (const [needle, testName] of negatives) {
+      assert.ok(source.includes(needle), `${testName} keeps its denied-subject assertion`);
     }
 
     // And the permitted subjects really did move, so this is not satisfiable by
