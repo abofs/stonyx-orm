@@ -315,15 +315,28 @@ Access classes define models and provide custom filtering/authorization logic.
 > [Identifying the collection](#identifying-the-collection) before copying this.**
 > Every attempt to identify the collection by parsing the request target has
 > failed **open** — five distinct variants of this same example, each found only
-> after the previous was fixed, by five different people. The sample below does
-> not parse anything: it reads `request.baseUrl`, the mount Express actually
-> matched.
+> after the previous was fixed, by five different people. That section is now a
+> record of what not to do, not a matching recipe: the sample below reads `model`
+> from [the access context](#the-access-context-second-argument) and never looks
+> at the mount at all, so variants 1, 2, 4 and 5 are **unconstructible** against
+> it rather than merely handled. **Variant 3 survives.** It is the general shape
+> "a hand-written matcher normalises differently from the router", and the
+> migrated sample still runs one string comparison — the `/archived` sub-path
+> deny — which folds case but does not decode, so `GET /owners/%61rchived` steps
+> past it ([#228](https://github.com/abofs/stonyx-orm/issues/228)).
 >
 > That is still a stopgap. **The real fix is
 > [#202](https://github.com/abofs/stonyx-orm/issues/202)** — `access()` should
 > receive the model, the operation and the record, so there is nothing to
 > identify. Until it lands, prefer the array shape (`['read']`) or `false` where
 > you can: the **function** shape is the one that requires any matching at all.
+>
+> The one read of argument **one** that survives is `request.path`, for the
+> `/archived` sub-path deny — and it has to. The context names which model and
+> which verb, not which route, so that deny **cannot be expressed from the
+> context alone** and a context-only rewrite would silently turn it into an
+> allow.
+>
 > The same warning is repeated at the top of `src/orm-request.ts`, which ships;
 > the longer write-up in `docs/usage-patterns.md` does **not** ship, so this
 > README and that source header are the two copies a consumer sees.
@@ -337,27 +350,65 @@ Access classes define models and provide custom filtering/authorization logic.
 export default class GlobalAccess {
   models = ['owner', 'animal'];
 
-  access(request) {
-    // `request.baseUrl` is the mount Express matched — `/owners`, or
-    // `/api/owners` under ORM_REST_ROUTE=/api. Never parse `originalUrl`: it is
-    // the raw request target and can be absolute-form.
-    const mount = request.baseUrl;
+  access(request, { model, operation }) {
+    // `model` is the model this route was mounted for. It is assigned once, at
+    // mount time, and no request can influence it — not a mount prefix, not a
+    // query string, not a case-varied path, not an absolute-form request
+    // target. Nothing below parses anything, so variants 1, 2, 4 and 5 are not
+    // constructible against this predicate any more — they are history, not
+    // rules to follow. VARIANT 3 IS THE EXCEPTION AND THE CLAIM IS NARROWER
+    // THAN IT WAS: a matcher stricter than the router can still be stepped
+    // around, because the sub-path rule below is still a string comparison.
+    // Case is handled; percent-encoding is not — abofs/stonyx-orm#228.
+    //
+    // `operation` is destructured to name the whole contract at the point of
+    // use. This sample's rules are per-model and per-sub-path rather than
+    // per-verb, so it does not branch on it; the permission array at the bottom
+    // is where the verb is answered.
 
-    // FAIL CLOSED. If Express did not tell us what it matched we are not behind
-    // the mount we think we are, and an unidentifiable request denies rather
-    // than falling through to the CRUD grant at the bottom.
-    if (typeof mount !== 'string' || mount === '') return false;
+    // FAIL CLOSED ON ARGUMENT TWO. `model` is absent for any caller that
+    // resolved this predicate without supplying the context, and a request this
+    // function cannot identify DENIES rather than falling through to the CRUD
+    // grant at the bottom. An unidentifiable input must never be the permissive
+    // path. Argument ONE is guarded at its own read, below — this guard does
+    // not cover it.
+    if (typeof model !== 'string' || model === '') return false;
 
-    // Lower-cased because the router matched case-INSENSITIVELY, and a matcher
-    // stricter than the router that dispatched the request can be stepped
-    // around. The PATH only — record ids stay at their real case below.
-    const collection = mount.toLowerCase();
+    if (model === 'owner') {
+      // The context names WHICH MODEL and WHICH VERB — not which route. Six
+      // distinct owner surfaces produce one identical context, so a rule that
+      // depends on the SUB-PATH still needs argument one. `request.path` is
+      // mount-relative and query-free, and it is the one read of the raw
+      // request the README sanctions. false → 403 for the whole request.
+      //
+      // THIS DENY CANNOT BE EXPRESSED FROM THE CONTEXT ALONE. Migrating it away
+      // does not remove a rule, it turns a deny into an ALLOW, silently.
+      //
+      // FAIL CLOSED ON ARGUMENT ONE TOO. The guard above covers the context;
+      // this one covers the request, and since #202 they are two different
+      // objects. A caller that resolves this predicate through the documented
+      // `Orm.instance.getAccess()` path and hand-assembles a request can supply
+      // a perfectly valid context with no usable `path` — and
+      // `String(request.path ?? '')` is then `''`, which matches no sub-path
+      // rule and falls straight through to the per-record filter below. That is
+      // a DENY becoming an ALLOW. An input this function cannot identify DENIES,
+      // whichever ARGUMENT it arrived on — which is also why the `?? ''` this
+      // file's header condemns does not appear below.
+      if (typeof request?.path !== 'string' || request.path === '') return false;
 
-    // `request.path` is mount-relative and query-free, so sub-path rules need no
-    // prefix arithmetic either. false → 403 for the whole request.
-    const path = String(request.path ?? '').toLowerCase();
+      // Lower-cased because the router matched case-insensitively, so a
+      // case-sensitive rule here would be stricter than the router and could be
+      // stepped around.
+      //
+      // CASE-FOLDING ALONE IS NOT A SUFFICIENT NORMALISATION, and this line is
+      // not a recipe for one. Express sets `request.path` from the RAW pathname
+      // while the router DECODES `:id`, so `GET /owners/%61rchived` reaches this
+      // comparison as `/%61rchived`, walks past the deny, and is dispatched as
+      // the record `archived` — abofs/stonyx-orm#228. A matcher must normalise
+      // the way the router that dispatched the request does. Record ids are
+      // case-sensitive and must be compared at their real case.
+      const path = request.path.toLowerCase();
 
-    if (collection.endsWith('/owners')) {
       if (path === '/archived' || path.startsWith('/archived/')) return false;
 
       // Returning a function plugs it in as a per-record filter, and it is
@@ -373,7 +424,7 @@ export default class GlobalAccess {
     // inert. Deliberately NO `?? record.owner` fallback: accepting the raw
     // shape as well as the resolved one would absorb a resolution regression
     // silently, which is exactly what blinded this fixture before.
-    if (collection.endsWith('/animals')) return record => record.owner?.id !== 'restricted';
+    if (model === 'animal') return record => record.owner?.id !== 'restricted';
 
     // Allows full access to all calls that don't match any of the above conditions
     return ['read', 'create', 'update', 'delete'];
@@ -523,9 +574,10 @@ sample, `getAccess('owner') === getAccess('animal')`.
 #### Passing the context makes a model-correct answer *possible*
 
 It does not make the answer model-correct on its own. **The resolved predicate
-has to read the context.** Measured against the access class shipped with this
-repo, on a request Express dispatched to `GET /owners/angela`, asked about
-**animals**:
+has to read the context.** Against a predicate that ignores it the failure is
+measurable. On a request Express dispatched to `GET /owners/angela`, asked about
+**animals**, the sample as it shipped before
+[#222](https://github.com/abofs/stonyx-orm/issues/222) answered:
 
 ```
 getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
@@ -533,18 +585,26 @@ getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
 ```
 
 That is the **owners** filter, and it returns `true` for animal 21 — the record
-hidden on every animal surface. Under a mount that predicate recognizes neither
-way it is worse still: it falls through to
-`['read', 'create', 'update', 'delete']`, a full CRUD grant.
+hidden on every animal surface. Under a mount such a predicate recognizes
+neither way it is worse still: it falls through to
+`['read', 'create', 'update', 'delete']`, a full CRUD grant. Either way the
+context was supplied and the answer is not the animal answer, and it is wrong in
+the direction that **grants** — because that predicate was single-argument and
+identified its collection from the request, so it answered about the collection
+the request was *addressed to* while being asked about another one.
 
-Either way the context was supplied and the answer is not the animal answer, and
-it is wrong in the direction that **grants**. That predicate is single-argument
-and identifies its collection from the request, so it answered about the
-collection the request is *addressed to* while being asked about another one.
-Every predicate in this repo, and in every consumer tree, is single-argument on
-the day this ships, and a caller has no supported way to tell which kind it
-resolved. The boot-time arity warning that would surface it is
-[#213](https://github.com/abofs/stonyx-orm/issues/213).
+The sample shipped with this repo has since been migrated to read the context,
+and the same call now answers with the **animal** filter:
+
+```
+getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
+  ->  record => record.owner?.id !== 'restricted'
+```
+
+A single-argument predicate remains the default in every consumer tree, and a
+caller has no supported way to tell which kind it resolved. The boot-time arity
+warning that surfaces one is
+[#221](https://github.com/abofs/stonyx-orm/issues/221).
 
 So: pass the context, and do not treat a resolved predicate's answer as
 model-specific until that predicate has been migrated to read it.
@@ -676,9 +736,17 @@ no hidden records to disclose.
 
 ### Identifying the collection
 
-**Do not reconstruct the request path.** Every version of this sample that tried
-to has failed **open**, and each variant was found only after the previous one
-was fixed:
+**Do not reconstruct the request path — and since
+[#202](https://github.com/abofs/stonyx-orm/issues/202) you do not have to
+identify the collection at all.** Read `model` from
+[the access context](#the-access-context-second-argument): it is fixed at mount
+time, no request can influence it, and there is nothing left to parse.
+
+**Everything below is the record of what happened when this sample did parse
+it.** It is kept as history, not as a recipe — none of these matching strategies
+should be written into a new predicate. Every version of this sample that tried
+to identify the collection from the request target failed **open**, and each
+variant was found only after the previous one was fixed:
 
 | # | Variant | Why it fails open |
 |---|---|---|
@@ -688,13 +756,27 @@ was fixed:
 | 4 | hard-coded `/owners` | With `ORM_REST_ROUTE=/api` every url becomes `/api/owners/...` and the sample matches nothing — environment-specifically, which is harder to notice than failing everywhere. The remediation this document used to give was itself broken: `` `${config.orm.restServer.route}owners` `` evaluates to **`/apiowners`**, so a reader who followed the correction exactly still failed open and believed they had handled it. |
 | 5 | any match on `originalUrl` at all | HTTP/1.1 permits an **absolute-form** request-target. Express routes on `parseurl(req).pathname`, so the request dispatches normally — but `originalUrl` is the raw target. `GET http://anything.example/owners/angela` yields `originalUrl === 'http://anything.example/owners/angela'`, which has no `/owners` prefix. Measured: the record came back in full, `DELETE` succeeded, and it walked past a hard `return false` deny the same way. |
 
-**The fix is not a sixth rule.** It is to stop parsing:
+**The fix is not a sixth rule, and it is not a better string to match.** It is
+to stop identifying the collection at all. That is a statement about
+**identifying the collection**, and it is not a statement about the sample as a
+whole: the `/archived` sub-path rule *is* still a string match, and
+[#228](https://github.com/abofs/stonyx-orm/issues/228) is a sixth spelling that
+gets past it. Sub-path rules are the residue this fix does not cover, which is
+why they must normalise the way the router does.
 
-**Use `request.baseUrl`.** It is the mount Express *actually matched* when it
-dispatched the request. It carries no query string (variant 2), it is not
-mount-relative (variant 1), it already contains the configured `ORM_REST_ROUTE`
-prefix (variant 4 — there is nothing left to derive, so `/apiowners` is
-unconstructible), and it is unaffected by an absolute-form target (variant 5).
+An intermediate revision read **`request.baseUrl`** — the mount Express
+*actually matched*. That closed all five variants: it carries no query string
+(variant 2), it is not mount-relative (variant 1), it already contains the
+configured `ORM_REST_ROUTE` prefix (variant 4 — there is nothing left to derive,
+so `/apiowners` is unconstructible), and it is unaffected by an absolute-form
+target (variant 5). It was still a transport artifact standing in for a
+structural fact, and it is **no longer what the sample does**: the sample reads
+`model`, so variants 1, 2, 4 and 5 are unconstructible against it rather than
+handled. **Variant 3 survives**, in the one string comparison the migration
+leaves behind: the `/archived` sub-path deny folds case but does not decode
+([#228](https://github.com/abofs/stonyx-orm/issues/228)). The table below is
+retained as the measured evidence behind the five variants, not because any of
+these values should be matched on:
 
 | request | `request.url` | `request.originalUrl` | `request.baseUrl` | `request.path` |
 |---|---|---|---|---|
@@ -705,21 +787,35 @@ unconstructible), and it is unaffected by an absolute-form target (variant 5).
 | `GET http://anything.example/owners/angela` | `http://anything.example/angela` | `http://anything.example/owners/angela` | `/owners` | `/angela` |
 | `GET /api/animals/22` (`ORM_REST_ROUTE=/api`) | `/22` | `/api/animals/22` | `/api/animals` | `/22` |
 
-Two rules remain, and they are the whole list:
+**One read of argument one survives, and it must: `request.path`.** It is
+mount-relative and query-free, and it is for rules that distinguish **sub-paths**
+beneath the mount — as the `/archived` deny in the sample above does. The context
+names which model and which verb, **not which route**, so that deny *cannot be
+expressed from the context alone*, and a context-only rewrite would silently turn
+it into an allow.
 
-**1. Compare lower-cased.** `baseUrl` is the text the caller sent, not the
-registered mount — `GET /OwNeRs/angela` yields `/OwNeRs`. The router matched it
-case-insensitively, so a case-sensitive comparison here is stricter than the
-router and can be walked past. Lower-case the **mount and path only**; record ids
-are case-sensitive and must be compared at their real case.
+**Normalise the way the router that dispatched the request does — and
+case-folding alone does not.** A matcher stricter than the router can be stepped
+around, so the sample lower-cases before comparing (the router matched
+case-insensitively). That closes the case gap and **it is not the whole rule**:
+Express sets `request.path` from the **raw, undecoded** pathname while the router
+**decodes** `:id`, so `GET /owners/%61rchived` reaches a `path === '/archived'`
+comparison as `/%61rchived`, walks past the deny, and is dispatched as the record
+`archived`. That gap is live in the sample above and is tracked as
+[#228](https://github.com/abofs/stonyx-orm/issues/228) — **do not read the
+`.toLowerCase()` there as a complete normalisation recipe.** Record ids are
+case-sensitive and must be compared at their real case.
 
-**2. Fail closed when `baseUrl` is absent.** `String(request.originalUrl ?? '')`
-was added to stop a `TypeError`, and it traded fail-closed for fail-**open**: an
-empty string matches no collection, so `access()` fell through to the permission
-array and granted full CRUD. An input you cannot identify must **deny**.
-
-Use `request.path` — mount-relative and query-free — if you need to distinguish
-sub-paths beneath the mount, as the `/archived` deny above does.
+**Fail closed on anything you cannot identify — on *either* argument.**
+`String(request.originalUrl ?? '')` was once added here to stop a `TypeError`,
+and it traded fail-closed for fail-**open**: an empty string matched no
+collection, so `access()` fell through to the permission array and granted full
+CRUD. The same rule applies to the context — the sample returns `false` for an
+absent `model` rather than falling through. Since #202 the guard and the read can
+sit on **different objects**, and a guard on argument two does not protect a read
+of argument one: the sample therefore also returns `false` when `request.path` is
+absent or is not a string, rather than letting `?? ''` fall through to the
+per-record filter. An input you cannot identify must **deny**.
 
 ### Known limitations
 
@@ -742,11 +838,14 @@ sub-paths beneath the mount, as the `/archived` deny above does.
   see [The access context](#the-access-context-second-argument):
   `Orm.instance.getAccess(modelName)` makes another model's predicate
   **reachable**, and `context.model` makes a **model-correct answer possible** —
-  possible, not guaranteed: the resolved predicate has to read the context, and
-  every predicate in tree is still single-argument
-  ([#213](https://github.com/abofs/stonyx-orm/issues/213)), so today it answers
-  about the collection the request is addressed to. **The mechanism exists; the
-  ORM does not yet use it on this path.** The re-parenting write above is still
+  possible, not guaranteed: the resolved predicate has to read the context. The
+  sample shipped with this repo now does
+  ([#222](https://github.com/abofs/stonyx-orm/issues/222)), so
+  `getAccess('animal')` answers with the animal filter; a predicate that ignores
+  the second argument still answers about the collection the request is
+  addressed to, and the boot-time warning that surfaces one is
+  [#221](https://github.com/abofs/stonyx-orm/issues/221). **The mechanism
+  exists; the ORM does not yet use it on this path.** The re-parenting write above is still
   **not refused** — that enforcement is
   [#196](https://github.com/abofs/stonyx-orm/issues/196) and
   [#207](https://github.com/abofs/stonyx-orm/issues/207), which were blocked on
