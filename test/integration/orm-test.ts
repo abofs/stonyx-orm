@@ -1518,8 +1518,29 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(store.get('animal', HIDDEN), 'and the record survives (was: DESTROYED)');
     });
 
-    test('[DEFECT] variant 5 — an ABSOLUTE-FORM request-target cannot walk past the filter, over the real router', async function(assert) {
-      // HTTP/1.1 permits an absolute-form request-target
+    test('[DEFECT] variant 5 — an ABSOLUTE-FORM request-target cannot walk past the filter, over the real router (NOW-VACUOUS COVERAGE, see header)', async function(assert) {
+      // ======================================================================
+      // #222 — THIS IS NO LONGER LIVE COVERAGE OF THE SAMPLE. READ THIS FIRST.
+      //
+      // Every assertion below still passes, and it is kept because a raw-socket
+      // absolute-form dispatch through the whole router is worth keeping wired.
+      // But it no longer exercises the defect it was written for. The shipped
+      // sample was migrated to `access(request, { model, operation })` and it
+      // reads NEITHER `originalUrl` NOR `baseUrl`; `model` is assigned at mount
+      // time and no request target can influence it. So the absolute form
+      // cannot reach a comparison there is no longer any of: variant 5 is
+      // unconstructible against this predicate rather than handled by it, and
+      // these assertions would pass against a predicate with no matching logic
+      // whatsoever.
+      //
+      // Do not read a green here as evidence that a URL-parsing predicate is
+      // safe, and do not delete it and call the variant covered elsewhere. The
+      // live coverage of the one read of argument ONE that survived the
+      // migration is `request.path`, and it is the `/owners/archived` assertion
+      // immediately below this one.
+      // ======================================================================
+      //
+      // HISTORY. HTTP/1.1 permits an absolute-form request-target
       // (RFC 9112 3.2.2 — `GET http://host/path HTTP/1.1`). Express routes on
       // `parseurl(req).pathname`, so the request dispatches to the same handler,
       // but `request.originalUrl` is the RAW target. The shipped sample matched
@@ -1576,6 +1597,50 @@ module('[Integration] ORM', function(hooks) {
       const destroyed = await rawRequest('DELETE', `http://anything.example/animals/${HIDDEN}`);
       assert.equal(destroyed.status, 404, 'absolute-form DELETE is 404 (was: 204)');
       assert.ok(store.get('animal', HIDDEN), 'and the hidden record survives (was: DESTROYED)');
+    });
+
+    test('[DEFECT] #222 — the /archived sub-path deny survives the migration to the access context, over the real router', async function(assert) {
+      // THE TRAP THIS STORY EXISTS TO NOT FALL INTO. #213's original AC1
+      // forbade `request.path` in the migrated sample. README "What the context
+      // does not tell you: which surface" -- text #202 itself shipped --
+      // records that six owner surfaces produce one identical context:
+      //
+      //   GET /owners                          { model: 'owner', operation: 'read' }
+      //   GET /owners/gina                     { model: 'owner', operation: 'read' }
+      //   GET /owners/archived                 { model: 'owner', operation: 'read' }
+      //
+      // So the `/archived` deny CANNOT be expressed from the context alone. A
+      // context-only migration does not drop a rule loudly; it converts a DENY
+      // into an ALLOW, silently, and every other assertion in the suite stays
+      // green while it does. The migrated sample is therefore a HYBRID: `model`
+      // and `operation` from the context for which collection and which verb,
+      // `request.path` for which sub-path.
+      //
+      // Over the real router, because that is the only tier that proves express
+      // populates `request.path` the way the predicate assumes -- a fabricated
+      // request is the harness fail-open variant 5 survived four review rounds
+      // inside.
+      const archived = await fetch(`${endpoint}/owners/archived`);
+      assert.equal(archived.status, 403,
+        'GET /owners/archived is 403 — the sub-path deny still fires (a context-only migration turns this into a 200)');
+
+      const nested = await fetch(`${endpoint}/owners/archived/2024`);
+      assert.equal(nested.status, 403, 'and so is a path beneath it');
+
+      const cased = await fetch(`${endpoint}/owners/ARCHIVED`);
+      assert.equal(cased.status, 403,
+        'and a case-varied sub-path cannot step around it — the router matched case-insensitively, so the rule must too');
+
+      // CONFIRM THE CHECK COULD FAIL. A 403 for every /owners request would
+      // satisfy the three above and mean nothing, so this pins that the same
+      // mount, one segment different, is NOT denied: it is authorised and then
+      // filtered per-record, which is a different mechanism with a different
+      // status.
+      const visible = await fetch(`${endpoint}/owners/gina`);
+      const filtered = await fetch(`${endpoint}/owners/angela`);
+
+      assert.equal(visible.status, 200, 'a normal owner record on the same mount is 200, so the 403s above are not a blanket deny');
+      assert.equal(filtered.status, 404, 'and a record the per-record filter rejects is 404, not 403 — the two mechanisms stay distinguishable');
     });
 
     test('[DEFECT] a denied write runs no consumer hook, over the real dispatch', async function(assert) {
@@ -2058,10 +2123,23 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(hidden.status, 404, 'and the per-record filter it returns is still enforced');
       assert.notOk(data.some(record => Number(record.id) === CTX_HIDDEN), 'on the collection too');
 
-      // And the SHIPPED fixture — still arity-1, deliberately (its migration is
-      // #213) — is still the predicate enforcing the real /animals routes.
-      assert.equal(Orm.instance.getAccess('animal').length, 1,
-        'the shipped predicate in the live registry is still single-argument');
+      // TRIPWIRE, INVERTED BY #222. This read `.length, 1` with the comment
+      // "still arity-1, deliberately (its migration is #213)" — a deliberate
+      // tripwire so that migrating the fixture could not happen silently. The
+      // fixture is migrated, so the pin is INVERTED rather than deleted, and it
+      // still measures the LIVE BOOT REGISTRY rather than the imported class.
+      //
+      // Two parameters and no default: `access(request, ctx = {})` would report
+      // `length === 1` here and would trip #221's boot-time arity warning on the
+      // shipped sample.
+      //
+      // Deleting this line is not a pass. A companion assertion in
+      // test/unit/access-sample-migration-test.ts reads THIS FILE and asserts
+      // the literal below is present, so removing it reds a different file. It
+      // is deliberately cross-file: an assertion that a pin exists cannot live
+      // beside the pin, because deleting both would be silent.
+      assert.equal(Orm.instance.getAccess('animal').length, 2,
+        'the shipped predicate in the live registry declares the two-argument contract');
 
       const shippedHidden = await fetch(`${endpoint}/animals/${SHIPPED_HIDDEN}`);
       const shippedVisible = await fetch(`${endpoint}/animals/${SHIPPED_VISIBLE}`);
@@ -2298,25 +2376,56 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(captured.socket && typeof captured.socket.remoteAddress === 'string',
         'it came off a real socket — a fabricated request cannot carry one');
 
-      // (b) THE FAILURE MODE, ON THE SHIPPED PREDICATE, ON THIS LIVE REQUEST.
-      // The predicate the registry holds for `animal` today identifies its
-      // collection from the request (its migration is #213). Ask it about
-      // ANIMALS while it is holding a request addressed to /owners and it
-      // answers about OWNERS — and per #202's thesis it answers in the granting
-      // direction: animal 21, the record hidden on every animal surface, passes.
-      const urlIdentifying = Orm.instance.getAccess('animal');
-      const wrongAnswer = urlIdentifying(captured, { model: 'animal', operation: 'read' });
+      // (b) THE FAILURE MODE — AND ITS FIX, ON THE SHIPPED PREDICATE, ON THIS
+      // LIVE REQUEST.
+      //
+      // INVERTED BY #222. This used to assert that `getAccess('animal')` GRANTS
+      // animal 21: the registry held a URL-identifying predicate, so asked about
+      // ANIMALS while holding a request addressed to /owners it answered about
+      // OWNERS, in the granting direction. That was #196's objection verbatim,
+      // and it is the condition #222 exists to close.
+      //
+      // The read stays on the BOOT registry — not on an imported class and not
+      // on an entry this test seeded — because that is what makes the swap
+      // further down non-vacuous (see the comment there). What changed is the
+      // answer.
+      const bootRegistryEntry = Orm.instance.getAccess('animal');
+      const modelCorrect = bootRegistryEntry(captured, { model: 'animal', operation: 'read' });
 
-      assert.strictEqual(typeof wrongAnswer, 'function', 'the URL-identifying predicate returns a filter for this request');
+      assert.strictEqual(typeof modelCorrect, 'function', 'the shipped predicate returns a filter for this request');
+      assert.notOk(modelCorrect(store.get('animal', SHIPPED_HIDDEN)),
+        'and it REJECTS animal 21 — the ANIMAL answer, given while holding a request routed to /owners (was: GRANTED, the owner answer)');
+      assert.ok(modelCorrect(store.get('animal', SHIPPED_VISIBLE)),
+        'while admitting a visible animal');
+
+      // CONFIRM THE CHECK COULD FAIL, and keep the failure mode itself covered.
+      // `legacyOwnerIdentifyingAccess` is the shape the shipped predicate had
+      // before #222, and the shape every unmigrated consumer predicate still
+      // has. Handed this same /owners request with the same correct context and
+      // asked about ANIMALS, it still answers about OWNERS. Illustration of the
+      // consumer-side defect, not a framework guarantee — which is exactly why
+      // #221 exists to warn about it at boot.
+      const legacyOwnerIdentifyingAccess = request => {
+        const mount = request.baseUrl;
+        if (typeof mount !== 'string' || mount === '') return false;
+        if (mount.toLowerCase().endsWith('/owners')) return record => record.id !== 'angela' && record.id !== 'restricted';
+
+        return record => record.owner?.id !== 'restricted';
+      };
+      const wrongAnswer = legacyOwnerIdentifyingAccess(captured, { model: 'animal', operation: 'read' });
+
+      assert.strictEqual(legacyOwnerIdentifyingAccess.length, 1, 'the contrast subject really is a single-argument predicate');
       assert.ok(wrongAnswer(store.get('animal', SHIPPED_HIDDEN)),
-        'and it GRANTS animal 21 — the owner answer, given while being asked about animals. That is #196 objection verbatim, wrong in the granting direction');
+        'an arity-1 predicate GRANTS animal 21 on this same request — the owner answer. The context alone does not fix that; the predicate has to read it');
 
-      // (a) + the fix. `urlFreeAnimalAccess` is not a mock: it is the predicate
-      // this module has been enforcing over the live router for every assertion
-      // above, and the two requests below re-establish that inside this test.
-      // The shipped fixture cannot play this part because #202 must not migrate
-      // it — assertion 46 pins it line-for-line to the README sample and #213
-      // owns moving both (refinement §3).
+      // (a) + the fix, a second time and through a DIFFERENT predicate.
+      // `urlFreeAnimalAccess` is not a mock: it is the predicate this module has
+      // been enforcing over the live router for every assertion above, and the
+      // two requests below re-establish that inside this test. It was written
+      // for this part because when #202 landed the shipped fixture was still
+      // arity-1; since #222 the shipped fixture carries the claim too (above),
+      // and this half now pins the REGISTRY mechanism independently of which
+      // predicate happens to be installed.
       const liveHidden = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_HIDDEN}`);
       const liveVisible = await fetch(`${endpoint}/${CTX_MOUNT}/${CTX_VISIBLE}`);
 
@@ -2326,14 +2435,14 @@ module('[Integration] ORM', function(hooks) {
       // WHERE AC9's REGISTRY CLAIM IS ACTUALLY CARRIED. The swap below writes an
       // entry and the next line reads it back, which taken ALONE is a test
       // seeding what production is supposed to seed. It is not vacuous, and the
-      // reason is `urlIdentifying` above: that read comes from the BOOT registry
+      // reason is `bootRegistryEntry` above: that read comes from the BOOT registry
       // and throws when there is none, which is why removing
       // `Orm.instance.accessFunctions = ...` from setup-rest-server.ts reds AC9
       // (measured — it reds AC3, AC8 and AC9). AC8 carries the same claim
-      // independently. If a future edit drops the `urlIdentifying` read, AC9's
+      // independently. If a future edit drops the `bootRegistryEntry` read, AC9's
       // registry half silently becomes a self-check and this comment stops
       // being true — the swap exists to substitute a MIGRATED predicate for the
-      // shipped arity-1 one, not to demonstrate that the registry exists.
+      // shipped one, not to demonstrate that the registry exists.
       const restore = Orm.instance.accessFunctions.animal;
       try {
         Orm.instance.accessFunctions.animal = urlFreeAnimalAccess;
