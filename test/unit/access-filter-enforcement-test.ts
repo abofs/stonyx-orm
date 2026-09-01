@@ -2423,4 +2423,94 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       assert.strictEqual(deleted, 204, 'DELETE of an EXISTING record is still 204 — the behaviour change is scoped to the missing case');
     });
   });
+
+  // =========================================================================
+  // The harness's own recordId derivation (assertions 52-53)
+  // =========================================================================
+  module('accessContextFor — the recordId derivation the default call sites ride on', function() {
+    test('[GUARD] assertion 52 — the default context carries the ADDRESSED record, read off `params`, and the /archived deny fires through it', function(assert) {
+      // WHY THIS EXISTS. `accessContextFor` (top of this file) builds the
+      // second argument for the ~36 call sites that invoke `access(request)`
+      // with one argument. #236 added the `recordId` line to it, and NOTHING
+      // MEASURED THAT LINE: replacing the whole derivation with the constant
+      // `null` left this suite at 972 pass / 0 fail, fully green. The only
+      // property anything pinned was "the key exists and is not 'archived'" --
+      // so the `params` read the comment above the line calls load-bearing was
+      // inert, and the person most likely to delete it is someone tidying.
+      //
+      // KILLING MUTATIONS, each measured on a clean rebuilt tree:
+      //   recordId: null                          -> assertions 1 and 2 below red
+      //   recordId: request?.params?.id ?? null    -> assertion 4 reds (null vs undefined)
+      //   derived from the fabricated url instead  -> assertions 2 and 3 red
+      seedOwners();
+
+      // 1. The deny is REACHABLE through the default context. Without this the
+      //    36 one-argument call sites never exercise the /archived branch at
+      //    all, and a harness that stopped supplying a real id would look
+      //    identical.
+      // Verdicts are reduced to a STRING before comparing: `access()` answers a
+      // per-record FILTER FUNCTION on allow, and handing a function to the TAP
+      // reporter as `actual` kills the run before it reports.
+      const verdictOf = request => {
+        const verdict = access(request);
+
+        if (verdict === false) return 'DENY';
+        if (typeof verdict === 'function') return 'FILTER';
+
+        return `OTHER: ${JSON.stringify(verdict)}`;
+      };
+
+      assert.strictEqual(verdictOf(makeRequest({ url: '/owners/archived', params: { id: 'archived' } })), 'DENY',
+        'assertion 52 — access(request) through the DEFAULT context denies the addressed record `archived` (with `recordId: null` hard-coded in accessContextFor, this answers FILTER instead)');
+
+      // 2 and 3. THE PAIR THAT PINS WHICH FIELD IS READ, in both directions.
+      //    The url and `params` are made to DISAGREE: the verdict must follow
+      //    `params`, which is what the router populates, and must not follow
+      //    the fabricated path. A derivation parsed out of the url reproduces
+      //    inside the harness the decode-versus-dispatch disagreement #237
+      //    closed, and would then agree with a broken predicate.
+      assert.strictEqual(verdictOf(makeRequest({ url: '/owners/gina', params: { id: 'archived' } })), 'DENY',
+        'assertion 52 — and the verdict follows `params.id`, not the fabricated path: `params` says `archived`, the url says `gina`, the answer is DENY');
+      assert.strictEqual(verdictOf(makeRequest({ url: '/owners/archived', params: { id: 'gina' } })), 'FILTER',
+        'assertion 52 — and the converse: the url says `archived`, `params` says `gina`, and the record is NOT denied — nothing here parses the request target');
+
+      // 4. The absence spelling the framework guarantees, at the harness tier.
+      //    `auth()` emits `null` on a collection route and NEVER `undefined`;
+      //    the sample's `recordId === undefined` guard is sound only because of
+      //    that, so a harness that drifted to `undefined` would deny every
+      //    collection read for a reason unrelated to the rule under test.
+      assert.strictEqual(accessContextFor(makeRequest({ url: '/owners' })).recordId, null,
+        'assertion 52 — a collection route carries `recordId: null`, the spelling auth() produces, not undefined and not the empty string');
+      assert.ok('recordId' in accessContextFor(makeRequest({ url: '/owners' })),
+        'assertion 52 — and the KEY is present, because the sample refuses a context that lacks it');
+    });
+
+    test('[GUARD] assertion 53 — the harness does NOT mirror the auth() coercion, and that limitation is pinned rather than described', function(assert) {
+      // STATED LIMITATION, per the rule that a comment claiming a guarantee it
+      // does not provide is worse than no comment. `accessContextFor` says
+      // "Mirrors `auth()`" and it mirrors the SHAPE (key always present, `null`
+      // for a collection) but not the COERCION: `auth()` emits
+      // `getId(request.params)`, this harness emits `request.params.id` raw.
+      //
+      // WHY NOT SIMPLY CALL `getId`: it is module-private in
+      // src/orm-request.ts and is not exported, and re-implementing its
+      // `isNaN` gate here would be a FOURTH copy of the coercion `coerceId`'s
+      // own docblock forbids ("two coercions that must agree cannot be kept in
+      // agreement by review; they have to be one function"). The harness would
+      // then be pinned against a copy rather than against the function.
+      //
+      // INERT TODAY -- the fixture compares `recordId` against the string
+      // 'archived', and the per-record filter takes the record, not the id --
+      // and a live trap for the next rule that compares `recordId`
+      // NUMERICALLY, which is the divergence #237 closed at the framework
+      // tier. Pinned here so it is visible and so a future change to either
+      // side reds this assertion instead of passing silently.
+      const context = accessContextFor(makeRequest({ url: '/animals/0x2391', params: { id: '0x2391' } }));
+
+      assert.strictEqual(context.recordId, '0x2391',
+        'assertion 53 — the harness hands over the RAW param, while auth() would hand over getId({ id: "0x2391" }) === 9105; the two disagree on hex-shaped ids and every rule in this file is written against strings');
+      assert.strictEqual(transforms.number('0x2391'), 9105,
+        'assertion 53 — confirming the divergence is real and not a claim: the store files that id under 9105, which is the value auth() supplies and this harness does not');
+    });
+  });
 });

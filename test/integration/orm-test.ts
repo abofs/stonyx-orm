@@ -1913,6 +1913,38 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(collection.status, 200,
         'INPUT GET /owners -> 200 — the collection route carries recordId `null`, and a guard written as `if (!recordId)` would 403 it');
 
+      // DEFECT #243: AND THE COLLECTION ROUTE DISCLOSES THE RECORD THIS WHOLE
+      // TEST EXISTS TO REFUSE. Pinned to the CURRENT, LEAKY behaviour on
+      // purpose, in the #222 form: a deliberate tripwire, labelled, so the gap
+      // cannot be closed silently and cannot regress unnoticed. INVERT these
+      // three assertions when abofs/stonyx-orm#243 lands; do not delete them.
+      //
+      // The narration this test carries -- "the deny follows the RECORD, not
+      // the spelling" -- is true of every surface addressed to the record, and
+      // NOT true of the collection. The fixture hides `archived` with
+      // `return false`, which is REQUEST-scoped, while the per-record filter
+      // (which is record-scoped) names only `angela` and `restricted`. So the
+      // record the eight body assertions above prove cannot be read at
+      // /owners/{id} in any of 255 spellings comes back here in full, with its
+      // `gender: 'secret'`, unauthenticated.
+      //
+      // Pre-existing on origin/dev at c5f7907, re-measured there: not a
+      // regression from #236/#237. It is pinned HERE because #236/#237
+      // re-specified the rule as record-scoped, which is what makes the
+      // collection surface a contradiction rather than a different path.
+      assert.ok(collection.body.includes('"secret"'),
+        'DEFECT #243: GET /owners returns the `archived` record IN FULL, including `"gender":"secret"` — the /archived deny is request-scoped and the collection route does not carry it (invert this when #243 lands)');
+      assert.ok(collection.body.includes('"archived"'),
+        'DEFECT #243: and its id is disclosed in the same body, so this is not a partial projection (invert this when #243 lands)');
+
+      // THE NEGATIVE CONTROL, and it is what makes the two above a statement
+      // about the MECHANISM rather than about the route: the per-record filter
+      // DOES reach this body. `angela` is removed from it. One collection
+      // response, two records the fixture means to withhold, one of them
+      // withheld.
+      assert.notOk(collection.body.includes('"angela"'),
+        'while `angela` — withheld by the RECORD-scoped filter rather than by the request-scoped deny — is absent from that same body, which is what makes #243 a mechanism gap and not a route gap');
+
       // AC8 — MALFORMED AND OVER-LONG ESCAPES ARE THE ROUTER'S ANSWER, NOT THE
       // PREDICATE'S. Express rejects these with 400 BEFORE `auth()` runs —
       // verified in refinement with an instrumented wrapper that never fired.
