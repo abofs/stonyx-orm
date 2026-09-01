@@ -490,17 +490,27 @@ function buildResponse(
   const includes = parseInclude(includeParam);
   if (includes.length === 0) return response;
 
-  const includedRecords = collectIncludedRecords(recordOrRecords, includes);
+  // THE SAME FILTER OBJECT DECIDES MEMBERSHIP AND LINKAGE, AND IT IS PASSED TO
+  // BOTH (abofs/stonyx-orm#233). It carries #234's per-type verdict cache and
+  // per-(type, id) decision cache, so the traversal below and the `toJSON`
+  // calls beneath it share one resolution of the consumer's `access()` per
+  // type for the whole response. Building a second filter here would double
+  // every predicate call and, worse, could answer the two questions
+  // differently about the same record.
+  const includedRecords = collectIncludedRecords(recordOrRecords, includes, linkage);
   if (includedRecords.length > 0) {
     // LINKAGE, NOT MEMBERSHIP -- and the distinction is the whole reason this
     // line is one story's and the line above it is another's
     // (abofs/stonyx-orm#235 and #233 respectively).
     //
     //   - WHICH RESOURCES REACH THIS ARRAY is decided by
-    //     `collectIncludedRecords` on the line above. That is MEMBERSHIP, it is
-    //     #233's, and it is deliberately untouched here: a hidden owner is
-    //     still a member of `included` after this change. Pinned green by
-    //     `[GUARD] #235 X1` so that #235 cannot close #233 incidentally.
+    //     `collectIncludedRecords` on the line above. That is MEMBERSHIP and
+    //     it is #233's. As of #233 that call is given the SAME `linkage`
+    //     filter, so a hidden owner is no longer a member: she is dropped at
+    //     the push site and her subtree is never traversed. Pinned by
+    //     `[DEFECT] #233 AC2` and `[DEFECT] #233 AC4`; the re-specification of
+    //     `[GUARD] #235 X1`, which pinned the PRE-#233 answer here, is in that
+    //     same test.
     //   - WHAT A RECORD ALREADY IN THIS ARRAY MAY NAME in its own
     //     `relationships.*.data` is LINKAGE -- the same question #234 answers
     //     for the primary document -- and that is what the `linkage` option
@@ -545,14 +555,51 @@ function buildResponse(
 }
 
 /**
- * Recursively traverse an include path and collect related records
+ * Recursively traverse an include path and collect related records.
+ *
+ * ---------------------------------------------------------------------------
+ * THE `linkage` FILTER DECIDES MEMBERSHIP HERE (abofs/stonyx-orm#233)
+ * ---------------------------------------------------------------------------
+ * A resource reaches `included` because some record NAMED it, and until #233
+ * being named was the whole test. That made `?include=` a restoration of every
+ * record the read surfaces withhold: `GET /owners/angela` is 404 and
+ * `GET /animals/1?include=owner` returned her document in full, attributes and
+ * all. Measured on dev @ 8dda5d6, over the live router.
+ *
+ * FILTERED AT THE PUSH SITE, AND THE SITE MATTERS. The obvious alternative --
+ * let the traversal run and filter `collectIncludedRecords`' RETURN value --
+ * closes the membership half and leaves the worse half open: dropping a parent
+ * AFTER traversing through it publishes that parent's exact child set. On this
+ * repo's own fixture `GET /animals/1?include=owner,owner.pets` names angela's
+ * eight animals `[1, 3, 7, 10, 11, 15, 17, 20]`, which IS her `pets` array,
+ * reconstructed from a resource the caller may not read. So a denied record is
+ * `continue`d before it is pushed to `included` AND before it is pushed to
+ * `nextRecords`, which is what prunes the subtree.
+ *
+ * A DENIED RECORD IS DELIBERATELY NOT ADDED TO `seen`. `seen` is the
+ * deduplicator for records that DID enter `included`; putting a denial in it
+ * would conflate "already emitted" with "withheld", and the `else if` branch
+ * below would then push a denied record into `nextRecords` for deeper
+ * traversal -- re-opening the prune this function just closed. Re-asking is
+ * free: #234's filter caches per `(type, id)`, so the second ask is a `Map`
+ * hit and not a call into the consumer's `access()`.
+ *
+ * ABSENT FILTER MEANS PRE-#233 BEHAVIOUR, NOT A DENIAL. `linkage` is optional
+ * for the same reason it is optional on `buildResponse` and on
+ * `Record.toJSON`: an absent option means "no verdict was supplied", and the
+ * honest degradation is the document that shipped before, not an empty one.
+ * Both of `buildResponse`'s callers -- `getCollectionHandler` and
+ * `getSingleHandler`, the only two -- supply it, which is pinned by
+ * `[GUARD] #233 AC8`. What must never arrive here is a non-function; the
+ * guard below is the fail-closed reading of one.
  */
 function traverseIncludePath(
   currentRecords: OrmRecord[],
   includePath: string[],
   depth: number,
   seen: Map<string, Set<string | number>>,
-  included: OrmRecord[]
+  included: OrmRecord[],
+  linkage?: LinkageFilter
 ): void {
   if (depth >= includePath.length) return; // Reached end of path
 
@@ -578,6 +625,19 @@ function traverseIncludePath(
       const type = relatedRecord.__model.__name;
       const id = relatedRecord.id as string | number;
 
+      // MEMBERSHIP AND PRUNE, abofs/stonyx-orm#233. `continue` skips BOTH
+      // pushes below -- the record does not enter `included` and it does not
+      // become a parent at the next depth.
+      //
+      // FAIL CLOSED ON A RECORD WHOSE TYPE CANNOT BE NAMED, the same reading
+      // #232's `isLinkable` uses on the relationship routes: `type` is the key
+      // the verdict is resolved under, so a missing or empty one means there
+      // is no predicate to ask and no way to ask it. Denying is the only safe
+      // answer, and it is only reachable while a filter is in force -- with no
+      // filter this whole check is skipped and the pre-#233 document is
+      // emitted unchanged.
+      if (linkage && !(typeof type === 'string' && type !== '' && linkage(type, relatedRecord))) continue;
+
       // Initialize Set for this type if needed
       let seenIds = seen.get(type);
       if (!seenIds) {
@@ -599,11 +659,15 @@ function traverseIncludePath(
 
   // If there are more segments in the path, recursively process
   if (depth < includePath.length - 1 && nextRecords.length > 0) {
-    traverseIncludePath(nextRecords, includePath, depth + 1, seen, included);
+    traverseIncludePath(nextRecords, includePath, depth + 1, seen, included, linkage);
   }
 }
 
-function collectIncludedRecords(data: OrmRecord | OrmRecord[], includes: string[][]): OrmRecord[] {
+function collectIncludedRecords(
+  data: OrmRecord | OrmRecord[],
+  includes: string[][],
+  linkage?: LinkageFilter
+): OrmRecord[] {
   if (!includes || includes.length === 0) return [];
   if (!data) return [];
 
@@ -615,7 +679,7 @@ function collectIncludedRecords(data: OrmRecord | OrmRecord[], includes: string[
 
   // Process each include path
   for (const includePath of includes) {
-    traverseIncludePath(records, includePath, 0, seen, included);
+    traverseIncludePath(records, includePath, 0, seen, included, linkage);
   }
 
   return included;

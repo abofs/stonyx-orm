@@ -22,6 +22,36 @@ let endpoint;
 //let endpoint;
 let parsedFileData;
 
+/**
+ * Pick a PERMITTED animal belonging to `ownerId`, for the POSITIVE half of one
+ * of abofs/stonyx-orm#233's repaired pairs.
+ *
+ * DERIVED, NOT TRANSCRIBED, AND A HARD-CODED ID IS WRONG IN TWO INDEPENDENT
+ * WAYS HERE. Measured while repairing the #233 inversion set:
+ *
+ *   1. Earlier tests in the `JSON API` module DELETE animals -- 3 and 4 are
+ *      both gone by the time the `?include=` tests run, so `/animals/4` is a
+ *      404 there and a positive control written against it asserts nothing.
+ *   2. The shipped fixture HIDES one of gina's pets (animal 18,
+ *      abofs/stonyx-orm#240 fixture 1), so "one of gina's pets" is not the
+ *      same set as "one of gina's pets this caller may read".
+ *
+ * So the subject is chosen by asking the live router which of the owner's pets
+ * it will actually serve. Returns `undefined` when there is none, and every
+ * caller asserts on that rather than proceeding -- a positive control that
+ * silently found no subject is the exact shape of a vacuous pass.
+ */
+const permittedAnimalOwnedBy = async ownerId => {
+  const pets = [...(store.get('owner', ownerId)?.pets ?? [])].map(pet => pet?.id ?? pet);
+
+  for (const id of pets) {
+    if (!store.get('animal', id)) continue;
+    if ((await fetch(`${endpoint}/animals/${id}`)).status === 200) return id;
+  }
+
+  return undefined;
+};
+
 // Driven by sample requests defined in test/sample-requests
 module('[Integration] ORM', function(hooks) {
   setupIntegrationTests(hooks);
@@ -619,18 +649,43 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('get call with include parameter sideloads relationships', async function(assert) {
+      // INVERTED BY abofs/stonyx-orm#233, AND REPAIRED AS A PAIR RATHER THAN
+      // SWAPPED. What this asserted, recorded rather than deleted:
+      //
+      //     assert.equal(included.length, 3, 'includes owner + 2 traits');
+      //     const owner = included.find(r => r.type === 'owner' && r.id === 'angela');
+      //     assert.ok(owner, 'owner is included');
+      //     assert.equal(owner.attributes.age, 36);
+      //
+      // angela is 404 on `/owners/angela`, and those four lines asserted that
+      // `?include=owner` served her document -- age and all -- anyway. It was
+      // the leak written as a requirement, and #233 is what makes it false.
+      //
+      // THE NAIVE REPAIR IS TO RETARGET THE WHOLE TEST AT A PERMITTED OWNER,
+      // AND THAT WOULD DELETE THE REPRODUCTION. A test named "sideloads relationships"
+      // that only ever looks at a permitted subject no longer distinguishes
+      // #233's fix from a build that never sideloads anything. So both halves
+      // are asserted here, on the SAME surface:
+      //
+      //   - NEGATIVE: the hidden owner is absent, and the COUNT moved from 3
+      //     to 2 -- so deleting the `notOk` below does not make this test pass,
+      //     the count still fails. That is the tripwire the count assertion
+      //     exists to be.
+      //   - POSITIVE: a permitted owner IS still sideloaded, with attributes,
+      //     on the same query shape. Deleting THAT reds the over-denial control
+      //     instead. Both directions are live.
+      const hidden = await fetch(`${endpoint}/owners/angela`);
+      assert.equal(hidden.status, 404, 'precondition: angela is withheld on her own route');
+
       const response = await fetch(`${endpoint}/animals/1?include=owner,traits`);
-      const { data, included } = await response.json();
+      const { included } = await response.json();
 
       assert.equal(response.status, 200);
       assert.ok(included, 'included array exists');
-      assert.equal(included.length, 3, 'includes owner + 2 traits');
+      assert.equal(included.length, 2, 'includes 2 traits and NOT the hidden owner (was 3)');
 
-      // Verify owner is included with full attributes
-      const owner = included.find(r => r.type === 'owner' && r.id === 'angela');
-      assert.ok(owner, 'owner is included');
-      assert.equal(owner.attributes.age, 36);
-      assert.ok(owner.relationships, 'included records have relationships');
+      assert.notOk(included.find(r => r.type === 'owner'),
+        'the hidden owner is not a member of `included` — #233');
 
       // Verify traits are included
       const trait1 = included.find(r => r.type === 'trait' && r.id === 1);
@@ -639,6 +694,26 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(trait2, 'trait 2 is included');
       assert.equal(trait1.attributes.type, 'habitat');
       assert.equal(trait2.attributes.type, 'color');
+
+      // THE POSITIVE HALF, on the same query shape against a permitted owner.
+      const subject = await permittedAnimalOwnedBy('gina');
+      assert.ok(subject, 'precondition: gina has a readable pet to act as the positive control');
+
+      const permitted = await fetch(`${endpoint}/animals/${subject}?include=owner,traits`);
+      const permittedBody = await permitted.json();
+
+      // COUNT ASSERTION FOR THE POSITIVE HALF TOO, derived from the store so
+      // it moves with the fixture: one owner plus that animal's traits.
+      const subjectTraits = [...(store.get('animal', subject)?.traits ?? [])];
+
+      assert.equal(permitted.status, 200);
+      assert.equal(permittedBody.included.length, 1 + subjectTraits.length,
+        `a permitted owner + ${subjectTraits.length} trait(s) — the sideload still happens`);
+
+      const gina = permittedBody.included.find(r => r.type === 'owner' && r.id === 'gina');
+      assert.ok(gina, 'a PERMITTED owner is still sideloaded on the same surface');
+      assert.equal(gina.attributes.age, 34, 'with her attributes — this is not an empty-shell membership');
+      assert.ok(gina.relationships, 'included records have relationships');
     });
 
     test('get collection with include parameter deduplicates relationships', async function(assert) {
@@ -666,8 +741,23 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('invalid relationship in include parameter is ignored', async function(assert) {
-      const response = await fetch(`${endpoint}/animals/1?include=owner,invalidRel,traits`);
-      const { data, included } = await response.json();
+      // COLLATERAL INVERSION (abofs/stonyx-orm#233). This test is about an
+      // UNKNOWN relationship name being skipped, not about access -- but it
+      // was written against animal 1, whose owner is hidden, so `hasOwner`
+      // measured the leak rather than the parser. What it asserted:
+      //
+      //     const response = await fetch(`${endpoint}/animals/1?include=owner,invalidRel,traits`);
+      //     assert.ok(hasOwner, 'valid owner relationship included');
+      //
+      // RETARGETED AT A PERMITTED SUBJECT, which is the repair that restores
+      // the test to its own subject. The hidden subject is kept as the second
+      // half rather than dropped, so this still fails if `invalidRel` ever
+      // starts throwing or 400ing on either one.
+      const subject = await permittedAnimalOwnedBy('gina');
+      assert.ok(subject, 'precondition: gina has a readable pet to ask the question about');
+
+      const response = await fetch(`${endpoint}/animals/${subject}?include=owner,invalidRel,traits`);
+      const { included } = await response.json();
 
       assert.equal(response.status, 200);
       assert.ok(included, 'included array exists despite invalid relationship');
@@ -677,6 +767,17 @@ module('[Integration] ORM', function(hooks) {
       const hasTraits = included.some(r => r.type === 'trait');
       assert.ok(hasOwner, 'valid owner relationship included');
       assert.ok(hasTraits, 'valid traits relationship included');
+      assert.notOk(included.some(r => r.type === 'invalidRel'), 'and the unknown name contributed nothing');
+
+      // The same query against the HIDDEN subject is still a 200 with the
+      // valid relationships parsed -- an unknown name and a withheld record
+      // are separate concerns and neither turns the other into an error.
+      const withHidden = await fetch(`${endpoint}/animals/1?include=owner,invalidRel,traits`);
+      const withHiddenBody = await withHidden.json();
+
+      assert.equal(withHidden.status, 200, 'the hidden-owner subject is still a 200, not an error');
+      assert.ok(withHiddenBody.included.some(r => r.type === 'trait'),
+        'its valid `traits` segment still resolved past both the unknown name and the withheld owner');
     });
 
     test('post call with existing id returns 409 conflict', async function(assert) {
@@ -880,42 +981,71 @@ module('[Integration] ORM', function(hooks) {
       const { included } = await response.json();
 
       assert.equal(response.status, 200);
-      assert.ok(included, 'included array exists');
 
-      // Should include: owner + all of owner's pets (other animals)
-      //
-      // MEMBERSHIP, AND IT IS abofs/stonyx-orm#233's REPRODUCTION -- LEAVE IT.
-      // angela is 404 on `/owners/angela` and she is still a MEMBER of
-      // `included`; that this is currently true is what #233 exists to change,
-      // so this line must stay able to go red in Sprint 87. #235 does not move
-      // it (measured green under the #235 patch), and it must not be swept up
-      // in the re-specification three lines below.
-      const owner = included.find(r => r.type === 'owner' && r.id === 'angela');
-      assert.ok(owner, 'owner is included');
+      // `included` IS ABSENT, NOT EMPTY, and that is the shape this module
+      // already uses for a sideload that produced nothing -- see `empty
+      // relationships do not appear in included array` above. A withheld
+      // sideload is byte-identical to a genuinely empty one, which is
+      // abofs/stonyx-orm#233 AC6/AC10 and is asserted in its own right in the
+      // `Include Traversal Membership Access (#233)` module.
+      const includedResources = included ?? [];
 
-      // Angela owns multiple animals, those should be in included.
+      // MEMBERSHIP, AND IT IS NOW ASSERTED IN THE OTHER DIRECTION
+      // (abofs/stonyx-orm#233). This test carried #233's reproduction as two
+      // green assertions. Recorded rather than deleted, with what they were
+      // measured to be worth:
       //
-      // RE-SPECIFIED BY abofs/stonyx-orm#235, AND ONLY THIS ASSERTION. It used
-      // to select the sideloaded animals by
-      // `r.relationships.owner?.data?.id === 'angela'` -- which is the LEAK
-      // written as a requirement: it asserted that eight permitted animals each
-      // publish the id of an owner this caller gets a 404 for. #235 nulls that
-      // linkage, so the old selector matched nothing and the assertion went red
-      // for the RIGHT reason. It is re-specified rather than deleted, and it is
-      // re-specified to the property the test was actually named for: that the
-      // NESTED hop (`owner.pets`) traversed and produced animals in `included`.
+      //     const owner = included.find(r => r.type === 'owner' && r.id === 'angela');
+      //     assert.ok(owner, 'owner is included');
+      //     ...
+      //     const angelaPets = included.filter(r => r.type === 'animal');
+      //     assert.ok(angelaPets.length > 1, 'owner pets are included via nested relationship');
+      //     const expectedPets = [...(store.get('owner', 'angela')?.pets ?? [])].map(pet => pet?.id ?? pet);
+      //     assert.ok(expectedPets.every(id => angelaPets.some(r => r.id === id)),
+      //       'and every one of the owner\'s pets reached included via the nested hop');
       //
-      // Selecting on `type === 'animal'` alone is not enough on its own -- the
-      // primary record's own relationships could contribute one -- so the
-      // membership is checked against the store's view of angela's pets, which
-      // is the set the nested hop is supposed to have produced.
-      const angelaPets = included.filter(r => r.type === 'animal');
-      assert.ok(angelaPets.length > 1, 'owner pets are included via nested relationship');
+      // Measured on dev @ c106cf9, live router:
+      //   GET /owners/angela                      -> 404
+      //   GET /animals/1?include=owner,owner.pets -> 200, included = 9 resources:
+      //     ["owner:angela","animal:1","animal:3","animal:7","animal:10",
+      //      "animal:11","animal:15","animal:17","animal:20"]
+      //
+      // Those eight animal ids ARE angela's `pets` array. So the second
+      // assertion did not merely sideload a withheld record, it reconstructed
+      // the withheld record's entire child set for a caller who is 404 on the
+      // parent -- which is why #233 prunes the SUBTREE and not just the node.
+      //
+      // BOTH HALVES ARE PINNED, and pinning both is what makes deleting either
+      // one visible: the negative below fails if the prune regresses, and the
+      // positive control at the bottom fails if the prune over-denies.
+      assert.notOk(includedResources.find(r => r.type === 'owner'),
+        'the hidden owner is NOT a member of `included` (was: her full document)');
 
+      const angelaPets = includedResources.filter(r => r.type === 'animal');
       const expectedPets = [...(store.get('owner', 'angela')?.pets ?? [])].map(pet => pet?.id ?? pet);
-      assert.ok(expectedPets.length > 1, 'precondition: angela really does own more than one animal');
-      assert.ok(expectedPets.every(id => angelaPets.some(r => r.id === id)),
-        'and every one of the owner\'s pets reached included via the nested hop');
+
+      assert.ok(expectedPets.length > 1,
+        `precondition: angela really does own more than one animal (${expectedPets.join(', ')}) — so the prune below has something to hide`);
+      assert.deepEqual(angelaPets, [],
+        'and NONE of her pets reached `included` either — the subtree beneath a dropped parent is pruned, not traversed through');
+
+      // THE POSITIVE HALF, ON THE SAME QUERY SHAPE. Animal 4 is gina's, gina
+      // is permitted, and the nested `owner.pets` hop must still traverse --
+      // otherwise this test would be green against a build that dropped
+      // `?include=` entirely.
+      const subject = await permittedAnimalOwnedBy('gina');
+      assert.ok(subject, 'precondition: gina has a readable pet to act as the positive control');
+
+      const permitted = await fetch(`${endpoint}/animals/${subject}?include=owner,owner.pets`);
+      const permittedIncluded = (await permitted.json()).included;
+
+      assert.equal(permitted.status, 200);
+      assert.ok(permittedIncluded.find(r => r.type === 'owner' && r.id === 'gina'),
+        'a PERMITTED owner is still a member of `included`');
+
+      const ginaPets = permittedIncluded.filter(r => r.type === 'animal');
+      assert.ok(ginaPets.length > 1,
+        `owner pets are still included via the nested relationship (${ginaPets.map(r => r.id).join(', ')})`);
     });
 
     test('get call with deeply nested include parameter (3 levels)', async function(assert) {
@@ -3129,7 +3259,21 @@ module('[Integration] ORM', function(hooks) {
       });
 
       test('included resources have links.self', async function(assert) {
-        const response = await fetch(`${endpoint}/animals/1?include=owner`);
+        // COLLATERAL INVERSION (abofs/stonyx-orm#233). This test is about
+        // `links.self` on a sideloaded resource; it was written against
+        // animal 1, whose owner is hidden, so after the membership filter
+        // `included` is empty and there is no resource to read links off.
+        // Retargeted at a permitted subject -- one of gina's readable pets -- which is
+        // this test was always about.
+        //
+        // AND THE EMPTY CASE IS ASSERTED TOO, because "no links" and "no
+        // resource" are different answers and only one of them is correct
+        // here: a withheld sideload must produce NO member, not a member with
+        // a missing `links` object.
+        const subject = await permittedAnimalOwnedBy('gina');
+        assert.ok(subject, 'precondition: gina has a readable pet to read links off');
+
+        const response = await fetch(`${endpoint}/animals/${subject}?include=owner`);
         const { included } = await response.json();
 
         assert.ok(included, 'response has included array');
@@ -3140,6 +3284,13 @@ module('[Integration] ORM', function(hooks) {
         assert.ok(owner.links, 'included resource has links object');
         assert.ok(owner.links.self, 'included resource has links.self');
         assert.ok(owner.links.self.includes(`/owners/${owner.id}`), 'self link points to resource URL');
+
+        const withheld = await fetch(`${endpoint}/animals/1?include=owner`);
+        const withheldBody = await withheld.json();
+
+        assert.equal(withheld.status, 200, 'the withheld subject is still a 200');
+        assert.notOk(withheldBody.included,
+          'and it publishes no `included` array at all — not a member with an absent links object');
       });
     });
 
