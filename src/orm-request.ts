@@ -1433,21 +1433,76 @@ export default class OrmRequest extends Request {
         const relatedData = record.__relationships[relationshipName];
         const baseUrl = getBaseUrl(request);
 
-        // LINKAGE ONLY. This filter decides which ids the emitted documents may
-        // NAME in their own `relationships.*.data`; it does NOT decide whether
-        // the related records themselves are served -- that is the parent-only
-        // filtering this route has done since #190, and widening it to the
-        // related record is abofs/stonyx-orm#196.
+        // ONE FILTER, TWO JOBS, AND abofs/stonyx-orm#232 IS THE SECOND ONE.
+        //
+        // As LINKAGE (#234) it decides which ids the emitted documents may NAME
+        // in their own `relationships.*.data`. As MEMBERSHIP (this issue) it
+        // decides whether the related record is served here AT ALL -- the
+        // related resource is PRIMARY data on this route, so there is no
+        // linkage-consistency question to answer separately.
+        //
+        // Until #232 this route filtered only the PARENT, so a record its own
+        // model's predicate hides was served in full from another model's
+        // route, at ZERO query parameters. Measured on dev @ 8dda5d6:
+        //
+        //     GET /owners/angela          -> 404
+        //     GET /animals/1/owner        -> 200, owner:angela, full attributes
+        //     GET /traits/2/tag           -> 200, a model NO access class
+        //                                    claims, on a collection that has
+        //                                    no mounted route at all
+        //
+        // ARGUMENT ONE IS THE LIVE REQUEST, NOT A DERIVED ONE. A fabricated
+        // request addressing the RELATED resource was the original design and
+        // it is dropped: #241 removed the shipped fixture's read of argument
+        // one, so a fabricated value changes nothing it could observe, and
+        // test/unit/linkage-verdict-test.ts:484 pins the predicate as receiving
+        // the live request BY IDENTITY. `createLinkageFilter` is also a
+        // published public export (src/index.ts) whose resolution granularity
+        // is per TYPE; supplying a per-RECORD request would mean widening it,
+        // which takes a consumer `access()` from ~2 calls to ~7 on a plain
+        // `GET /animals`. That is a separate, consumer-visible story.
+        //
+        // THE RESIDUAL THAT FOLLOWS FROM THAT IS DISCLOSED, NOT PAPERED OVER.
+        // `recordId` is `null` here and the request names a record of a
+        // DIFFERENT model, so a consumer predicate can express a model-level or
+        // a request-level deny for a related resource, but NOT a per-record
+        // one. README.md and docs/usage-patterns.md say so; a ledger assertion
+        // in test/unit/relationship-route-access-test.ts keeps them saying it.
         const linkage = createLinkageFilter(request);
+
+        // FAIL CLOSED ON A RECORD WHOSE TYPE CANNOT BE NAMED. `isLinkable` is
+        // keyed on the model name; without one there is no predicate to ask,
+        // and an unidentifiable input must never be the permissive path.
+        const isLinkable = (r: OrmRecord) => {
+          const type = (r as { __model?: { __name?: string } }).__model?.__name;
+
+          return typeof type === 'string' && type !== '' && linkage(type, r);
+        };
 
         let data: unknown;
         if (info.isArray) {
-          // hasMany - return array
+          // hasMany - return array, MINUS the members this caller may not see.
+          // Dropped, never errored: the result is byte-identical to a genuinely
+          // empty relationship, so this route is not an existence oracle.
           const related = Array.isArray(relatedData) ? relatedData.filter(isOrmRecord) : [];
-          data = related.map(r => r.toJSON?.({ baseUrl, linkage }));
+          data = related.filter(isLinkable).map(r => r.toJSON?.({ baseUrl, linkage }));
         } else {
-          // belongsTo - return single or null
-          data = isOrmRecord(relatedData) ? relatedData.toJSON?.({ baseUrl, linkage }) : null;
+          // belongsTo - return single or null. A DENIED target is 404, the same
+          // status this route already returns for a denied PARENT and for a
+          // parent that does not exist, and the same status the related
+          // record's own route answers.
+          //
+          // KNOWN RESIDUAL, stated here because it is the one place a reader
+          // will look: 404 is distinguishable from a relationship that is
+          // genuinely EMPTY, which answers 200 with `data: null`. So a caller
+          // can tell "there is a target you may not see" from "there is no
+          // target". That asymmetry is inherited -- a denied PARENT has always
+          // answered 404 while an existing parent with an empty relationship
+          // answers 200 -- and closing it is a change to the module's whole
+          // denial spelling, not to this route.
+          if (!isOrmRecord(relatedData)) data = null;
+          else if (!isLinkable(relatedData)) return 404;
+          else data = relatedData.toJSON?.({ baseUrl, linkage });
         }
 
         return {
@@ -1513,16 +1568,36 @@ export default class OrmRequest extends Request {
         const relatedData = record.__relationships[relationshipName];
         const baseUrl = getBaseUrl(request);
 
+        // THE ONLY ONE OF THE FOUR READ SURFACES THAT DOES NOT GO THROUGH
+        // `toJSON()`. It builds `{ type, id }` BY HAND, which is why #234's
+        // linkage filter never reached it and why this half belongs to
+        // abofs/stonyx-orm#232 rather than to #234: on this route the linkage
+        // IS the primary data of an opt-in request, so filtering it changes the
+        // route's MEMBERSHIP semantics, not the ids named inside somebody
+        // else's document.
+        //
+        // Same filter, same argument-one decision, same residual as
+        // `/:id/{relationship}` above -- read the block there.
+        const linkage = createLinkageFilter(request);
+        const isLinkable = (r: OrmRecord) => {
+          const type = (r as { __model?: { __name?: string } }).__model?.__name;
+
+          return typeof type === 'string' && type !== '' && linkage(type, r);
+        };
+
         let data: unknown;
         if (info.isArray) {
           // hasMany - return array of linkage objects
           const related = Array.isArray(relatedData) ? relatedData.filter(isOrmRecord) : [];
           data = related
             .filter((r): r is OrmRecord & { __model: { __name: string } } => Boolean(r.__model))
+            .filter(isLinkable)
             .map(r => ({ type: r.__model.__name, id: r.id }));
         } else {
           // belongsTo - return single linkage or null
           if (isOrmRecord(relatedData) && relatedData.__model) {
+            if (!isLinkable(relatedData)) return 404;
+
             data = { type: relatedData.__model.__name, id: relatedData.id };
           } else {
             data = null;
