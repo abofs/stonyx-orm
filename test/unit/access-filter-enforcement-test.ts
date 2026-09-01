@@ -2389,11 +2389,50 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       const single = await dispatch(ormRequest, ormRequest.handlers.get['/:id'], makeRequest({ url: `/animals/${HIDDEN_ID}`, params: { id: String(HIDDEN_ID) } }));
       assert.strictEqual(String(single.data.id), String(HIDDEN_ID), 'GET /:id unaffected when no filter is present');
 
+      // RE-SCOPED BY abofs/stonyx-orm#232 -- KNOWINGLY, AND NOT BY DELETION.
+      //
+      // These two sub-assertions read `notStrictEqual(…, 404)` -- "the related
+      // resource is served when no filter is present". They red under #232 and
+      // under every argument-one choice the refinement measured, and the cause
+      // is structural rather than a design mistake: the related record is
+      // judged by ITS OWN model's predicate, resolved from
+      // `Orm.instance.getAccess(type)`, so it fires on requests where
+      // `state.filter` was never planted. Animal `HIDDEN_ID` is owned by
+      // `restricted`, whom the OWNER rule hides.
+      //
+      // GATING THE RELATED-RECORD CHECK ON `state.filter` WAS REJECTED, and the
+      // reason is worth having at the assertion: it would mean a mount whose
+      // `access()` returns a permission ARRAY grants that caller every OTHER
+      // model's records -- which re-opens the unclaimed-model case
+      // (`getAccess('tag') === undefined`) for any consumer using array-style
+      // access. `getAccess('owner') === getAccess('animal')` is `true` against
+      // this fixture, so `state.filter` cannot even identify which model's
+      // answer it is.
+      //
+      // So the two sub-assertions are REPLACED IN PLACE by an explicit
+      // assertion of the new rule, in BOTH directions. The test keeps its GUARD
+      // label and its five surviving sub-assertions (`GET /:id`, `PATCH`,
+      // collection `GET`, `POST`, `DELETE`), so it still reds if the fix leaks
+      // into the ADDRESSED model's own path -- which is what 16c is for.
+      //
+      // KILLING MUTATION for the replacement: gate either relationship route's
+      // related-record filter on `state.filter` being present. The two denied
+      // assertions red.
       const related = await dispatch(ormRequest, ormRequest.handlers.get['/:id/owner'], makeRequest({ url: `/animals/${HIDDEN_ID}/owner`, params: { id: String(HIDDEN_ID) } }));
-      assert.notStrictEqual(related, 404, 'related-resource route unaffected when no filter is present');
+      assert.strictEqual(related, 404,
+        'a RELATED record is judged by its OWN model\'s predicate, independently of state.filter (#232)');
 
       const linkage = await dispatch(ormRequest, ormRequest.handlers.get['/:id/relationships/owner'], makeRequest({ url: `/animals/${HIDDEN_ID}/relationships/owner`, params: { id: String(HIDDEN_ID) } }));
-      assert.notStrictEqual(linkage, 404, 'linkage route unaffected when no filter is present');
+      assert.strictEqual(linkage, 404, 'and on the linkage route too (#232)');
+
+      // THE OTHER DIRECTION, IN THE SAME TEST, so the re-scope cannot become a
+      // blanket deny. `VISIBLE_ID` is owned by gina, whom nothing hides.
+      const relatedPermitted = await dispatch(ormRequest, ormRequest.handlers.get['/:id/owner'], makeRequest({ url: `/animals/${VISIBLE_ID}/owner`, params: { id: String(VISIBLE_ID) } }));
+      assert.notStrictEqual(relatedPermitted, 404,
+        'while a PERMITTED related record is still served with no filter present -- the re-scope is not an over-denial');
+
+      const linkagePermitted = await dispatch(ormRequest, ormRequest.handlers.get['/:id/relationships/owner'], makeRequest({ url: `/animals/${VISIBLE_ID}/relationships/owner`, params: { id: String(VISIBLE_ID) } }));
+      assert.notStrictEqual(linkagePermitted, 404, 'on the linkage route too');
 
       const patched = await dispatch(ormRequest, ormRequest.handlers.patch['/:id'], makeRequest({
         method: 'PATCH',

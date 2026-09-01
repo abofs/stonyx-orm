@@ -1157,14 +1157,32 @@ module('[Integration] ORM', function(hooks) {
       });
 
       // Animal -> owner (belongsTo)
+      //
+      // RE-SPECIFIED BY abofs/stonyx-orm#232, AS A PAIR RATHER THAN AS AN EDIT.
+      // This test read `/animals/1/owner` and asserted `data.id === 'angela'` --
+      // and angela is 404 on her OWN route. So it was this issue's second
+      // reproduction, pinned green as correct behaviour.
+      //
+      // The subject moves to animal 4, whose owner `gina` is permitted, and the
+      // hidden case is asserted in the SAME test rather than deleted. Both
+      // directions have a tripwire: dropping the positive half reds the
+      // over-denial guard, dropping the negative half leaves a test that no
+      // longer covers what #232 changed, and
+      // test/unit/relationship-route-access-test.ts asserts the negative half
+      // is still here.
       test('GET /animals/:id/owner returns related owner', async function(assert) {
-        const response = await fetch(`${endpoint}/animals/1/owner`);
+        const response = await fetch(`${endpoint}/animals/4/owner`);
         const { data } = await response.json();
 
         assert.equal(response.status, 200, 'returns 200 status');
         assert.notOk(Array.isArray(data), 'data is not an array for belongsTo');
         assert.equal(data.type, 'owner', 'returns owner record');
-        assert.equal(data.id, 'angela', 'returns correct owner');
+        assert.equal(data.id, 'gina', 'returns correct owner');
+
+        // #232 -- the negative half, in the same test.
+        const hidden = await fetch(`${endpoint}/animals/1/owner`);
+        assert.equal(hidden.status, 404,
+          'and an owner hidden by her own model\'s predicate is 404 here too (was: 200 with full attributes)');
       });
 
       test('GET /animals/:id/owner returns null when no related record', async function(assert) {
@@ -1255,15 +1273,24 @@ module('[Integration] ORM', function(hooks) {
       });
 
       // Animal -> owner (belongsTo)
+      //
+      // RE-SPECIFIED BY abofs/stonyx-orm#232 -- see the note on
+      // `GET /animals/:id/owner returns related owner` above. Same pair, on the
+      // route family that builds its linkage BY HAND.
       test('GET /animals/:id/relationships/owner returns relationship linkage', async function(assert) {
-        const response = await fetch(`${endpoint}/animals/1/relationships/owner`);
+        const response = await fetch(`${endpoint}/animals/4/relationships/owner`);
         const { data } = await response.json();
 
         assert.equal(response.status, 200, 'returns 200 status');
         assert.notOk(Array.isArray(data), 'data is not an array for belongsTo');
         assert.equal(data.type, 'owner', 'linkage references owner type');
-        assert.equal(data.id, 'angela', 'linkage has correct id');
+        assert.equal(data.id, 'gina', 'linkage has correct id');
         assert.notOk(data.attributes, 'linkage does not include attributes');
+
+        // #232 -- the negative half, in the same test.
+        const hidden = await fetch(`${endpoint}/animals/1/relationships/owner`);
+        assert.equal(hidden.status, 404,
+          'and a hidden owner is 404 on the linkage route too (was: 200 with {"type":"owner","id":"angela"})');
       });
 
       test('GET /animals/:id/relationships/owner returns null when no relationship', async function(assert) {
@@ -3016,24 +3043,40 @@ module('[Integration] ORM', function(hooks) {
         assert.ok(json.links.self.includes('/animals/1'), 'self link points to resource');
       });
 
+      // RE-SPECIFIED BY abofs/stonyx-orm#232. Collateral: the subject was
+      // `/animals/1/owner`, whose owner is hidden, so the route now answers 404
+      // and has no `links` to inspect. Moved to a PERMITTED subject, with the
+      // denied one asserted in the same test so the move is a pair and not a
+      // quiet narrowing.
       test('GET related resource response includes links.self', async function(assert) {
-        const response = await fetch(`${endpoint}/animals/1/owner`);
+        const response = await fetch(`${endpoint}/animals/4/owner`);
         const json = await response.json();
 
         assert.ok(json.links, 'response has links object');
         assert.ok(json.links.self, 'links has self property');
-        assert.ok(json.links.self.includes('/animals/1/owner'), 'self link points to related resource URL');
+        assert.ok(json.links.self.includes('/animals/4/owner'), 'self link points to related resource URL');
+
+        // #232 -- and a denied related resource emits no document to carry
+        // links at all, rather than a document with links and no data.
+        const denied = await fetch(`${endpoint}/animals/1/owner`);
+        assert.equal(denied.status, 404, 'a denied related resource is 404, not a 200 with links');
       });
 
+      // RE-SPECIFIED BY abofs/stonyx-orm#232 -- same reason as the assertion
+      // above, on the linkage family.
       test('GET relationship linkage response includes links.self and links.related', async function(assert) {
-        const response = await fetch(`${endpoint}/animals/1/relationships/owner`);
+        const response = await fetch(`${endpoint}/animals/4/relationships/owner`);
         const json = await response.json();
 
         assert.ok(json.links, 'response has links object');
         assert.ok(json.links.self, 'links has self property');
-        assert.ok(json.links.self.includes('/animals/1/relationships/owner'), 'self link points to relationship URL');
+        assert.ok(json.links.self.includes('/animals/4/relationships/owner'), 'self link points to relationship URL');
         assert.ok(json.links.related, 'links has related property');
-        assert.ok(json.links.related.includes('/animals/1/owner'), 'related link points to related resource URL');
+        assert.ok(json.links.related.includes('/animals/4/owner'), 'related link points to related resource URL');
+
+        // #232 -- the negative half.
+        const denied = await fetch(`${endpoint}/animals/1/relationships/owner`);
+        assert.equal(denied.status, 404, 'a denied linkage target is 404, not a 200 with links');
       });
     });
 
