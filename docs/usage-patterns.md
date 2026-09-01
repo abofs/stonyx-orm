@@ -279,10 +279,15 @@ export default class GlobalAccess {
       // not remove a rule, it turns a deny into an ALLOW, silently.
       if (recordId === 'archived') return false;
 
-      // Per-record filter. Enforced on every surface ADDRESSED TO a record — the
-      // collection, GET/PATCH/DELETE by id, and both relationship route families
-      // — not on the collection alone. A rejected record is 404 on record routes
-      // (indistinguishable from a record that does not exist) and 403 on POST.
+      // Per-record filter. Enforced on every surface ADDRESSED TO a record —
+      // the collection, GET/PATCH/DELETE by id, and both relationship route
+      // families — and, since #232, on every surface that reaches one of these
+      // records as another model's RELATED resource. A rejected ADDRESSED
+      // record is 404 on record routes (indistinguishable from a record that
+      // does not exist) and 403 on POST; a rejected RELATED record is
+      // `data: null` at 200 (indistinguishable from a relationship that is
+      // genuinely empty). Neither spelling is an existence oracle, which is the
+      // property both are chosen for.
       //
       // NOTE: with a filter in force, a POST carrying a client-supplied `id` is
       // refused with 403 whatever the payload, and BEFORE any store lookup —
@@ -330,14 +335,30 @@ class ([#232](https://github.com/abofs/stonyx-orm/issues/232)):
 // MEMBERSHIP, not just which ids a document may name.
 GET /owners/gina/pets                 // hidden children dropped from the array
 GET /owners/gina/relationships/pets   // same, on the hand-built linkage
-GET /animals/1/owner                  // denied belongsTo target -> 404
-GET /traits/2/tag                     // a model NO access class claims -> 404
+GET /animals/1/owner                  // denied belongsTo target -> 200, data: null
+GET /traits/2/tag                     // a model NO access class claims -> 200, data: null
 ```
 
 A denied `hasMany` member is **dropped**, so the result is shaped exactly like a
-genuinely empty relationship. A denied `belongsTo` target is **404** — which is
-distinguishable from a genuinely absent one (200 with `data: null`); that
-asymmetry is inherited from how this module has always spelled a denied parent.
+genuinely empty relationship. A denied `belongsTo` target is **200 with
+`data: null`**, byte-identical to a target that is genuinely absent. The status
+on these routes belongs to the **parent** — 404 there means the parent is
+missing or hidden — so `data`, and not the status, carries the answer about the
+related record.
+
+An earlier revision answered `404` for a denied `belongsTo` target, and it was
+measured as an oracle before it shipped. Unauthenticated, zero query parameters,
+one request each, on a model with no route mounted at all:
+
+```
+GET /traits/1/tag   [target absent]  ->  200  application/json  68 bytes
+GET /traits/2/tag   [target denied]  ->  404  text/plain         9 bytes
+```
+
+`GET /traits/1` and `GET /traits/2` already report
+`relationships.tag = {"data":null}` byte-identical modulo the id, because #234
+closed that oracle deliberately — so this route was the last way to ask which of
+those two nulls was a denial. Both now answer identically.
 
 **Per-record denies for a related resource are not expressible.** On these routes a predicate is
 handed `recordId: null` and a `request` whose `params` name a record of a

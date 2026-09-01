@@ -2415,24 +2415,35 @@ module('[Unit] access filter enforced on every handler (#190)', function(hooks) 
       // collection `GET`, `POST`, `DELETE`), so it still reds if the fix leaks
       // into the ADDRESSED model's own path -- which is what 16c is for.
       //
-      // KILLING MUTATION for the replacement: gate either relationship route's
-      // related-record filter on `state.filter` being present. The two denied
-      // assertions red.
+      // AND THEY ASSERT THE BODY, NOT THE STATUS. THIS IS NOT COSMETIC.
+      // #232 spells a denied belongsTo target `200 {data: null}` so that it is
+      // indistinguishable from a genuinely empty relationship. A status-only
+      // assertion here is therefore vacuous in BOTH directions: `related === 404`
+      // can never hold again, and -- the quiet one -- `notStrictEqual(permitted,
+      // 404)` is satisfied by `{data: null}`, so the over-denial half would go
+      // silently green the moment over-denial appeared. That is the exact
+      // failure mode this file exists to catch, so both halves now read `data`.
+      //
+      // KILLING MUTATIONS for the replacement, each constructed:
+      //   gate either relationship route's related-record filter on
+      //     `state.filter` being present  -> the two DENIED assertions red
+      //   pass `undefined` instead of `request` to `createLinkageFilter` at
+      //     either call site             -> the two PERMITTED assertions red
       const related = await dispatch(ormRequest, ormRequest.handlers.get['/:id/owner'], makeRequest({ url: `/animals/${HIDDEN_ID}/owner`, params: { id: String(HIDDEN_ID) } }));
-      assert.strictEqual(related, 404,
+      assert.strictEqual(related.data, null,
         'a RELATED record is judged by its OWN model\'s predicate, independently of state.filter (#232)');
 
       const linkage = await dispatch(ormRequest, ormRequest.handlers.get['/:id/relationships/owner'], makeRequest({ url: `/animals/${HIDDEN_ID}/relationships/owner`, params: { id: String(HIDDEN_ID) } }));
-      assert.strictEqual(linkage, 404, 'and on the linkage route too (#232)');
+      assert.strictEqual(linkage.data, null, 'and on the linkage route too (#232)');
 
       // THE OTHER DIRECTION, IN THE SAME TEST, so the re-scope cannot become a
       // blanket deny. `VISIBLE_ID` is owned by gina, whom nothing hides.
       const relatedPermitted = await dispatch(ormRequest, ormRequest.handlers.get['/:id/owner'], makeRequest({ url: `/animals/${VISIBLE_ID}/owner`, params: { id: String(VISIBLE_ID) } }));
-      assert.notStrictEqual(relatedPermitted, 404,
-        'while a PERMITTED related record is still served with no filter present -- the re-scope is not an over-denial');
+      assert.strictEqual(relatedPermitted.data?.id, 'gina',
+        'while a PERMITTED related record is still SERVED with no filter present -- named, not merely non-404, because `{data: null}` is not 404 either');
 
       const linkagePermitted = await dispatch(ormRequest, ormRequest.handlers.get['/:id/relationships/owner'], makeRequest({ url: `/animals/${VISIBLE_ID}/relationships/owner`, params: { id: String(VISIBLE_ID) } }));
-      assert.notStrictEqual(linkagePermitted, 404, 'on the linkage route too');
+      assert.deepEqual(linkagePermitted.data, { type: 'owner', id: 'gina' }, 'on the linkage route too');
 
       const patched = await dispatch(ormRequest, ormRequest.handlers.patch['/:id'], makeRequest({
         method: 'PATCH',

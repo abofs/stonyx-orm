@@ -923,11 +923,22 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     assert.ok(doc.includes('on the linkage\n> READ path only, never on this one'),
       'and that the WRITE path it is written about is still unrefused');
 
-    // The sentence that survives correctly: this is MEMBERSHIP, which #234 did
-    // not close, and deleting the block rather than amending it would have lost
-    // it.
-    assert.ok(doc.includes('`GET /owners/angela` can be 404 while\n> `GET /animals/1/owner` returns angela in full'),
-      'the membership gap that is still open is still stated');
+    // MEMBERSHIP, RE-SPECIFIED BY abofs/stonyx-orm#232 RATHER THAN DELETED.
+    // #234 did not close this gap; #232 closes the relationship-route half of
+    // it, and the worked example that stood here as an open defect is now a
+    // `[DEFECT]` assertion. So the block has to be AMENDED, and the failure
+    // mode this test exists to catch is unchanged in kind: a file whose stated
+    // purpose is "where the next reader checks whether the chain is still
+    // blocked" describing a state that is no longer true.
+    //
+    // Three assertions where there was one, because "amended" has to be
+    // distinguished from both "deleted" and "left stale":
+    assert.ok(doc.includes('`GET /owners/angela` could be 404 while\n> `GET /animals/1/owner` returned angela in full'),
+      'the worked example is retained, in the PAST tense -- amended, not deleted');
+    assert.notOk(doc.includes('`GET /owners/angela` can be 404 while\n> `GET /animals/1/owner` returns angela in full'),
+      'and no longer asserted in the PRESENT tense, which #232 falsified');
+    assert.ok(/Narrowed to `include=` by/.test(doc) && /issues\/233/.test(doc),
+      'and what remains open under #196 is named -- `include=` traversal, #233');
 
     // And the limit that matters most to a reader of that file.
     assert.ok(/An arity-1 predicate can make it GRANT/.test(doc),

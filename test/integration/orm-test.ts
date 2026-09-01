@@ -279,6 +279,14 @@ module('[Integration] ORM', function(hooks) {
 
     // Note: This test relies on the one above to prevent re-assigning parsedFileData
     test('removing records and recreating them from db storage returns the same record output', async function(assert) {
+      // READ THE LIVE STORE BEFORE THE UNLOAD BELOW DESTROYS IT. The
+      // measured-loss precondition further down used to read the STATIC
+      // `serialized` import from test/sample/payload.ts, which is the one thing
+      // it claims to exclude: breaking live resolution outright measured
+      // 1010 / 5 with that assertion FULLY GREEN, because payload.ts says
+      // `tag: 'never-mounted'` whatever the store did.
+      const liveTags = [1, 2, 3].map(id => store.get('trait', id)?.tag?.id ?? null);
+
       store.unloadAllRecords(dbKey, { includeChildren: true });
 
       assert.notOk(store.get('owner').size);
@@ -303,7 +311,8 @@ module('[Integration] ORM', function(hooks) {
       //
       // `tag` is claimed by no access class and is deliberately kept OUT of
       // test/sample/db-schema.ts (putting it in costs 6 reds across two files,
-      // one of them the exact-key schema pin at :41). A model absent from the
+      // one of them the exact-key schema pin in `file stores expected schema
+      // structure`). A model absent from the
       // schema is NEVER PERSISTED, so the saved file carries no `tags`
       // collection and the reload above has no tag record to resolve
       // `trait.tag` against. It comes back `null` where the live store held
@@ -320,7 +329,7 @@ module('[Integration] ORM', function(hooks) {
       // The measured-loss half. Without this the assertion above is satisfied
       // by a fixture that never linked a tag in the first place, which is the
       // inert-fixture failure #240 AC4 exists to prevent.
-      assert.deepEqual(serialized.traits.map(trait => trait.tag), [null, 'never-mounted', 'never-mounted'],
+      assert.deepEqual(liveTags, [null, 'never-mounted', 'never-mounted'],
         'precondition: the LIVE store resolved two of the three, so the line above records a loss rather than an absence');
 
       assert.deepEqual(dbRecordData, {
@@ -1181,8 +1190,10 @@ module('[Integration] ORM', function(hooks) {
 
         // #232 -- the negative half, in the same test.
         const hidden = await fetch(`${endpoint}/animals/1/owner`);
-        assert.equal(hidden.status, 404,
-          'and an owner hidden by her own model\'s predicate is 404 here too (was: 200 with full attributes)');
+        const hiddenJson = await hidden.json();
+        assert.equal(hidden.status, 200, 'a hidden owner still answers 200 -- withholding is not an error');
+        assert.strictEqual(hiddenJson.data, null,
+          'and an owner hidden by her own model\'s predicate is withheld here too (was: 200 with full attributes)');
       });
 
       test('GET /animals/:id/owner returns null when no related record', async function(assert) {
@@ -1289,8 +1300,10 @@ module('[Integration] ORM', function(hooks) {
 
         // #232 -- the negative half, in the same test.
         const hidden = await fetch(`${endpoint}/animals/1/relationships/owner`);
-        assert.equal(hidden.status, 404,
-          'and a hidden owner is 404 on the linkage route too (was: 200 with {"type":"owner","id":"angela"})');
+        const hiddenJson = await hidden.json();
+        assert.equal(hidden.status, 200, 'the linkage route answers 200 too');
+        assert.strictEqual(hiddenJson.data, null,
+          'and a hidden owner is withheld on the linkage route too (was: 200 with {"type":"owner","id":"angela"})');
       });
 
       test('GET /animals/:id/relationships/owner returns null when no relationship', async function(assert) {
@@ -2707,7 +2720,7 @@ module('[Integration] ORM', function(hooks) {
       // model-correctness claim this round had to correct.
       assert.strictEqual(Orm.instance.getAccess('owner'), Orm.instance.getAccess('animal'),
         'and the owner and animal entries are the SAME function object — one access class claiming five models');
-      assert.strictEqual(Orm.instance.getAccess('not-a-model'), undefined, 'and answers undefined for a model with no access class');
+      assert.ok(Orm.instance.getAccess('not-a-model') === undefined, 'and answers undefined for a model with no access class');
 
       // An unguarded index into a plain `{}` walks the prototype chain, so
       // `getAccess('constructor')` resolved `Object` -- callable, and the
@@ -3056,10 +3069,14 @@ module('[Integration] ORM', function(hooks) {
         assert.ok(json.links.self, 'links has self property');
         assert.ok(json.links.self.includes('/animals/4/owner'), 'self link points to related resource URL');
 
-        // #232 -- and a denied related resource emits no document to carry
-        // links at all, rather than a document with links and no data.
+        // #232 -- a denied related resource still carries its links, because
+        // they are derived entirely from the PARENT and the relationship name
+        // and disclose nothing about the target.
         const denied = await fetch(`${endpoint}/animals/1/owner`);
-        assert.equal(denied.status, 404, 'a denied related resource is 404, not a 200 with links');
+        const deniedJson = await denied.json();
+        assert.equal(denied.status, 200, 'a denied related resource is 200, like a genuinely empty one');
+        assert.strictEqual(deniedJson.data, null, 'with no document for the denied related resource');
+        assert.ok(deniedJson.links.self.includes('/animals/1/owner'), 'and the parent-derived links intact');
       });
 
       // RE-SPECIFIED BY abofs/stonyx-orm#232 -- same reason as the assertion
@@ -3076,7 +3093,10 @@ module('[Integration] ORM', function(hooks) {
 
         // #232 -- the negative half.
         const denied = await fetch(`${endpoint}/animals/1/relationships/owner`);
-        assert.equal(denied.status, 404, 'a denied linkage target is 404, not a 200 with links');
+        const deniedJson = await denied.json();
+        assert.equal(denied.status, 200, 'a denied linkage target is 200, like a genuinely empty one');
+        assert.strictEqual(deniedJson.data, null, 'with no linkage object for the denied target');
+        assert.ok(deniedJson.links.related.includes('/animals/1/owner'), 'and both parent-derived links intact');
       });
     });
 
@@ -4112,7 +4132,20 @@ module('[Integration] ORM', function(hooks) {
       // /traits routes MOUNTED; `tag` has no route at all, because a model no
       // access class claims is never mounted in the first place. So this now
       // asserts the shipped configuration rather than a hole punched into it.
-      assert.strictEqual(Orm.instance.getAccess('tag'), undefined,
+      // ASSERTED AS A BOOLEAN, NOT `strictEqual(value, undefined)`. When this
+      // reds the actual value is a FUNCTION, and qunit@2.25.0's
+      // `prettyYamlValue` has no function branch: it reaches
+      // `JSON.stringify(fn).split('\n')`, `JSON.stringify` of a function is
+      // `undefined`, and the `.split` throws a TypeError at qunit.js:4024.
+      // That kills the test QUEUE -- `runEnd` never fires and the express
+      // listener holds the event loop open, so the suite HANGS instead of
+      // going red. Measured: 0% CPU, every route still answering in ~1 ms from
+      // an external client during the stall. A guard whose failure mode is a CI
+      // hang is worse than one that cannot fail, because a hang is
+      // indistinguishable from an infinite loop, a deadlock or a wedged socket.
+      // Upstream: abofs/stonyx#97. Same reasoning as the precedent above at
+      // `getAccess(inherited)`.
+      assert.ok(Orm.instance.getAccess('tag') === undefined,
         'precondition: no predicate resolves for `tag` — no access class claims it');
       assert.strictEqual((await getJson('/tags/never-mounted')).status, 404,
         'precondition: and it has no REST surface of its own at all');
@@ -4133,7 +4166,9 @@ module('[Integration] ORM', function(hooks) {
       // map). The two are indistinguishable to `getAccess`, and that is exactly
       // why both read as a denial.
       await withAccess('trait', undefined, async () => {
-        assert.strictEqual(Orm.instance.getAccess('trait'), undefined,
+        // Boolean, not `strictEqual` -- see the note at the `tag` assertion
+        // above: a function in `actual` hangs qunit rather than reddening it.
+        assert.ok(Orm.instance.getAccess('trait') === undefined,
           'a claimed model whose entry is missing reads identically');
 
         const scoped = await getJson('/animals/1');
@@ -4447,7 +4482,9 @@ module('[Integration] ORM', function(hooks) {
       //
       // KILLING MUTATION: add `'tag'` to `GlobalAccess.models`. Clauses 1, 2, 3
       // and 4 all red.
-      assert.strictEqual(Orm.instance.getAccess('tag'), undefined,
+      // Boolean, not `strictEqual` -- a function in `actual` hangs qunit. See
+      // the note at #234 AC4 and abofs/stonyx#97.
+      assert.ok(Orm.instance.getAccess('tag') === undefined,
         'no access class claims `tag`, so no predicate resolves for it');
       assert.notOk(Object.hasOwn(Orm.instance.accessFunctions, 'tag'),
         'and it is absent from the registry entirely, not present-but-undefined');
@@ -4556,8 +4593,21 @@ module('[Integration] ORM', function(hooks) {
 
       const { status, body } = await getJson('/animals/1/owner');
 
-      assert.strictEqual(status, 404, 'the related-resource route no longer serves her either');
-      assert.notOk(body?.data, 'and no document came back at all');
+      assert.strictEqual(status, 200, 'the related-resource route answers 200 -- withholding is not an error');
+      assert.strictEqual(body.data, null, 'and she is not served: `data` is null (was: her full document)');
+
+      // AND THE WITHHOLDING IS INDISTINGUISHABLE FROM A GENUINELY ABSENT
+      // TARGET, which is the whole reason the denial is spelled `null` rather
+      // than 404. Animal 9100 has no owner at all.
+      createRecord('animal', { id: 9100, type: 'dog', age: 1, size: 'small' });
+      const absent = await getJson('/animals/9100/owner');
+      store.remove('animal', 9100);
+
+      assert.strictEqual(absent.status, status, 'same status as an animal with no owner at all');
+      assert.strictEqual(
+        JSON.stringify(body).split('/animals/1/').join('/animals/9100/'),
+        JSON.stringify(absent.body),
+        'and the same bytes, modulo the parent id the caller put in the URL -- no existence oracle');
     });
 
     test('[DEFECT] #232 AC2 -- GET /:id/relationships/{rel} belongsTo: the hand-built linkage is filtered too', async function(assert) {
@@ -4566,8 +4616,19 @@ module('[Integration] ORM', function(hooks) {
       // never reached it. PRE-FIX: 200, `{"type":"owner","id":"angela"}`.
       const { status, body } = await getJson('/animals/1/relationships/owner');
 
-      assert.strictEqual(status, 404, 'the linkage route withholds the hidden owner');
-      assert.notOk(body?.data, 'no linkage object came back');
+      assert.strictEqual(status, 200, 'the linkage route answers 200');
+      assert.strictEqual(body.data, null, 'and withholds the hidden owner: `data` is null');
+
+      // Same indistinguishability check as AC1, on the hand-built family.
+      createRecord('animal', { id: 9100, type: 'dog', age: 1, size: 'small' });
+      const absent = await getJson('/animals/9100/relationships/owner');
+      store.remove('animal', 9100);
+
+      assert.strictEqual(absent.status, status, 'same status as an animal with no owner at all');
+      assert.strictEqual(
+        JSON.stringify(body).split('/animals/1/').join('/animals/9100/'),
+        JSON.stringify(absent.body),
+        'and the same bytes, modulo the parent id -- no existence oracle');
     });
 
     test('[DEFECT] #232 AC3 -- GET /:id/{rel} hasMany: a hidden child is dropped from the related-resource array', async function(assert) {
@@ -4619,25 +4680,53 @@ module('[Integration] ORM', function(hooks) {
       //   GET /traits/2/relationships/tag   -> 200 {"type":"tag","id":"never-mounted"}
       //
       // Note the `links.self` in the first one: a link to a route that 404s.
+      //
+      // TRAIT 1 IS THE ORACLE CONSTRUCTOR AND IT IS WHY THE DENIAL IS SPELLED
+      // `data: null` RATHER THAN 404. Trait 1 carries no tag at all; trait 2
+      // carries one this caller may not see. Under 404 those two answered
+      // 200/application-json/68 bytes and 404/text-plain/9 bytes -- one
+      // unauthenticated request each, zero query parameters, on the model with
+      // NO route mounted. Under `null` they answer identically.
       assert.strictEqual((await getJson('/tags/never-mounted')).status, 404,
         'precondition: the model has no REST surface of its own');
       assert.strictEqual(store.get('trait', 2)?.tag?.id, 'never-mounted',
         'precondition: and trait 2 really does resolve it, so these routes have something to leak');
 
+      assert.strictEqual(store.get('trait', 1)?.tag, null,
+        'precondition: trait 1 carries NO tag, so it is the genuinely-absent control');
+
       const related = await getJson('/traits/2/tag');
-      assert.strictEqual(related.status, 404, 'the related-resource route no longer discloses it');
-      assert.notOk(related.body?.data, 'no document');
+      assert.strictEqual(related.status, 200, 'the related-resource route answers 200');
+      assert.strictEqual(related.body.data, null, 'and no longer discloses it: `data` is null');
 
       const linkage = await getJson('/traits/2/relationships/tag');
-      assert.strictEqual(linkage.status, 404, 'nor does the linkage route');
-      assert.notOk(linkage.body?.data, 'no linkage object');
+      assert.strictEqual(linkage.status, 200, 'the linkage route answers 200');
+      assert.strictEqual(linkage.body.data, null, 'nor does it disclose it');
+
+      // THE ORACLE, CLOSED. Denied (trait 2) against genuinely absent (trait 1),
+      // byte for byte modulo the parent id in the URL.
+      const absentRelated = await getJson('/traits/1/tag');
+      assert.strictEqual(absentRelated.status, related.status, 'denied and absent answer the same status');
+      assert.strictEqual(
+        JSON.stringify(related.body).split('/traits/2/').join('/traits/1/'),
+        JSON.stringify(absentRelated.body),
+        'and the same bytes -- a caller cannot tell a withheld tag from no tag');
+
+      const absentLinkage = await getJson('/traits/1/relationships/tag');
+      assert.strictEqual(absentLinkage.status, linkage.status, 'the linkage family too');
+      assert.strictEqual(
+        JSON.stringify(linkage.body).split('/traits/2/').join('/traits/1/'),
+        JSON.stringify(absentLinkage.body),
+        'and the same bytes there as well');
 
       // `undefined` from `getAccess` is NOT "unrestricted". It covers both "no
       // access class claims this model" and "the class that claims it failed to
       // LOAD" -- setup-rest-server publishes the PARTIAL map on a load failure
       // -- and the caller cannot tell them apart, so the only safe reading is
       // deny.
-      assert.strictEqual(Orm.instance.getAccess('tag'), undefined,
+      // Boolean, not `strictEqual` -- a function in `actual` hangs qunit. See
+      // the note at #234 AC4 and abofs/stonyx#97.
+      assert.ok(Orm.instance.getAccess('tag') === undefined,
         'and the reason is an UNRESOLVABLE predicate, which fails closed');
     });
 
@@ -4712,19 +4801,57 @@ module('[Integration] ORM', function(hooks) {
       // Argument one is the request the ROUTER dispatched -- not a fabricated
       // one addressing the related resource, and not `undefined`.
       //
-      // The probe header is what makes it decidable. A derived request built as
-      // `Object.create(request)` would still carry the header, but it would
-      // report the RELATED resource in `params`/`path`; a bare `{ path }` would
-      // carry no header at all. Asserting all three separates the three designs.
+      // WHAT NOTHING PINNED BEFORE, AND THE CITATION THAT WAS WRONG.
       //
-      // KILLING MUTATIONS, each measured:
-      //   supply a derived request (path/url/params -> '/angela')  -> the
-      //     `params.id` and `path` assertions red (and so does
-      //     test/unit/linkage-verdict-test.ts's identity pin)
+      // A prototype-derived request -- `createLinkageFilter(Object.create(request))`
+      // -- measures 1015 / 0 at both new call sites, and 1015 / 0 at all four
+      // including #234's. The pin previously cited for this decision, the
+      // identity assertion in test/unit/linkage-verdict-test.ts (the #234 AC13
+      // guard, `strictEqual(seen[0].request, READ_REQUEST)`), calls
+      // `createLinkageFilter(READ_REQUEST)` DIRECTLY -- so it pins the
+      // function's pass-through and says nothing about what any CALL SITE
+      // hands it. And the three property assertions below are all satisfied by
+      // a derived request, because a prototype-derived object INHERITS them.
+      //
+      // So the decision is guarded here, by OWN-PROPERTY IDENTITY, in two
+      // assertions that between them describe what "the live request" means
+      // structurally rather than by value:
+      //
+      //   `params` is an OWN property of the object handed to the predicate.
+      //     Express sets it on the request the router dispatched;
+      //     `Object.create(request)` INHERITS it, so `ask.request.params.id`
+      //     still reads `'4'` (which is why the three value assertions above
+      //     are all satisfied by a derived request) while `Object.hasOwn` is
+      //     false. Measured on the derived mutant: every own-property read on
+      //     that object -- `params`, `headers`, `url`, `path`, `method`,
+      //     `query`, `baseUrl` -- is `false`.
+      //
+      //   nothing request-shaped sits BEHIND it on the prototype chain. This is
+      //     the general form, and it is what catches a derived request that
+      //     re-declares `params` on top (the original fabricated design):
+      //     deriving from the live request necessarily puts the live request --
+      //     which owns `params` -- at `Object.getPrototypeOf`. On the real
+      //     object that slot holds express's request prototype, which does not.
+      //
+      // A PLANTED MARKER WAS TRIED FIRST AND DOES NOT WORK HERE, recorded so it
+      // is not re-attempted: `auth()` calls the access function CAPTURED at
+      // OrmRequest construction, not `Orm.instance.accessFunctions`, so
+      // overriding the registry never sees the live request on this route --
+      // under the mutant the ONLY object the registry is ever handed is the
+      // derived one, and an unconditional plant marks it own and goes green.
+      //
+      // KILLING MUTATIONS, each constructed and observed:
+      //   supply `Object.create(request)` at either new call site  -> the two
+      //     structural assertions red. NOTHING ELSE IN THE SUITE DOES: measured
+      //     1015 / 0 with the derived request at both new call sites, and
+      //     1015 / 0 with it at all four including #234's. That measurement is
+      //     the whole reason these two assertions exist.
       //   supply `undefined`                                       -> the
       //     header assertion reds, and #232 AC6 reds with it
-      //   seed `recordId` from the related record                  -> the last
-      //     assertion reds (and two #234 guards red with it)
+      //   supply a fabricated `{ path }` addressing the related resource ->
+      //     the header, `params.id` and marker assertions all red
+      //   seed `recordId` from the related record                  -> the
+      //     `recordId` assertion reds (and two #234 guards red with it)
       const seen = [];
       const registry = Orm.instance.accessFunctions;
       const original = registry.owner;
@@ -4749,6 +4876,11 @@ module('[Integration] ORM', function(hooks) {
         assert.ok(ask.request?.path?.endsWith('/owner'),
           'and the primary route, mount-relative');
 
+        assert.ok(Object.hasOwn(ask.request, 'params'),
+          'and `params` is an OWN property of it -- a request derived with `Object.create(request)` INHERITS `params`, so every assertion above still passes against one while this reds');
+        assert.notOk(Object.getPrototypeOf(ask.request)?.params,
+          'and nothing request-shaped sits behind it on the prototype chain -- deriving from the live request would put the live request, which owns `params`, exactly there');
+
         assert.strictEqual(ask.context.recordId, null,
           '`recordId` is null: this route addresses no record OF THE MODEL BEING ASKED ABOUT, and a hasMany route addresses many');
         assert.strictEqual(ask.context.operation, 'read', 'and the operation is a read');
@@ -4770,9 +4902,23 @@ module('[Integration] ORM', function(hooks) {
       // is a predicate that branches on WHICH record it is being asked about
       // BEFORE returning, because it is not told.
       //
-      // KILLING MUTATION: seed `recordId` from the related record in
-      // src/access-verdict.ts. The second assertion reds -- and so do two #234
-      // guards, which is why that is not the fix.
+      // KILLING MUTATION, AND IT IS NOT THE OBVIOUS ONE. Seeding `recordId`
+      // from `request.params.id` in `resolveVerdict` leaves this test ENTIRELY
+      // GREEN (measured: 1012 / 3, none of them here) -- it hands the predicate
+      // the PARENT's id, `'4'`, which the branch below does not match. And
+      // seeding it from the record is not even constructible at that site:
+      // `resolveVerdict` resolves once per TYPE, before any record has been
+      // looked at, so there is no record in scope -- as the file's own comment
+      // explains.
+      //
+      // The mutation that DOES kill it is the per-RECORD variant, in
+      // `createLinkageFilter`'s returned `isLinkable`: re-resolve the verdict
+      // for every record with `recordId` seeded from `record.id` instead of
+      // reading the per-type cache. Constructed and measured: this test reds on
+      // `the record it meant to deny is served`. That variant is rejected
+      // because it multiplies consumer `access()` calls per request and because
+      // #234's per-type cache is the contract; it is named here so this
+      // assertion is not dead weight.
       const registry = Orm.instance.accessFunctions;
       const original = registry.owner;
       const contexts = [];
@@ -4791,9 +4937,12 @@ module('[Integration] ORM', function(hooks) {
         const response = await getJson('/animals/4/owner');
 
         assert.ok(contexts.some(context => context.model === 'owner'), 'precondition: the predicate was consulted');
-        assert.strictEqual(response.status, 200,
-          'DISCLOSED LIMIT: the per-record deny above did NOT fire -- the predicate is never told which related record it is being asked about');
-        assert.strictEqual(response.body.data.id, 'gina', 'the record it meant to deny is served');
+        // THE STATUS CANNOT CARRY THIS CLAIM. Since a denied belongsTo target
+        // answers `200 {data: null}`, a 200 here is equally consistent with the
+        // deny having fired -- so the discriminating assertion is the BODY.
+        assert.strictEqual(response.status, 200, 'the route answers 200 either way');
+        assert.strictEqual(response.body.data?.id, 'gina',
+          'DISCLOSED LIMIT: the per-record deny above did NOT fire and the record it meant to deny is served -- the predicate is never told which related record it is being asked about');
         assert.ok(contexts.every(context => context.recordId === null || context.recordId === '4'),
           'because `recordId` is null for the cross-model ask, and `4` only for the route\'s own model');
       } finally {
@@ -4803,9 +4952,9 @@ module('[Integration] ORM', function(hooks) {
       // AND THE TWO SHAPES THAT DO WORK, so the disclosure is a boundary rather
       // than a blanket. Both are already asserted above; named here so a reader
       // of this test is not left thinking nothing works.
-      assert.strictEqual((await getJson('/traits/2/tag')).status, 404,
+      assert.strictEqual((await getJson('/traits/2/tag')).body.data, null,
         'a MODEL-level deny works (the unclaimed model, AC5)');
-      assert.strictEqual((await getJson('/animals/1/owner')).status, 404,
+      assert.strictEqual((await getJson('/animals/1/owner')).body.data, null,
         'and a per-record FILTER returned by access() works (angela, AC1) -- it receives the whole record');
     });
   });

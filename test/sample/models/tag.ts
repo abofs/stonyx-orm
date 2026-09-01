@@ -15,7 +15,11 @@
  *
  *   1. KEPT OUT OF `test/sample/db-schema.ts`. Adding `tags = hasMany('tag')`
  *      there costs 6 reds across two files, one of them the exact-key schema
- *      pin at `test/integration/orm-test.ts:41`. Out of the schema it costs 0.
+ *      pin in `file stores expected schema structure`
+ *      (test/integration/orm-test.ts). Named rather than numbered: the number
+ *      was wrong twice -- it read `:41`, the test header was `:42` at the merge
+ *      base, and this pull request's own `before`-hook insertion moved it to
+ *      `:53` at the head. Out of the schema it costs 0.
  *      The consequence is real and is pinned rather than worked around: an
  *      unclaimed model is NOT PERSISTED with the sample db, so a `belongsTo`
  *      to it does not survive a db round-trip.

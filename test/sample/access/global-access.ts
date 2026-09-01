@@ -212,11 +212,22 @@ export default class GlobalAccess {
       // does not remove a rule loudly, it turns a deny into an ALLOW, silently.
       if (recordId === 'archived') return false;
 
-      // Returning a function plugs it in as a per-record filter, and it is
-      // enforced on every surface addressed to one of these records:
+      // Returning a function plugs it in as a per-record filter. It is enforced
+      // on every surface addressed to one of these records —
       //   /owners, /owners/:id, /owners/:id/pets, /owners/:id/relationships/pets
-      // A rejected record is 404 on record routes — the same status as a record
-      // that does not exist — so the filter is not an existence oracle.
+      // — AND, since #232, on every surface that reaches one of these records
+      // as the RELATED resource of another model:
+      //   /animals/:id/owner, /animals/:id/relationships/owner
+      // Both readings are the same rule: an owner this predicate rejects is
+      // withheld wherever she is reachable, not only on /owners.
+      //
+      // NOTHING HERE IS AN EXISTENCE ORACLE, AND THE SPELLING DIFFERS BY WHOSE
+      // RECORD IS BEING REJECTED. A rejected ADDRESSED record is 404 — the same
+      // status as a record that does not exist. A rejected RELATED record is
+      // `data: null` at 200 — byte-identical to a relationship that is
+      // genuinely empty, because on those routes 404 is already the answer for
+      // a PARENT that does not exist. In both cases "rejected" and "not there"
+      // are the same answer, which is the property that matters.
       return record => record.id !== 'angela' && record.id !== 'restricted';
     }
 

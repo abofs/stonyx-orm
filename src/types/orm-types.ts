@@ -350,10 +350,36 @@ export interface AccessContext {
    * repaired here. A predicate must not read `undefined` here as "collection",
    * and nothing in this contract makes it safe to read the two keys as one key.
    *
-   * IT NAMES WHICH RECORD, NOT WHICH SURFACE. `GET /owners/gina`,
-   * `GET /owners/gina/pets` and `GET /owners/gina/relationships/pets` all
-   * carry `recordId: 'gina'`; the related-resource gap is abofs/stonyx-orm#196
-   * and is untouched by this key.
+   * IT NAMES WHICH RECORD OF THE MODEL BEING ASKED ABOUT, NOT WHICH SURFACE,
+   * AND THE ANSWER DEPENDS ON WHICH MODEL IS BEING ASKED ABOUT.
+   *
+   * For the ask about the ROUTE'S OWN model, all three of `GET /owners/gina`,
+   * `GET /owners/gina/pets` and `GET /owners/gina/relationships/pets` carry
+   * `recordId: 'gina'` -- `auth()` reads it off `request.params`.
+   *
+   * FOR THE ASK ABOUT A RELATED MODEL, IT IS `null`, AND THAT IS A LIMIT ON
+   * WHAT A PREDICATE CAN EXPRESS (abofs/stonyx-orm#232). The two relationship
+   * route families resolve the RELATED model's own predicate -- `animal` on
+   * `GET /owners/gina/pets`, `owner` on `GET /animals/4/owner` -- and that ask
+   * carries `recordId: null` while `request.params` names a record of a
+   * DIFFERENT model. So a predicate answering about a related model gets the
+   * model name, the operation and the request, and CANNOT branch on which
+   * related record it is being asked about.
+   *
+   * The rule, so it is not re-derived wrong: `recordId` may name a record only
+   * where the route addresses exactly one record OF THE MODEL BEING ASKED
+   * ABOUT. A `hasMany` related-resource route returns many records of one type
+   * and the verdict is resolved ONCE PER TYPE, before any record is examined --
+   * seeding it from a record would let the first one decide for all of them.
+   *
+   * What still works, and what does not, is pinned as behaviour by `#232 AC10`
+   * in test/integration/orm-test.ts and stated for consumers in README.md:
+   * model-level denies work, request-level denies work, and the per-record
+   * FILTER shape works because `access()` may return a function and that
+   * function receives the whole record. Branching on identity BEFORE returning
+   * does not.
+   *
+   * `?include=` is a separate surface and is abofs/stonyx-orm#233 / #235.
    */
   recordId: string | number | null;
 }

@@ -33,19 +33,29 @@ async function readRepoFile(relativePath) {
   return readFile(new URL(relativePath, import.meta.url), 'utf8');
 }
 
+// STRIP COMMENTS BEFORE SEARCHING FOR CODE. Every pin in this file asserts
+// something about CODE, and every file it reads carries long comment blocks
+// that quote the very strings being searched for -- so an unstripped search is
+// satisfied by a commented-out needle, and commenting out is a cheaper tamper
+// than deleting. This is the `//` counterpart of the ledger's `stripComments`.
+function withoutLineComments(source) {
+  return source
+    .split('\n')
+    .filter(line => !line.trim().startsWith('//'))
+    .join('\n');
+}
+
 // The same extraction test/unit/access-sample-migration-test.ts performs.
-// Comments are stripped, because these assert things about CODE and all three
-// copies carry long comment blocks that name the very things being excluded.
 function accessCodeLines(source, label) {
   const start = source.indexOf(ACCESS_SIGNATURE);
   if (start === -1) throw new Error(`${label} does not contain ${ACCESS_SIGNATURE.trim()}`);
   const end = source.indexOf('\n  }', start);
   if (end === -1) throw new Error(`${label}'s access() method is not closed`);
 
-  return source.slice(start, end)
+  return withoutLineComments(source.slice(start, end))
     .split('\n')
     .map(line => line.trim())
-    .filter(line => line && !line.startsWith('//'))
+    .filter(Boolean)
     .join('\n');
 }
 
@@ -61,7 +71,11 @@ module('[Unit] relationship route access -- source pins (#232, #240)', function(
     // MEASURED COST OF GETTING THIS WRONG: adding `tags = hasMany('tag')` to
     // the schema is 6 reds across two files -- three in
     // test/integration/db-directory-test.ts and three in orm-test.ts, one of
-    // them the exact-key schema pin at :41. Out of the schema it is 0.
+    // them the exact-key schema pin in `file stores expected schema
+    // structure`. Out of the schema it is 0. Cited by TEST NAME rather than by
+    // line, and the reason is that the number was wrong twice: it read `:41`,
+    // the test header was `:42` at the merge base, and this pull request's own
+    // 12-line `before`-hook insertion moved it to `:53` at the head that ships.
     //
     // KILLING MUTATION: add `tags = hasMany('tag');` to test/sample/db-schema.ts.
     // Both assertions red (and so do the six above).
@@ -123,10 +137,19 @@ module('[Unit] relationship route access -- source pins (#232, #240)', function(
     // always about the permitted case -- it just goes green. So it is pinned
     // from here.
     //
-    // KILLING MUTATION: delete any one of the four `/animals/1/...` fetches
-    // from test/integration/orm-test.ts. The corresponding assertion reds while
-    // the integration suite stays fully green.
-    const source = await readRepoFile('../integration/orm-test.ts');
+    // KILLING MUTATIONS, BOTH CONSTRUCTED AND OBSERVED:
+    //   delete any one of the four negative halves from
+    //     test/integration/orm-test.ts  -> that repair's assertion reds while
+    //     the integration suite stays fully green (measured 1014 / 1)
+    //   COMMENT any one of them out     -> also red, and this is the tamper the
+    //     first two versions of this pin missed. Read raw, the file still
+    //     CONTAINS the needle inside a `//` line, so all four negative halves
+    //     could be commented out at once and this stayed green at 1015 / 0.
+    //     Commenting out is cheaper than deleting and is exactly what an
+    //     engineer chasing a red reaches for. The ledger assertion below has
+    //     always stripped `<!-- -->` for the same reason; this one now strips
+    //     `//` through the same helper `accessCodeLines` uses.
+    const source = withoutLineComments(await readRepoFile('../integration/orm-test.ts'));
 
     // KEYED ON EACH REPAIR'S OWN ASSERTION MESSAGE, ONE NEEDLE PER REPAIR.
     //
@@ -138,10 +161,10 @@ module('[Unit] relationship route access -- source pins (#232, #240)', function(
     // the tamper applied. A count threshold over a needle that other code also
     // matches is a threshold over the wrong population.
     const negatives = [
-      ['is 404 here too (was: 200 with full attributes)', 'GET /animals/:id/owner'],
-      ['is 404 on the linkage route too (was: 200 with', 'GET /animals/:id/relationships/owner'],
-      ['a denied related resource is 404, not a 200 with links', 'GET related resource response includes links.self'],
-      ['a denied linkage target is 404, not a 200 with links', 'GET relationship linkage response includes links.self and links.related'],
+      ['is withheld here too (was: 200 with full attributes)', 'GET /animals/:id/owner'],
+      ['is withheld on the linkage route too (was: 200 with', 'GET /animals/:id/relationships/owner'],
+      ['with no document for the denied related resource', 'GET related resource response includes links.self'],
+      ['with no linkage object for the denied target', 'GET relationship linkage response includes links.self and links.related'],
     ];
 
     for (const [needle, testName] of negatives) {
