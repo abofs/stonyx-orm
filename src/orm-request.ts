@@ -267,7 +267,7 @@ import { getBeforeHooks, getAfterHooks } from './hooks.js';
 import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
-import type { OrmRecord, AccessContext, AccessFunction, AccessMethod, AccessOperation } from './types/orm-types.js';
+import type { OrmRecord, AccessContext, AccessFunction, AccessMethod, AccessOperation, LinkageFilter } from './types/orm-types.js';
 import { isOrmRecord, NO_FREE_ID_ERROR } from './utils.js';
 import { interpretAccess, createLinkageFilter } from './access-verdict.js';
 
@@ -465,9 +465,9 @@ function buildResponse(
   data: unknown,
   includeParam: string | undefined,
   recordOrRecords: OrmRecord | OrmRecord[],
-  options: { links?: { [key: string]: string }; baseUrl?: string } = {}
+  options: { links?: { [key: string]: string }; baseUrl?: string; linkage?: LinkageFilter } = {}
 ): JsonApiResponse {
-  const { links, baseUrl } = options;
+  const { links, baseUrl, linkage } = options;
   const response: JsonApiResponse = { data };
 
   // Add top-level links
@@ -482,14 +482,38 @@ function buildResponse(
 
   const includedRecords = collectIncludedRecords(recordOrRecords, includes);
   if (includedRecords.length > 0) {
-    // NO `linkage` ARGUMENT, deliberately, and abofs/stonyx-orm#235 owns adding
-    // one. Until it does, a PERMITTED record here emits the full pre-#234
-    // document: `GET /animals/1?include=owner` filters the primary document's
-    // `owner.data` to `null` and then names `owner:angela` in `included`.
-    // Whether a resource reaches this array at all is a different question
-    // (membership, abofs/stonyx-orm#233) and closing that one does not close
-    // this one.
-    response.included = includedRecords.map(record => record.toJSON?.({ baseUrl }));
+    // LINKAGE, NOT MEMBERSHIP -- and the distinction is the whole reason this
+    // line is one story's and the line above it is another's
+    // (abofs/stonyx-orm#235 and #233 respectively).
+    //
+    //   - WHICH RESOURCES REACH THIS ARRAY is decided by
+    //     `collectIncludedRecords` on the line above. That is MEMBERSHIP, it is
+    //     #233's, and it is deliberately untouched here: a hidden owner is
+    //     still a member of `included` after this change. Pinned green by
+    //     `[GUARD] #235 X1` so that #235 cannot close #233 incidentally.
+    //   - WHAT A RECORD ALREADY IN THIS ARRAY MAY NAME in its own
+    //     `relationships.*.data` is LINKAGE -- the same question #234 answers
+    //     for the primary document -- and that is what the `linkage` option
+    //     below decides. Before it, `GET /animals/1?include=owner,owner.pets`
+    //     filtered the primary document's `owner.data` to `null` and then
+    //     handed back nine PERMITTED animals in `included` each naming
+    //     `{"type":"owner","id":"angela"}`. Neither #233 nor #234 closes that.
+    //
+    // THE FILTER IS THE CALLER'S, PASSED IN, NOT BUILT HERE. Both call sites
+    // already hold one for the primary document, and sharing it is what keeps
+    // the per-type verdict cache and the per-(type, id) decision cache alive
+    // across the primary document AND the sideload -- one verdict resolution
+    // per type for the whole response, pinned by `[GUARD] #235 C1`. Building a
+    // fresh filter here would resolve the consumer's `access()` once per
+    // included record instead.
+    //
+    // `linkage` may be `undefined`, and that is a live path rather than a
+    // defensive default: a caller with no request has no verdict to supply, and
+    // `Record.toJSON` reads an ABSENT option as "no verdict was supplied" and
+    // emits the pre-#234 document. It does NOT read a non-function as absent --
+    // a non-function, INCLUDING the primitive `true`, denies every relationship
+    // on the document. Do not "simplify" this to a boolean.
+    response.included = includedRecords.map(record => record.toJSON?.({ baseUrl, linkage }));
   }
 
   return response;
@@ -700,7 +724,11 @@ export default class OrmRequest extends Request {
 
       return buildResponse(data, request.query?.include, recordsToReturn, {
         links: { self: `${baseUrl}/${pluralizedModel}` },
-        baseUrl
+        baseUrl,
+        // THE SAME filter object the primary documents above were serialized
+        // with, deliberately: it carries the caches, and rebuilding one here
+        // would re-resolve every type (abofs/stonyx-orm#235).
+        linkage
       });
     };
 
@@ -718,29 +746,29 @@ export default class OrmRequest extends Request {
       const baseUrl = getBaseUrl(request);
       const linkage = createLinkageFilter(request);
 
-      // `buildResponse` is deliberately NOT given the linkage filter, and the
-      // residual that leaves is NOT the one #233 owns. Two different questions:
+      // `buildResponse` IS given the filter now (abofs/stonyx-orm#235), and it
+      // is the SAME object the primary document is serialized with -- one
+      // verdict per type for the whole response, sideload included.
       //
-      //   - WHETHER A RESOURCE APPEARS in `included` at all is MEMBERSHIP ->
-      //     abofs/stonyx-orm#233.
-      //   - What a record already IN `included` may NAME is LINKAGE -- the same
-      //     question #234 answers for the primary document -- and it is
-      //     abofs/stonyx-orm#235, which also owns createHandler/updateHandler.
-      //
-      // The residual, stated so the next reader does not have to derive it:
-      // `buildResponse` calls `record.toJSON?.({ baseUrl })` with no `linkage`
-      // argument, so a PERMITTED record in `included` emits the full pre-#234
-      // document. Measured: `GET /animals/1?include=owner` returns
-      // `owner.data: null` on the primary document and `owner:angela` in
-      // `included`. One query parameter deep. Only the PRIMARY document's
-      // linkage is filtered here.
+      // The boundary that remains, so the next reader does not have to derive
+      // it: this closes what a record already in `included` may NAME. WHETHER a
+      // resource appears in `included` at all is MEMBERSHIP and it is
+      // abofs/stonyx-orm#233's -- a hidden owner is still a member here.
+      // Neither question closes the other.
       return buildResponse(record.toJSON?.({ fields: modelFields, baseUrl, linkage }), request.query?.include, record, {
         links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
-        baseUrl
+        baseUrl,
+        linkage
       });
     };
 
-    const createHandler: HandlerFn = async ({ body, query }, { filter }) => {
+    const createHandler: HandlerFn = async (request, { filter }) => {
+      // BOUND, not destructured (abofs/stonyx-orm#235). `HandlerFn` has always
+      // delivered the request as argument one; this handler simply discarded
+      // the binding, which is why its response document named ids every read
+      // surface withholds. `createLinkageFilter` needs the live request and
+      // there is no signature change involved in giving it one.
+      const { body, query } = request;
       const { type, id, attributes, relationships: rels } = (body?.data || {}) as {
         type?: string;
         id?: string | number;
@@ -995,10 +1023,29 @@ export default class OrmRequest extends Request {
         return 403;
       }
 
-      return { data: record.toJSON?.({ fields: modelFields }) };
+      // The filter is built HERE, per invocation, and never hoisted into the
+      // OrmRequest constructor where the other per-mount values live: a verdict
+      // cached across requests answers a second caller with the first caller's
+      // authorization (src/access-verdict.ts says so at the constructor an
+      // implementer would reach for).
+      //
+      // AND IT IS BUILT AFTER `createRecord`, AFTER THE ROLLBACK WINDOW AND
+      // AFTER `isDenied`, so the record is in its final form at the call. The
+      // filter is lazy per type and per (type, id), so it cannot observe a
+      // pre-write state even if it were built earlier.
+      //
+      // `fields` is passed here and NOT in `updateHandler`: the two handlers
+      // are asymmetric on purpose (`updateHandler` has no `fieldsMap` in
+      // scope), and a single copy-pasted wiring would drop it from one of them.
+      return { data: record.toJSON?.({ fields: modelFields, linkage: createLinkageFilter(request) }) };
     };
 
-    const updateHandler: HandlerFn = async ({ body, params }, { filter }) => {
+    const updateHandler: HandlerFn = async (request, { filter }) => {
+      // Bound rather than destructured, for the reason given in
+      // `createHandler` above (abofs/stonyx-orm#235). `PATCH /animals/1`
+      // returned 200 naming angela seconds after `GET /animals/1` returned
+      // `owner.data: null` for the same record -- one HTTP verb apart.
+      const { body, params } = request;
       const found = await store.find(model, getId(params));
       if (!found || !isOrmRecord(found)) return 404;
       // Checked BEFORE any attribute is applied. 404 rather than 403 for the
@@ -1057,7 +1104,14 @@ export default class OrmRequest extends Request {
         }
       }
 
-      return { data: record.toJSON?.() };
+      // No `fields` and no `baseUrl`, both unchanged: `updateHandler` has no
+      // `fieldsMap` in scope, and adding `baseUrl` would put `links` on a
+      // document that has never carried them -- an unrelated behaviour change.
+      // #224 AC6's "emits `data: []` WITH links" is a statement about the READ
+      // surfaces; on these two handlers a filtered relationship and a
+      // genuinely-empty one are both a bare `{ data }`, which is what makes
+      // them indistinguishable here too.
+      return { data: record.toJSON?.({ linkage: createLinkageFilter(request) }) };
     };
 
     const deleteHandler: HandlerFn = async ({ params }, { filter }) => {
@@ -1388,6 +1442,28 @@ export default class OrmRequest extends Request {
       };
 
       // Relationship linkage route: GET /:id/relationships/{relationship}
+      //
+      // NO `linkage` FILTER HERE, AND IT IS NOT AN OVERSIGHT --
+      // abofs/stonyx-orm#232 OWNS THIS ROUTE. The three sites that carry the
+      // filter (`buildResponse`'s `included`, the related-resource branch
+      // above, and the two write handlers) all call `record.toJSON()`, which is
+      // where the `linkage` option is applied. This branch builds its
+      // `{ type, id }` objects BY HAND and never calls `toJSON` at all, so it
+      // cannot see a filter no matter who passes one.
+      //
+      // It is also a DIFFERENT QUESTION. Everywhere else, linkage is metadata
+      // ABOUT a document. Here the linkage IS the primary data, so dropping an
+      // entry is a MEMBERSHIP decision about what this route serves -- the same
+      // class as abofs/stonyx-orm#233 and #196, not the class #234/#235 close.
+      // That is why it is absent from #224 §2a's seven-site inventory.
+      //
+      // MEASURED, so the next person does not re-derive it: this route answers
+      // `GET /animals/1/relationships/owner` with
+      // `{"type":"owner","id":"angela"}` while `GET /owners/angela` is 404.
+      // Wiring the filter in here takes the suite to 993/2 and turns the
+      // `GET /animals/:id/relationships/owner returns relationship linkage`
+      // test red -- which is #232's own reproduction, not a regression.
+      // Pinned unchanged by `[GUARD] #235 X2` in test/integration/orm-test.ts.
       routes[`/:id/relationships/${dasherizedName}`] = async (request: OrmRequest$, { filter }: { [key: string]: unknown } = {}) => {
         const record = await store.find(model, getId(request.params)) as OrmRecord | undefined;
         if (!record) return 404;

@@ -835,12 +835,39 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(included, 'included array exists');
 
       // Should include: owner + all of owner's pets (other animals)
+      //
+      // MEMBERSHIP, AND IT IS abofs/stonyx-orm#233's REPRODUCTION -- LEAVE IT.
+      // angela is 404 on `/owners/angela` and she is still a MEMBER of
+      // `included`; that this is currently true is what #233 exists to change,
+      // so this line must stay able to go red in Sprint 87. #235 does not move
+      // it (measured green under the #235 patch), and it must not be swept up
+      // in the re-specification three lines below.
       const owner = included.find(r => r.type === 'owner' && r.id === 'angela');
       assert.ok(owner, 'owner is included');
 
-      // Angela owns multiple animals, those should be in included
-      const angelaPets = included.filter(r => r.type === 'animal' && r.relationships.owner?.data?.id === 'angela');
+      // Angela owns multiple animals, those should be in included.
+      //
+      // RE-SPECIFIED BY abofs/stonyx-orm#235, AND ONLY THIS ASSERTION. It used
+      // to select the sideloaded animals by
+      // `r.relationships.owner?.data?.id === 'angela'` -- which is the LEAK
+      // written as a requirement: it asserted that nine permitted animals each
+      // publish the id of an owner this caller gets a 404 for. #235 nulls that
+      // linkage, so the old selector matched nothing and the assertion went red
+      // for the RIGHT reason. It is re-specified rather than deleted, and it is
+      // re-specified to the property the test was actually named for: that the
+      // NESTED hop (`owner.pets`) traversed and produced animals in `included`.
+      //
+      // Selecting on `type === 'animal'` alone is not enough on its own -- the
+      // primary record's own relationships could contribute one -- so the
+      // membership is checked against the store's view of angela's pets, which
+      // is the set the nested hop is supposed to have produced.
+      const angelaPets = included.filter(r => r.type === 'animal');
       assert.ok(angelaPets.length > 1, 'owner pets are included via nested relationship');
+
+      const expectedPets = [...(store.get('owner', 'angela')?.pets ?? [])].map(pet => pet?.id ?? pet);
+      assert.ok(expectedPets.length > 1, 'precondition: angela really does own more than one animal');
+      assert.ok(expectedPets.every(id => angelaPets.some(r => r.id === id)),
+        'and every one of the owner\'s pets reached included via the nested hop');
     });
 
     test('get call with deeply nested include parameter (3 levels)', async function(assert) {
@@ -4416,11 +4443,33 @@ module('[Integration] ORM', function(hooks) {
         assert.deepEqual(body.data.relationships.owner, { data: null },
           'the hidden owner is not named in the POST response document');
 
-        // The create handler is a SEPARATE function from the update handler and
-        // passes a different option object, so this is a second wiring site.
-        // [DEFECT] on dev: the id appears in the relationships block.
-        assert.notOk(JSON.stringify(body).includes('angela'),
-          'and angela does not appear anywhere else in the create response either');
+        // [DEFECT] on dev: the id appears in the RELATIONSHIPS block of the
+        // create response. Scoped to that block on purpose -- see the note
+        // below for what a whole-document scan finds instead, and why this
+        // story neither owns it nor may pretend to have closed it.
+        assert.notOk(JSON.stringify(body.data.relationships).includes('angela'),
+          'and the hidden id appears nowhere in the create response’s relationships');
+
+        // A RESIDUAL THIS STORY DOES NOT CLOSE, FOUND WHILE MEASURING IT, AND
+        // ASSERTED AS PRESENT RATHER THAN LEFT AS A COMMENT.
+        //
+        // A whole-document scan for `angela` on this response still matches,
+        // and it is NOT linkage: the `animal` fixture model has a COMPUTED
+        // attribute, `tag`, whose getter interpolates `owner.id` into a string
+        // (test/sample/models/animal.ts:13). So every animal document on every
+        // surface -- including the four READ surfaces #234 already closed --
+        // carries `attributes.tag: "angela's small dog"`.
+        //
+        // It is out of scope in the strong sense rather than the convenient
+        // one: `relationships.*.data` is a structure this module builds and can
+        // therefore filter, while a computed attribute is arbitrary consumer
+        // code returning an arbitrary value. Filtering it would mean the ORM
+        // deciding which substrings of a consumer's own getter output are
+        // identifiers, which it cannot do. Pinned here so the gap is a measured
+        // fact in the suite rather than a sentence in a PR body, and so that
+        // anyone who later DOES close it has an assertion to turn red.
+        assert.ok(body.data.attributes.tag.includes('angela'),
+          'RESIDUAL, NOT CLOSED BY #235: a computed attribute still interpolates the hidden owner’s id — attributes are not linkage');
       } finally {
         if (createdId !== undefined) store.remove('animal', createdId, { _skipAutoPersist: true });
       }
