@@ -176,7 +176,22 @@ stonyx-orm/
 **Record creation flow:**
 
 1. `createRecord(modelName, rawData, options)` called
-2. Auto-increment ID assigned if missing (or pending MySQL ID in MySQL mode)
+2. Server-assigned ID chosen if none was supplied, by `assignRecordId`
+   (`src/manage-record.ts`). Three branches, not one:
+   - **SQL mode, numeric id** — a unique negative pending ID, deferring to
+     `AUTO_INCREMENT`.
+   - **otherwise** — the highest NUMERIC store key plus one, mapped through the
+     model's declared id transform to get the key the record will actually be
+     filed under, then walked upward past any occupied key. A string-keyed model
+     gets `<model>-<n>` rather than a bare number, because a numeric-looking
+     string id is filed under the string key and addressed under the number
+     ([#209](https://github.com/abofs/stonyx-orm/issues/209)).
+   - **at the numeric ceiling** — `max + 1` does not exceed `max` at or above
+     2^53, so the walk restarts from `1`. Without that, one record filed at 2^53
+     made every later server-assigned create on that model fail permanently.
+
+   If no free key can be derived at all — only possible with a non-injective id
+   transform — `assignRecordId` throws and the POST handler answers `409`.
 3. Model + Serializer instantiated, Record wrapper created
 4. `record.serialize()` maps raw data through serializer paths, applies transforms, wires relationships
 5. Record stored in `Store` by ID
@@ -190,7 +205,7 @@ Auto-generated REST endpoints for each model with an access class:
 |--------|--------------|-----------|-------|
 | GET | `/:models` | List collection | Supports `?filter[path]=value`, `?fields[model]=attr1,attr2`, `?include=rel1,rel2.nested` |
 | GET | `/:models/:id` | Get single record | Same query params as list; returns 404 if not found |
-| POST | `/:models` | Create record | Body: `{ data: { type, id?, attributes } }`; 400 if no type; 409 if duplicate ID |
+| POST | `/:models` | Create record | Body: `{ data: { type, id?, attributes } }`; 400 if no type; 409 if duplicate ID, or if no id can be assigned (non-injective id transform); 403 for any client-supplied id on a filtered collection |
 | PATCH | `/:models/:id` | Update record | Body: `{ data: { attributes } }`; updates only provided fields |
 | DELETE | `/:models/:id` | Delete record | Removes from store; no response body |
 | GET | `/:models/:id/:relationship` | Related resource | Returns full related records (array for hasMany, single for belongsTo) |
@@ -429,7 +444,7 @@ property of the function it lives in, if there is one.
 | `deleteHandler` `isDenied` | **killable** — assertion 33 | Same window. Deleting it destroys the record behind a 204. |
 | catch-all relationship routes (`Md`/`Me`) | deleted | Both branches returned a constant 404, so no distinguishing test could exist. If either route ever stops being a constant 404 it becomes an eighth surface and must filter the parent. |
 | create rollback: `store.get(...) === record` identity check | **survivor, retained** | **There is no `await` anywhere between `slotsBefore`, `createRecord`, `createdNewSlot`, `isDenied` and `store.remove`.** The whole window is synchronous, so it is atomic under Node's event loop and no concurrent request can interleave; before-`create` hooks run *before* the handler (`_withHooks` runs its hook loop ahead of `await handler(...)`), so they are outside it, and a consumer predicate running inside `isDenied` executes *after* `createdNewSlot` is computed and cannot flip it. Nothing can occupy the slot, whoever chose the id. **Becomes reachable if an `await` is introduced between the create and the rollback** — which is what a future editor would actually do. Mutating it (inverting the condition) **is** killed by assertion 14; only deleting it survives. |
-| create rollback: `createdNewSlot` check | **killable** — assertion 31 | `assignRecordId` returns last-INSERTED + 1, not max + 1 ([#203](https://github.com/abofs/stonyx-orm/issues/203)), so a server-assigned id can land on an occupied slot. GATE 0 cannot refuse that request — it supplied no id. |
+| create rollback: `createdNewSlot` check | **survivor, retained** — was killable by assertion 31 until [#203](https://github.com/abofs/stonyx-orm/issues/203) closed | The old justification was that `assignRecordId` returned last-INSERTED + 1, so a server-assigned id could land on an occupied slot and `createRecord` would update in place. #203 closed that: the server-assigned path now walks past occupied keys, so no create reaching this handler can overwrite. **Measured** — delete `createdNewSlot &&` and run `test/unit/access-filter-enforcement-test.ts`: `dev` gives 55 pass / 1 fail with assertion 31 RED, `dev` + #203 gives 56 pass / 0 fail, GREEN. Kept anyway, and **not** for the old reason: without it a denied create becomes `store.remove` on a key the caller may have influenced, which is recorded above as having been an unauthenticated deletion primitive across the whole id space. **Becomes killable again** the moment any caller-supplied id can reach `createRecord` from `createHandler` — which is what `has-many.ts:65` / `belongs-to.ts:45` already do for *another* model's store ([#207](https://github.com/abofs/stonyx-orm/issues/207)), and what a third un-stripped id channel would do for this one ([#204](https://github.com/abofs/stonyx-orm/issues/204)). Do **not** delete it on the strength of #203 being closed. |
 | `normalizeBodyId`'s `typeof id !== 'string'` early return | **killable** — assertion 49 | It had no mutation for four rounds. Dropping it sends a non-string body id through `parseInt`, so `POST {"id":9105.5}` looks the collision up under `9105` and answers `409` against a record the caller never named — the hex divergence one type over. |
 | `_withHooks`'s `(state \|\| {})` | **survivor by construction, retained** | The rest-server dispatcher always passes `getState(req)`, so no test can reach the `undefined` branch. Kept because the sibling relationship routes declare `state` with a `= {}` default and the two shapes should not disagree, and because it now defends the whole function (context, snapshot and handler call all read `callState`) rather than one destructure the next line would throw past anyway. **Becomes reachable if a dispatcher other than `@stonyx/rest-server` invokes these handlers**, which is what a consumer mounting them by hand would do. |
 | GATE 2's `Number.isInteger(response) &&` | **equivalent mutant, retained** | The only non-integer a handler in this file returns is a `{ data, links }` object, and `{} >= 400` is `false` by coercion, so dropping it changes no reachable outcome. Kept because `>=` coerces rather than rejects and the shapes it coerces are not obvious — `[500] >= 400` is **true**, so a handler that returned an array would have every response read as a denial. **Becomes killable the moment a handler returns anything array-like or numeric-string-like.** |
