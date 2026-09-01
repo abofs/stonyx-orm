@@ -22,7 +22,9 @@
  *      `:53` at the head. Out of the schema it costs 0.
  *      The consequence is real and is pinned rather than worked around: an
  *      unclaimed model is NOT PERSISTED with the sample db, so a `belongsTo`
- *      to it does not survive a db round-trip.
+ *      to it does not survive a db round-trip. That silence -- served normally,
+ *      gone on restart, no signal anywhere -- is a framework defect rather than
+ *      a property of this fixture, and it is owned by abofs/stonyx-orm#248.
  *   2. ATTACHED TO `trait`, NOT TO `animal`. `animal.tags = hasMany('tag')`
  *      reds three assertions in `test/unit/linkage-verdict-test.ts` that pin an
  *      animal document byte-for-byte (#234 AC5, AC5b, AC10). `trait.tag` is the

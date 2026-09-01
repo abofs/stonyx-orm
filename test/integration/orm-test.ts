@@ -2329,7 +2329,10 @@ module('[Integration] ORM', function(hooks) {
     });
 
     test('AC1 — a URL-free predicate enforces access on all seven surfaces, over the live router', async function(assert) {
-      // The seven surfaces are README.md:408-416. The predicate under test
+      // The seven surfaces are enumerated in README.md's `### Breaking changes`,
+      // item 4 -- named rather than numbered, because the line citation that
+      // stood here (`README.md:408-416`) pointed at the GlobalAccess sample and
+      // had done since before dev @ 8dda5d6. The predicate under test
       // reads NOTHING off the request, so if the framework does not supply a
       // correct `context.model` it fails closed and every 200 below turns into
       // a 403 — and if the framework supplied a model derived from the URL it
@@ -5291,7 +5294,9 @@ module('[Integration] ORM', function(hooks) {
       // `ginaPets` is the raw STORE, and the comparison was sound only while
       // gina's stored pets and gina's PERMITTED pets were the same list. #240
       // fixture 1 makes animal 18 the first hidden child in this sample with a
-      // PERMITTED parent (test/sample/access/global-access.ts:255), so they are
+      // PERMITTED parent -- the `record.id !== 18` clause of the `animal` rule in
+      // test/sample/access/global-access.ts, cited by clause and not by line
+      // because that file's own marker block moves it -- so they are
       // no longer the same list.
       //
       // AND THE OLD FORM WAS THE WRONG ASSERTION RATHER THAN MERELY A STALE

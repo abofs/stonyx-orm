@@ -142,6 +142,30 @@
  * identical line for line. Edit one without the other and the suite goes red.
  */
 export default class GlobalAccess {
+  // `tag` IS MISSING FROM THIS ARRAY ON PURPOSE, AND IT IS MISSING FROM
+  // test/sample/db-schema.ts ON PURPOSE TOO. Both absences are the fixture;
+  // neither is an oversight to tidy up.
+  //
+  // Absent HERE, `tag` is a model no access class claims: `getAccess('tag')`
+  // is `undefined` and `setup-rest-server` mounts no route for it. That is
+  // abofs/stonyx-orm#240 fixture 2, and it is what makes the unclaimed-model
+  // case testable at all -- see test/sample/models/tag.ts for the three
+  // constraints that shaped it, and `[GUARD] #240 AC8/1` and `AC8/2` in
+  // test/unit/relationship-route-access-test.ts for the pins.
+  //
+  // Absent from `db-schema.ts`, it is ALSO never persisted -- served normally
+  // and gone on restart, with no signal at boot, mount, write or read. That
+  // second absence is a repo-wide framework defect this fixture is merely the
+  // first sample model to occupy, and it is owned and specified by
+  // abofs/stonyx-orm#248 (open). Read that issue rather than re-deriving it
+  // here; this comment exists because the `models` array is the line a
+  // newcomer edits, and until now it said nothing about either absence.
+  //
+  // SO DO NOT "FIX" EITHER ONE. Adding `'tag'` here, or `tags = hasMany('tag')`
+  // to `db-schema.ts`, silently un-tests the unclaimed-model case that #232 and
+  // #233 depend on (#248 AC3 states this as a requirement on whatever signal
+  // #248 lands). The schema edit additionally costs 6 reds across two files,
+  // measured -- see `[GUARD] #240 AC8/1`.
   models = ['owner', 'animal', 'trait', 'category', 'phone-number']; // * instead of an array will allow access to all models
 
   access(request, { model, operation, recordId }) {
