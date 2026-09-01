@@ -142,6 +142,30 @@
  * identical line for line. Edit one without the other and the suite goes red.
  */
 export default class GlobalAccess {
+  // `tag` IS MISSING FROM THIS ARRAY ON PURPOSE, AND IT IS MISSING FROM
+  // test/sample/db-schema.ts ON PURPOSE TOO. Both absences are the fixture;
+  // neither is an oversight to tidy up.
+  //
+  // Absent HERE, `tag` is a model no access class claims: `getAccess('tag')`
+  // is `undefined` and `setup-rest-server` mounts no route for it. That is
+  // abofs/stonyx-orm#240 fixture 2, and it is what makes the unclaimed-model
+  // case testable at all -- see test/sample/models/tag.ts for the three
+  // constraints that shaped it, and `[GUARD] #240 AC8/1` and `AC8/2` in
+  // test/unit/relationship-route-access-test.ts for the pins.
+  //
+  // Absent from `db-schema.ts`, it is ALSO never persisted -- served normally
+  // and gone on restart, with no signal at boot, mount, write or read. That
+  // second absence is a repo-wide framework defect this fixture is merely the
+  // first sample model to occupy, and it is owned and specified by
+  // abofs/stonyx-orm#248 (open). Read that issue rather than re-deriving it
+  // here; this comment exists because the `models` array is the line a
+  // newcomer edits, and until now it said nothing about either absence.
+  //
+  // SO DO NOT "FIX" EITHER ONE. Adding `'tag'` here, or `tags = hasMany('tag')`
+  // to `db-schema.ts`, silently un-tests the unclaimed-model case that #232 and
+  // #233 depend on (#248 AC3 states this as a requirement on whatever signal
+  // #248 lands). The schema edit additionally costs 6 reds across two files,
+  // measured -- see `[GUARD] #240 AC8/1`.
   models = ['owner', 'animal', 'trait', 'category', 'phone-number']; // * instead of an array will allow access to all models
 
   access(request, { model, operation, recordId }) {
@@ -212,11 +236,22 @@ export default class GlobalAccess {
       // does not remove a rule loudly, it turns a deny into an ALLOW, silently.
       if (recordId === 'archived') return false;
 
-      // Returning a function plugs it in as a per-record filter, and it is
-      // enforced on every surface addressed to one of these records:
+      // Returning a function plugs it in as a per-record filter. It is enforced
+      // on every surface addressed to one of these records —
       //   /owners, /owners/:id, /owners/:id/pets, /owners/:id/relationships/pets
-      // A rejected record is 404 on record routes — the same status as a record
-      // that does not exist — so the filter is not an existence oracle.
+      // — AND, since #232, on every surface that reaches one of these records
+      // as the RELATED resource of another model:
+      //   /animals/:id/owner, /animals/:id/relationships/owner
+      // Both readings are the same rule: an owner this predicate rejects is
+      // withheld wherever she is reachable, not only on /owners.
+      //
+      // NOTHING HERE IS AN EXISTENCE ORACLE, AND THE SPELLING DIFFERS BY WHOSE
+      // RECORD IS BEING REJECTED. A rejected ADDRESSED record is 404 — the same
+      // status as a record that does not exist. A rejected RELATED record is
+      // `data: null` at 200 — byte-identical to a relationship that is
+      // genuinely empty, because on those routes 404 is already the answer for
+      // a PARENT that does not exist. In both cases "rejected" and "not there"
+      // are the same answer, which is the property that matters.
       return record => record.id !== 'angela' && record.id !== 'restricted';
     }
 
@@ -225,7 +260,23 @@ export default class GlobalAccess {
     // inert. Deliberately NO `?? record.owner` fallback: accepting the raw
     // shape as well as the resolved one would absorb a resolution regression
     // silently, which is exactly what blinded this fixture before.
-    if (model === 'animal') return record => record.owner?.id !== 'restricted';
+    // `record.id !== 18` IS abofs/stonyx-orm#240's FIRST FIXTURE, AND IT IS THE
+    // ONLY HIDDEN CHILD IN THIS SAMPLE WITH A PERMITTED PARENT. Animal 18 is
+    // owned by `gina`, who is NOT hidden. Before it, every hidden animal (21,
+    // 22) was owned by `restricted`, who is hidden himself -- so no permitted
+    // parent named a hidden child anywhere in the fixture, and every `hasMany`
+    // assertion about that shape was vacuously green. Measured: `owner.pets`,
+    // `owner.phoneNumbers` and `animal.traits` named ZERO hidden children.
+    //
+    // The cheap alternative does NOT work and was measured: adding an owner
+    // whose `pets` names the already-hidden animal 21 RE-PARENTS it onto the
+    // new owner and de-hides it (`GET /animals` goes 20 -> 22). A hidden-child
+    // fixture has to come from an access() rule.
+    //
+    // DO NOT MOVE THIS TO `trait`: `/traits` is this suite's designated
+    // UNFILTERED collection, load-bearing for #190's GATE-0 scoping guard and
+    // for #234's AC7 cache guard -- measured at 6 reds.
+    if (model === 'animal') return record => record.owner?.id !== 'restricted' && record.id !== 18;
 
     // Allows full access to all calls that don't match any of the above conditions
     return ['read', 'create', 'update', 'delete'];

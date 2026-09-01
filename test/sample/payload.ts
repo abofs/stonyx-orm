@@ -93,9 +93,11 @@ export const serialized = {
     { id: 22, type: 2, age: 4, size: 'large', owner: 'restricted', traits: [ 1, 3 ] }
   ],
   traits: [
-    { id: 1, type: 'habitat', value: 'farm', category: 'physical' },
-    { id: 2, type: 'color', value: 'black', category: 'appearance' },
-    { id: 3, type: 'color', value: 'white', category: 'appearance' },
+    // `tag` (abofs/stonyx-orm#240, fixture 2) names a model claimed by no
+    // access class. Trait 1 carries none — it is the negative control.
+    { id: 1, type: 'habitat', value: 'farm', category: 'physical', tag: null },
+    { id: 2, type: 'color', value: 'black', category: 'appearance', tag: 'never-mounted' },
+    { id: 3, type: 'color', value: 'white', category: 'appearance', tag: 'never-mounted' },
   ],
   categories: [
     { id: 'physical', name: 'Physical Attributes' },

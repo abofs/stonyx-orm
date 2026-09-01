@@ -298,8 +298,8 @@ every endpoint that is *addressed to* a record — not only on the collection:
 |---|---|---|
 | `GET /:models` | omitted from the collection | `getCollectionHandler` |
 | `GET /:models/:id` | `404` | `getSingleHandler` |
-| `GET /:models/:id/{relationship}` | `404` — the **addressed** record, not the related one | `_generateRelationshipRoutes` |
-| `GET /:models/:id/relationships/{relationship}` | `404` — same | `_generateRelationshipRoutes` |
+| `GET /:models/:id/{relationship}` | the **addressed** record → `404`. The **related** record → `200` with `data: null` (`belongsTo`) or dropped from the array (`hasMany`), by that record's *own* model's predicate — [#232](https://github.com/abofs/stonyx-orm/issues/232) | `_generateRelationshipRoutes` |
+| `GET /:models/:id/relationships/{relationship}` | same, on the linkage objects | `_generateRelationshipRoutes` |
 | `PATCH /:models/:id` | `404`, no attribute is applied | `_withHooks` GATE 1 |
 | `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued | `_withHooks` GATE 1 |
 | `POST /:models` (no client id) | `403`, and a record **this request inserted** is rolled back out of the store — see the `createdNewSlot` row in the guard table for the case where it did not insert one | `createHandler` |
@@ -455,15 +455,31 @@ property of the function it lives in, if there is one.
 | GATE 2's `Number.isInteger(response) &&` | **equivalent mutant, retained** | The only non-integer a handler in this file returns is a `{ data, links }` object, and `{} >= 400` is `false` by coercion, so dropping it changes no reachable outcome. Kept because `>=` coerces rather than rejects and the shapes it coerces are not obvious — `[500] >= 400` is **true**, so a handler that returned an array would have every response read as a denial. **Becomes killable the moment a handler returns anything array-like or numeric-string-like.** |
 | `normalizeBodyId`'s `id === ''` early return | **killable** — assertion 44 | `''` is the only body id that means "no id": `createRecord` treats it as absent and assigns a server id. Coercing it gives `parseInt('') === NaN`, and a record **can** be held under `NaN`, so `POST {"id":""}` would answer 409 against a record it never named. Its whitespace sibling (`id.trim() === ''`) was **deleted** rather than kept: it made the body surface disagree with `getId`, which maps `'   '` to `NaN` and therefore addresses that slot on every other route. |
 
-> **Known gap (reads) — MEMBERSHIP.** The predicate is evaluated against the
-> record the route is addressed to. It is **not** applied to the related or
-> included record itself, so `GET /owners/angela` can be 404 while
-> `GET /animals/1/owner` returns angela in full. Tracked as
-> [#196](https://github.com/abofs/stonyx-orm/issues/196), which covers
-> `include=`, related-resource routes and relationship-linkage routes; the filed
-> children are [#232](https://github.com/abofs/stonyx-orm/issues/232) (the two
-> relationship route families) and
-> [#233](https://github.com/abofs/stonyx-orm/issues/233) (`include=` traversal).
+> **Known gap (reads) — MEMBERSHIP. Narrowed to `include=` by
+> [#232](https://github.com/abofs/stonyx-orm/issues/232); the worked example
+> that stood here is now a `[DEFECT]` assertion.** The predicate is evaluated
+> against the record the route is addressed to. It used to be applied to
+> **nothing else**, so `GET /owners/angela` could be 404 while
+> `GET /animals/1/owner` returned angela in full — that exact pair is now
+> `#232 AC1` in `test/integration/orm-test.ts` and `GET /animals/1/owner`
+> answers `200` with `data: null`. **Both relationship route families now apply
+> the related record's own model's predicate**, and a denied related record is
+> answered the same way a genuinely absent one is: `data: null` for a
+> `belongsTo`, dropped from the array for a `hasMany`. `404` on those routes is
+> reserved for the **parent**.
+>
+> What is still open under [#196](https://github.com/abofs/stonyx-orm/issues/196)
+> is `include=` traversal — [#233](https://github.com/abofs/stonyx-orm/issues/233)
+> owns whether a related resource enters `included` at all, and
+> [#235](https://github.com/abofs/stonyx-orm/issues/235) owns the linkage
+> emitted inside a record that is already there.
+>
+> **The residual #232 leaves is a limit on what a predicate can EXPRESS, not a
+> disclosure.** The related-model ask carries `recordId: null` and a request
+> whose `params` name a record of a different model, so a rule cannot branch on
+> *which* related record it is being asked about. Model-level, request-level and
+> per-record-**filter** shapes all work. See `AccessContext.recordId` in
+> `src/types/orm-types.ts`.
 >
 > **NAMING is a different question, and cross-model resolution IS now
 > implemented for it.** Which ids a document may *name* —
@@ -491,18 +507,21 @@ property of the function it lives in, if there is one.
 >    #234 fix. The arity signal is
 >    [#213](https://github.com/abofs/stonyx-orm/issues/213) /
 >    [#221](https://github.com/abofs/stonyx-orm/issues/221), unshipped.
-> 2. **Every serializing surface now, but one route still is not.**
+> 2. **The filter rides `toJSON()`, so a surface that does not call it is not
+>    covered by it.**
 >    [#235](https://github.com/abofs/stonyx-orm/issues/235) extended the filter
 >    to the `POST`/`PATCH` response documents and to the records inside
 >    `included`, so the one-verb bypass is closed: `PATCH /animals/1` used to
 >    return 200 naming `angela` seconds after `GET /animals/1` returned
->    `owner.data: null`, and both now answer `null`.
->    `GET /:id/relationships/{rel}` **still publishes unfiltered linkage** —
->    [#232](https://github.com/abofs/stonyx-orm/issues/232) — because its
->    primary data IS the linkage, which makes filtering it a MEMBERSHIP
->    decision rather than this one. Measured:
->    `GET /animals/1/relationships/owner` returns
->    `{"type":"owner","id":"angela"}` while `GET /owners/angela` is 404.
+>    `owner.data: null`, and both now answer `null`. Every request-bound surface
+>    that serializes a record through `toJSON()` is filtered.
+>    `GET /:id/relationships/{rel}` was on this list and is **off it as of
+>    [#232](https://github.com/abofs/stonyx-orm/issues/232)** — but it is not a
+>    `toJSON()` call site at all: it builds its `{type, id}` objects by hand and
+>    resolves and applies the verdict itself, which is why filtering it was a
+>    membership decision belonging to #232 rather than a linkage one belonging
+>    to #234. A surface added later that also builds its payload by hand
+>    inherits the same gap and the same obligation.
 > 3. **A bare `toJSON()` is unchanged and stays that way** — it holds no request
 >    to resolve against ([#230](https://github.com/abofs/stonyx-orm/issues/230)).
 >

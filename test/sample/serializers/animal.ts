@@ -18,7 +18,10 @@ export default class AnimalSerializer extends Serializer {
 
       // Add color trait if applicable
       const id = COLOR_TRAIT_MAP[color];
-      if (id) traits.push({ id, type: 'color', value: color, category: 'appearance' });
+      // `tag` names a record of a model NO access class claims (#240,
+      // fixture 2). Only the colour traits carry it, so trait 1 is the
+      // negative control: a trait whose `tag` is genuinely absent.
+      if (id) traits.push({ id, type: 'color', value: color, category: 'appearance', tag: 'never-mounted' });
 
       return traits;
     }]

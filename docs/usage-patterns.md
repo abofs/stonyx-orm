@@ -279,10 +279,15 @@ export default class GlobalAccess {
       // not remove a rule, it turns a deny into an ALLOW, silently.
       if (recordId === 'archived') return false;
 
-      // Per-record filter. Enforced on every surface ADDRESSED TO a record — the
-      // collection, GET/PATCH/DELETE by id, and both relationship route families
-      // — not on the collection alone. A rejected record is 404 on record routes
-      // (indistinguishable from a record that does not exist) and 403 on POST.
+      // Per-record filter. Enforced on every surface ADDRESSED TO a record —
+      // the collection, GET/PATCH/DELETE by id, and both relationship route
+      // families — and, since #232, on every surface that reaches one of these
+      // records as another model's RELATED resource. A rejected ADDRESSED
+      // record is 404 on record routes (indistinguishable from a record that
+      // does not exist) and 403 on POST; a rejected RELATED record is
+      // `data: null` at 200 (indistinguishable from a relationship that is
+      // genuinely empty). Neither spelling is an existence oracle, which is the
+      // property both are chosen for.
       //
       // NOTE: with a filter in force, a POST carrying a client-supplied `id` is
       // refused with 403 whatever the payload, and BEFORE any store lookup —
@@ -305,7 +310,11 @@ export default class GlobalAccess {
     // `record.owner` resolves to an OrmRecord, not to the owner's id string.
     // Comparing it directly against a string is never equal, which is the bug
     // that made this predicate inert while looking like it worked.
-    if (model === 'animal') return record => record.owner?.id !== 'restricted';
+    // `record.id !== 18` hides one animal whose OWNER is permitted. It is the
+    // fixture that makes the `hasMany` half of the relationship-route rules
+    // observable: gina is served, animal 18 is not, and every surface that
+    // names gina's pets has to drop it.
+    if (model === 'animal') return record => record.owner?.id !== 'restricted' && record.id !== 18;
 
     // Grant CRUD permissions. A bare string ('read') is ONE permission, not a
     // grant of all four. Any shape that is not a boolean, a string, an array or
@@ -314,6 +323,78 @@ export default class GlobalAccess {
   }
 }
 ```
+
+
+### What #232 changed, and the limit it leaves
+
+Both relationship route families resolve the **related** model's own access
+class ([#232](https://github.com/abofs/stonyx-orm/issues/232)):
+
+```javascript
+// The related resource is this route's PRIMARY data, so the filter decides
+// MEMBERSHIP, not just which ids a document may name.
+GET /owners/gina/pets                 // hidden children dropped from the array
+GET /owners/gina/relationships/pets   // same, on the hand-built linkage
+GET /animals/1/owner                  // denied belongsTo target -> 200, data: null
+GET /traits/2/tag                     // a model NO access class claims -> 200, data: null
+```
+
+A denied `hasMany` member is **dropped**, and nothing in the relationship marks
+the drop: same status, `links` intact, no `errors` member, and an array of
+survivors shaped exactly like one from a parent that only ever had those
+members. A denied `belongsTo` target is **200 with `data: null`**,
+byte-identical to a target that is genuinely absent. The status on these routes
+belongs to the **parent** — 404 there means the parent is missing or hidden — so
+`data`, and not the status, carries the answer about the related record.
+
+**Read that as a claim about the relationship, not about the document.** The
+sample `owner` model declares `get totalPets() { return this.pets.length; }`,
+which reads the store and is never filtered. Measured, unauthenticated, zero
+query parameters:
+
+```
+GET /owners/gina   ->  attributes.totalPets: 5
+                       relationships.pets.data: [8, 13, 24, 4]   (four)
+GET /owners/gina/pets                 ->  four records
+GET /owners/gina/relationships/pets   ->  the same four
+```
+
+The relationship discloses nothing and the document discloses that one child was
+withheld. That channel is [#245](https://github.com/abofs/stonyx-orm/issues/245);
+`included` membership is [#233](https://github.com/abofs/stonyx-orm/issues/233)
+and the `POST` `attributes.<fk>` absence is
+[#246](https://github.com/abofs/stonyx-orm/issues/246). All three are open. Audit
+your computed properties before treating a dropped member as unobservable.
+
+An earlier revision answered `404` for a denied `belongsTo` target, and it was
+measured as an oracle before it shipped. Unauthenticated, zero query parameters,
+one request each, on a model with no route mounted at all:
+
+```
+GET /traits/1/tag   [target absent]  ->  200  application/json  68 bytes
+GET /traits/2/tag   [target denied]  ->  404  text/plain         9 bytes
+```
+
+`GET /traits/1` and `GET /traits/2` already report
+`relationships.tag = {"data":null}` byte-identical modulo the id, because #234
+closed that oracle deliberately — so this route was the last way to ask which of
+those two nulls was a denial. Both now answer identically.
+
+**Per-record denies for a related resource are not expressible.** On these routes a predicate is
+handed `recordId: null` and a `request` whose `params` name a record of a
+**different model**. Model-level denies work; request-level denies work; the
+per-record **filter** shape works (`access()` may return a function, and it
+receives the whole record). What cannot be written is a rule that branches on
+*which* related record is being asked about before returning, because `access()`
+is not told.
+
+The reason is structural rather than an omission: the verdict is resolved **once
+per type** and cached before any record is examined, and a `hasMany`
+related-resource route returns many records of one type — so seeding `recordId`
+from a record would let the first one answer for all of them. The framework's
+rule is that **`recordId` may name a record only where the route addresses
+exactly one record of the model being asked about.**
+
 
 ## 8. REST API (Auto-generated)
 

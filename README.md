@@ -439,11 +439,22 @@ export default class GlobalAccess {
       // does not remove a rule loudly, it turns a deny into an ALLOW, silently.
       if (recordId === 'archived') return false;
 
-      // Returning a function plugs it in as a per-record filter, and it is
-      // enforced on every surface addressed to one of these records:
+      // Returning a function plugs it in as a per-record filter. It is enforced
+      // on every surface addressed to one of these records —
       //   /owners, /owners/:id, /owners/:id/pets, /owners/:id/relationships/pets
-      // A rejected record is 404 on record routes — the same status as a record
-      // that does not exist — so the filter is not an existence oracle.
+      // — AND, since #232, on every surface that reaches one of these records
+      // as the RELATED resource of another model:
+      //   /animals/:id/owner, /animals/:id/relationships/owner
+      // Both readings are the same rule: an owner this predicate rejects is
+      // withheld wherever she is reachable, not only on /owners.
+      //
+      // NOTHING HERE IS AN EXISTENCE ORACLE, AND THE SPELLING DIFFERS BY WHOSE
+      // RECORD IS BEING REJECTED. A rejected ADDRESSED record is 404 — the same
+      // status as a record that does not exist. A rejected RELATED record is
+      // `data: null` at 200 — byte-identical to a relationship that is
+      // genuinely empty, because on those routes 404 is already the answer for
+      // a PARENT that does not exist. In both cases "rejected" and "not there"
+      // are the same answer, which is the property that matters.
       return record => record.id !== 'angela' && record.id !== 'restricted';
     }
 
@@ -452,7 +463,11 @@ export default class GlobalAccess {
     // inert. Deliberately NO `?? record.owner` fallback: accepting the raw
     // shape as well as the resolved one would absorb a resolution regression
     // silently, which is exactly what blinded this fixture before.
-    if (model === 'animal') return record => record.owner?.id !== 'restricted';
+    // `record.id !== 18` hides one animal whose OWNER is permitted. It is the
+    // fixture that makes the `hasMany` half of the relationship-route rules
+    // observable: gina is served, animal 18 is not, and every surface that
+    // names gina's pets has to drop it.
+    if (model === 'animal') return record => record.owner?.id !== 'restricted' && record.id !== 18;
 
     // Allows full access to all calls that don't match any of the above conditions
     return ['read', 'create', 'update', 'delete'];
@@ -665,9 +680,11 @@ A `throw` inside `access()` is a **denial**, not a 500.
 A function return value is a **per-record predicate**, and it is enforced on
 every endpoint that is addressed to a record — not only on the collection.
 
-It is evaluated against the record the route is *addressed to*, **on that model
-only**. It is not a guarantee that a hidden record cannot be reached or modified:
-a write to a *different* collection can still re-parent one. See
+It is evaluated against the record the route is *addressed to*. On the two
+relationship route families it is **also** evaluated against the **related**
+record, by that record's *own* model's predicate — see the two `{relationship}`
+rows below. It is not a guarantee that a hidden record cannot be reached or
+modified: a write to a *different* collection can still re-parent one. See
 [Known limitations](#known-limitations) and
 [#207](https://github.com/abofs/stonyx-orm/issues/207).
 
@@ -675,11 +692,30 @@ a write to a *different* collection can still re-parent one. See
 |---|---|
 | `GET /:models` | omitted from the collection |
 | `GET /:models/:id` | `404` |
-| `GET /:models/:id/{relationship}` | `404` — the **addressed** record is filtered, not the related one |
-| `GET /:models/:id/relationships/{relationship}` | `404` — same |
+| `GET /:models/:id/{relationship}` | the **addressed** record → `404`. The **related** record → `200` with `data: null` for a `belongsTo`, or dropped from the array for a `hasMany` |
+| `GET /:models/:id/relationships/{relationship}` | same, on the linkage objects |
 | `PATCH /:models/:id` | `404`, no attribute is applied |
 | `DELETE /:models/:id` | `404`, the record is not removed and no SQL `DELETE` is issued |
 | `POST /:models` | `403`, and a record **this request inserted** is rolled back — see [Known limitations](#known-limitations) for why the rollback is conditional |
+
+**A withheld related record is not an error, and that is the same rule.** The
+addressed record is filtered with `404` and the related one with `data: null`
+because in both cases the answer must be **identical to the answer for a record
+that does not exist**. A `belongsTo` whose target is genuinely absent already
+answers `200 {"data": null}`; a `hasMany` with no members already answers `200`
+with an empty array. Withholding therefore has to be spelled the same way, or
+the route becomes an existence oracle for a record on a collection the caller
+may have no access to at all. Measured before this was closed — unauthenticated,
+zero query parameters, one request each:
+
+```
+GET /traits/1/tag   [target absent]  ->  200  application/json  68 bytes
+GET /traits/2/tag   [target denied]  ->  404  text/plain         9 bytes
+```
+
+`tag` is a model with **no route mounted at all**, so those two requests were the
+only way to ask about it — and they answered differently. Both now answer
+`200 {"data": null}`.
 
 **Denied record-level requests return 404, not 403.** This is deliberate and it
 is the property most easily "improved" away. 403 would confirm that the record
@@ -687,7 +723,11 @@ exists to a caller who is not allowed to know that, which turns the filter into
 an existence oracle: `404` means "no such record", `403` means "there is one and
 it is not yours". Every status on a record route must therefore be identical for
 "filtered out" and "does not exist" — including `DELETE`, which is why deleting
-a record that never existed also returns 404 rather than 204.
+a record that never existed also returns 404 rather than 204, and including the
+**related** record on the two relationship families, which is why a denied
+`belongsTo` target is `200 {"data": null}` rather than `404`: on that route
+`404` is the answer for a parent that does not exist, so it is `data: null`, and
+not the status, that carries "no target you may see".
 
 `POST` is the one exception and returns **403**, because 404 on a mounted
 collection route is indistinguishable from "model not mounted" — a genuinely
@@ -921,15 +961,109 @@ per-record filter. An input you cannot identify must **deny**.
   operation and which record the request addresses. The five variants above are
   the five ways that has been observed to fail open so far. Tracked as
   [#202](https://github.com/abofs/stonyx-orm/issues/202).
-- **Related and included records are not filtered.** The predicate is evaluated
-  against the record the route is *addressed to*. `GET /animals/1/owner`,
-  `GET /animals/1/relationships/owner` and `?include=owner` all serialize the
-  related record without resolving that model's own access class, so a filter on
-  `/owners` does not hide an owner reached through `/animals`. Tracked as
-  [#196](https://github.com/abofs/stonyx-orm/issues/196), which covers
-  `include=`, related-resource routes and relationship-linkage routes. This is
-  **membership** — whether the related resource is served at all — and it is a
-  different question from which ids a document may *name*, immediately below.
+- **The two relationship route families now resolve the *related* model's own
+  access class — `GET /:models/:id/{relationship}` and
+  `GET /:models/:id/relationships/{relationship}`**
+  ([#232](https://github.com/abofs/stonyx-orm/issues/232)). This is
+  **membership**: the related resource is the route's *primary* data, so the
+  filter decides whether it is served at all, not merely which ids a document
+  may name. A denied `hasMany` member is **dropped from the array** and nothing
+  in the relationship marks the drop: `links` intact, no `errors` member, same
+  status, and an array of survivors shaped exactly like one from a parent that
+  only ever had those members. A denied `belongsTo` target answers **`200` with
+  `data: null`**, byte-identical to a target that is genuinely absent, for the
+  same reason.
+
+  **That is a claim about the relationship, not about the document, and the gap
+  is measurable in this repo's own fixture.** `owner` declares a computed
+  `totalPets` returning `this.pets.length`, which reads the **store** and is
+  never filtered. Measured on this branch, unauthenticated, at zero query
+  parameters: `GET /owners/gina` answers `attributes.totalPets: 5` while its
+  `relationships.pets.data` names **four** ids, and both relationship routes
+  serve the same four. The relationship discloses nothing; the document it
+  arrives in discloses that exactly one child was withheld. Do not read
+  "indistinguishable" as a property of the response — it is a property of the
+  relationship member alone. The other channels in the same class are
+  [#245](https://github.com/abofs/stonyx-orm/issues/245) (computed attributes,
+  which is the one measured above),
+  [#233](https://github.com/abofs/stonyx-orm/issues/233) (`included`
+  membership) and [#246](https://github.com/abofs/stonyx-orm/issues/246) (the
+  absence of `attributes.<fk>` on a `POST` response), all open. **Audit your
+  computed properties before you treat a dropped member as unobservable.** Nothing on either family errors and no status changes — the
+  status on these routes belongs to the **parent**, and `data` carries the
+  answer about the related record. The `/relationships/` family built its `{type, id}` by
+  hand rather than through `toJSON()`, which is why the linkage filter shipped in
+  [#234](https://github.com/abofs/stonyx-orm/issues/234) did not reach it.
+
+  Before this, both families served a record hidden on every one of its own
+  surfaces, in full, from another model's route, at **zero query parameters**.
+  The severe case is a model **claimed by no access class**: `getAccess()`
+  returns `undefined`, no route is mounted for it at all, and it was still
+  readable as a related resource — a collection the consumer deliberately never
+  exposed.
+
+  **The `belongsTo` shape is not an existence oracle, and it was measured
+  rather than reasoned about.** An earlier revision of this fix answered `404`
+  for a denied target, which made it distinguishable from a target that is
+  genuinely absent. Unauthenticated, zero query parameters, one request each, on
+  `tag` — a model with **no route mounted at all**:
+
+  ```
+  GET /traits/1/tag   [target absent]  ->  200  application/json  68 bytes
+  GET /traits/2/tag   [target denied]  ->  404  text/plain         9 bytes
+  ```
+
+  `GET /traits/1` and `GET /traits/2` report `relationships.tag = {"data":null}`
+  byte-identical modulo the id, because
+  [#234](https://github.com/abofs/stonyx-orm/issues/234) closed that oracle
+  deliberately — so this route was the one remaining way to ask which of those
+  two nulls was a denial. Under `data: null` both requests answer `200`, same
+  content-type, same content-length, same bytes modulo the parent id the caller
+  put in the URL. It discloses nothing further: `links` on these routes are
+  derived entirely from the parent and the relationship name, there is no `meta`
+  and there are no counts. This also brings the two families back into line with
+  the module-wide rule under [Filter functions](#filter-functions) — *every
+  status on a record route must be identical for "filtered out" and "does not
+  exist"* — which the `404` spelling was an exception to.
+
+  **Per-record denies for a related resource are not expressible.** A predicate resolved for a
+  related resource on these routes receives `recordId: null` and a `request`
+  whose `params` name a record of a **different model**. So the inputs it has
+  are the model name, the operation and the request — and **a rule that needs to
+  know *which* related record it is being asked about cannot be written**.
+  Model-level denies (`return false` for a model) work. Request-level denies (a
+  rule reading a header, a tenant, the method) work. The per-record **filter**
+  shape works too — `access()` may return a function, and that function receives
+  the whole record, id included. What does not work is branching on the record's
+  identity *before* returning, because `access()` is not told it.
+
+  This is not an oversight and it is not closed here. The verdict is resolved
+  **once per type**, cached, before any record has been examined — a `hasMany`
+  related-resource route returns many records of one type, so seeding `recordId`
+  from a record would let the first one decide the context for all of them. The
+  rule the framework holds to is: **`recordId` may name a record only where the
+  route addresses exactly one record of the model being asked about.** That is
+  true for `GET /owners/{id}`, false for linkage, and false for a `hasMany`
+  related-resource route.
+
+- **`?include=` records are still not filtered — the relationship routes now
+  are.** *Re-specified by [#232](https://github.com/abofs/stonyx-orm/issues/232);
+  the sentence this replaces said all three surfaces were unfiltered, and two of
+  them no longer are.* `GET /animals/1/owner` and
+  `GET /animals/1/relationships/owner` resolve the related model's own access
+  class (see the bullet above). **`?include=owner` still does not**: it
+  serializes the related record without resolving that class, so a filter on
+  `/owners` does not hide an owner reached through `?include=` on `/animals`.
+  There are **two** open questions here and they are owned separately —
+  [#233](https://github.com/abofs/stonyx-orm/issues/233), the remaining child of
+  [#196](https://github.com/abofs/stonyx-orm/issues/196), owns whether a
+  resource enters `included` **at all** (membership), and
+  [#235](https://github.com/abofs/stonyx-orm/issues/235) owns the
+  `relationships.*.data` emitted **inside** a record that is already there
+  (linkage). Neither closes the other, and following only #233 will not lead you
+  to the second. Membership — whether the related resource is served at all — is
+  a different question from which ids a document may *name*, immediately
+  below.
 - **Relationship linkage is filtered on every request-bound surface that
   serializes a record — the reads, the two writes, and `included`.** A
   document's `relationships.*.data` used to publish the id of every related
@@ -973,6 +1107,15 @@ per-record filter. An input you cannot identify must **deny**.
   an unrelated change to their response shape. Nothing errors and no status changes,
   because throwing here would be an existence oracle *and* would throw out of
   the enclosing `JSON.stringify`.
+
+  **[#232](https://github.com/abofs/stonyx-orm/issues/232) holds to the same
+  spelling on the routes where that linkage is the *primary* data.** A denied
+  member is dropped from the `hasMany` array and a denied `belongsTo` target is
+  `data: null`, at `200`, `links` intact — so the claim above is true of both
+  `GET /:models/:id/{relationship}` shapes as *routes* and not only as linkage
+  emitted inside somebody else's document. An earlier revision of #232 answered
+  `404` on the `belongsTo` shape and did contradict this paragraph; that is
+  measured and closed in the #232 bullet above.
 
   **That resolves the right class; it does not guarantee a model-correct
   answer, and the failure direction is not the safe one.** Only a predicate that
@@ -1038,6 +1181,15 @@ per-record filter. An input you cannot identify must **deny**.
     measurement is where #245 starts, and it holds whichever way the decision
     lands. Until it lands, if your access rules hide a record, audit your
     computed properties for its identifiers.
+  - **The absence of `attributes.<fk>` on a `POST` response proves a hidden
+    record exists** — [#246](https://github.com/abofs/stonyx-orm/issues/246).
+    `createHandler` copies each supplied relationship's raw id into
+    `attributes`; when the related record resolves, the value is consumed and
+    does not appear, and when it does not resolve, it survives. The oracle runs
+    in the negative space, so nothing this list's surfaces withhold is
+    *published* — the **absence** is the signal. Pre-existing, and it does not
+    compose with the two relationship families above: they emit no `attributes`
+    for a related record at all.
 - **A bare `toJSON()` still emits unfiltered linkage, and that is deliberate.**
   `Record.toJSON()` **applies** a verdict; it never **resolves** one. It has no
   request, and the documented `access()` contract permits a predicate to read
@@ -1166,6 +1318,57 @@ default, the default is the unfiltered document, and a filtered relationship is
 byte-identical to a genuinely empty one — so nothing on the wire distinguishes
 "filtered" from "forgotten".
 
+**And `linkage` cannot reach a document you build by hand.** It is an *option to
+`toJSON()`*, so it filters only what goes through `toJSON()`. The ORM's own
+`GET /:models/:id/relationships/{relationship}` route is the worked example: its
+primary data *is* linkage, it assembles `{ type, id }` directly rather than
+serializing a record, and it therefore resolves and applies the verdict itself
+([#232](https://github.com/abofs/stonyx-orm/issues/232)). If you assemble
+linkage the same way anywhere — a custom relationship route, a projection, a
+hand-built document — **passing `linkage` to `toJSON()` does nothing for it and
+nothing warns**. Build the filter and consult it before you emit an id:
+
+```js
+const linkage = createLinkageFilter(request);
+
+if (related && linkage(related.__model.__name, related)) {
+  data = { type: related.__model.__name, id: related.id };
+} else {
+  data = null; // withheld and genuinely-empty must be the SAME answer
+}
+```
+
+The `else` branch is the part that is easy to get wrong. Answering `404`, `403`
+or an `errors` member for the withheld case makes the route an **existence
+oracle** — see [Filter functions](#filter-functions) for the rule and for the
+measurement that closed it on this route.
+
+**A per-record deny for a *related* resource cannot be expressed, and nothing
+tells you so at the point you would write it.** `createLinkageFilter` resolves
+the related model's access class by **type**: `context.recordId` is `null`, and
+`request.params` names a record of a **different model** — the one the route is
+addressed to. So `access()` is handed the model, the operation and the request,
+and **a rule that has to know *which* related record it is being asked about
+cannot be written**. Model-level denies (`return false` for a model) work.
+Request-level denies (a header, a tenant, the method) work. The per-record
+**filter** shape works too — `access()` may return a function, and that function
+receives the whole record, id included. What does not work is branching on the
+record's identity *before* returning, because `access()` is not told it.
+
+This is a fixed property of the mechanism rather than a defect awaiting a fix.
+The verdict is resolved **once per type** and cached before any record has been
+examined, so seeding `recordId` from a record would let the first member of a
+`hasMany` decide the context for all of them. The rule the framework holds to is
+**`recordId` may name a record only where the route addresses exactly one record
+of the model being asked about** — true for `GET /owners/{id}`, false for
+linkage, and false for a `hasMany` related-resource route. The consumer-facing
+consequence is the part to check: a predicate that branches on `recordId` sees
+`null` here and takes whichever branch `null` takes, with no warning, and if
+that branch grants then it **grants**. Express the rule as a returned filter
+function instead. Stated again, with the same label, under
+[Known limitations](#known-limitations)
+([#232](https://github.com/abofs/stonyx-orm/issues/232)).
+
 Do this:
 
 ```js
@@ -1283,10 +1486,31 @@ they are recorded here.
    return 404. Only affects function-style `access` users, for whom the old
    behaviour was the bypass.
 
-   "Seven surfaces" means the seven endpoints of **the filtered model**. A write
-   to another collection can still reach one of its records through a
-   relationship — [#207](https://github.com/abofs/stonyx-orm/issues/207), which
-   is **not** closed here.
+   "Seven surfaces" means the seven endpoints of **the filtered model** —
+   `GET /:models`, `GET /:models/:id`, `GET /:models/:id/{relationship}`,
+   `GET /:models/:id/relationships/{relationship}`, `POST /:models`,
+   `PATCH /:models/:id` and `DELETE /:models/:id`. That count is still seven and
+   is still the model's own endpoints, but **it is no longer the whole
+   population**: the boundary moved outward rather than the number changing, and
+   this sentence used to be read as saying a filtered model's predicate is
+   consulted nowhere else. It now is, in two further places, both from
+   *another* model's routes —
+
+   - on **both relationship route families**, where the related record is the
+     primary data and the filtered model's own class decides whether it is
+     served at all (breaking change 9 below,
+     [#232](https://github.com/abofs/stonyx-orm/issues/232)); and
+   - on the `relationships.*.data` **linkage** of every request-bound surface
+     that serializes a record through `toJSON()`
+     ([#234](https://github.com/abofs/stonyx-orm/issues/234),
+     [#235](https://github.com/abofs/stonyx-orm/issues/235)), which decides
+     which ids another model's document may name.
+
+   A **write** to another collection can still reach one of its records through
+   a relationship — [#207](https://github.com/abofs/stonyx-orm/issues/207),
+   which is **not** closed here. That is the half of the old sentence that
+   survives, and it is a read/write asymmetry now rather than a blanket
+   statement about cross-model reach.
 5. **A predicate that throws is treated as a denial** rather than propagating to
    Express's default 500 handler. So is an `access()` that throws.
 6. **`access()` returning a bare string is one permission, not full access.**
@@ -1360,6 +1584,54 @@ they are recorded here.
    fault rather than a request fault; the message is logged through
    `stonyx/log`. Previously this case threw out of the handler and express
    answered `500` with a stack trace.
+
+9. **Both relationship route families now resolve the *related* model's own
+   access class, so a related record that is hidden on its own routes is no
+   longer served through another model's.**
+   [#232](https://github.com/abofs/stonyx-orm/issues/232). Affects
+   function-style `access` users with relationships between filtered models. The
+   old behaviour was a bypass at **zero query parameters** and with no
+   `include=`: measured on `dev @ 8dda5d6`, `GET /animals/1/owner` returned
+   angela's full document and `GET /animals/1/relationships/owner` returned
+   `{"type":"owner","id":"angela"}`, while `GET /owners/angela` answered `404`.
+   The severe case is a model claimed by **no** access class — `getAccess()`
+   returns `undefined`, no route is mounted for it at all, and it was still
+   readable as a related resource.
+
+   **The shapes, on both families.** A denied `hasMany` member is **dropped from
+   the array**: `200`, `links` intact, no `errors` member. A denied `belongsTo`
+   target answers **`200` with `data: null`**, byte-identical to a target that
+   genuinely does not exist — same status, same bytes modulo the parent id the
+   caller put in the URL. `404` on these routes is now reserved for the
+   **parent**.
+
+   **`data: null` and not `404`, deliberately.** The 404 spelling was an
+   existence oracle and was measured as one on this branch: unauthenticated, no
+   query string, one request each, against `tag` — the model with no route
+   mounted at all — `GET /traits/1/tag` (absent) answered `200`
+   `application/json` at 68 bytes while `GET /traits/2/tag` (denied) answered
+   `404` `text/plain` at 9 bytes, and the document surface reported both as
+   `{"data":null}`. It also brings these two routes into line with this module's
+   rule that every status on a record route is identical for filtered-out and
+   does-not-exist (see [Filter functions](#filter-functions)), which the `404`
+   spelling was the one exception to.
+
+   **What to check before you upgrade.** If a consumer reaches a related record
+   through `GET /:models/:id/{relationship}` that it cannot reach on that
+   record's own collection route, it was relying on the bypass and will now get
+   `data: null` or a shorter array. And the related model's class is resolved
+   through the same `Orm.instance.getAccess` path as the linkage filter, so it
+   inherits the same arity limit: a **single-argument** predicate answers about
+   the collection the request was *addressed to*, not the one it was asked
+   about, and that is the direction that **grants**. See
+   [Known limitations](#known-limitations) and
+   [#221](https://github.com/abofs/stonyx-orm/issues/221).
+
+   **Not closed here:** whether a related resource appears in `included` at all
+   ([#233](https://github.com/abofs/stonyx-orm/issues/233)), and the
+   re-parenting write ([#207](https://github.com/abofs/stonyx-orm/issues/207)).
+   A **per-record** deny for a related resource is not expressible on these
+   routes at all — see [Consumer Contracts](#consumer-contracts).
 
 ### Include Parameter (Sideloading Relationships)
 
