@@ -245,8 +245,35 @@ module('[Unit] #235 write & included linkage — cross-file scope', function() {
       'project-structure.md no longer lists `included` and the write documents as unfiltered');
     assert.ok(/#235\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/235\) extended the filter/.test(structure),
       'it records that #235 extended the filter to them');
-    assert.ok(/`GET \/:id\/relationships\/\{rel\}` \*\*still publishes unfiltered linkage\*\*/.test(structure),
-      'and that the ONE route still open is still open — the correction did not overshoot into a clean bill of health');
+    // RE-SPECIFIED BY abofs/stonyx-orm#232 LANDING AS PR #247.
+    //
+    // What stood here:
+    //
+    //     assert.ok(/`GET \/:id\/relationships\/\{rel\}` \*\*still publishes
+    //       unfiltered linkage\*\*/.test(structure),
+    //       'and that the ONE route still open is still open — the correction
+    //        did not overshoot into a clean bill of health');
+    //
+    // It required a doc to say that a SIBLING PR's route is still broken. That
+    // is a claim on the sibling's territory, and it went red the moment #232
+    // did its job -- code-review.md § "A clean auto-merge in a shared file is
+    // not evidence of compatibility", rules 3 and 5.
+    //
+    // The guard's real subject is this file's own currency, and the thing that
+    // must not overshoot into a clean bill of health is the MECHANISM's limit,
+    // which #232 closing one route does not remove: the filter rides
+    // `toJSON()`, so a surface that builds its payload by hand is not reached
+    // by the `linkage` option and has to filter itself. That is WHY the route
+    // needed a separate change with a separate owner, and it is still the
+    // warning the next reader of this file needs -- the next hand-built
+    // surface inherits it.
+    //
+    // TAMPER TESTED: deleting the sentence; and replacing the whole limit with
+    // an unqualified "every surface is filtered", which reds both assertions.
+    assert.ok(/it is not a\n>\s+`toJSON\(\)` call site at all/.test(structure),
+      'and that the mechanism’s limit is still stated — a surface that does not call `toJSON()` is not reached by the option, whoever has since closed it');
+    assert.ok(/\*\*off it as of\n>\s+\[#232\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/232\)\*\*/.test(structure),
+      'and the one such surface is attributed to the owner that closed it, adjacently, rather than reported here as still open');
 
     const usage = await readRepoFile('../../docs/usage-patterns.md');
 

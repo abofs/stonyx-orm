@@ -5274,6 +5274,46 @@ module('[Integration] ORM', function(hooks) {
       const ginaPets = storeIds('owner', 'gina', 'pets');
       assert.ok(ginaPets.length > 1, `precondition: gina owns more than one animal (${ginaPets.join(', ')})`);
 
+      // RE-SPECIFIED BY abofs/stonyx-orm#240 FIXTURE 1, WHICH LANDS IN THE SAME
+      // SPRINT AS PR #247 AND CHANGES WHAT "PERMITTED" MEANS ON THIS FIXTURE.
+      //
+      // What stood here, with its measurement:
+      //
+      //     assert.deepEqual(
+      //       ownerPatched.body.data.relationships.pets.data
+      //         .map(entry => entry.id).sort((a, b) => a - b),
+      //       ginaPets,
+      //       'PATCH /owners/gina still names every permitted pet');
+      //
+      //   Measured on the rebase onto dev @ 013c80f: the write surface answered
+      //   [4, 8, 13, 24] against an expectation of [4, 8, 13, 18, 24].
+      //
+      // `ginaPets` is the raw STORE, and the comparison was sound only while
+      // gina's stored pets and gina's PERMITTED pets were the same list. #240
+      // fixture 1 makes animal 18 the first hidden child in this sample with a
+      // PERMITTED parent (test/sample/access/global-access.ts:255), so they are
+      // no longer the same list.
+      //
+      // AND THE OLD FORM WAS THE WRONG ASSERTION RATHER THAN MERELY A STALE
+      // ONE. Held against the store it demands that `PATCH /owners/gina`
+      // republish id 18 -- a hidden record's id on a write surface, which is
+      // the exact defect #235 closed. Re-specified onto the READ surface, this
+      // guard says what its name always meant: one HTTP verb does not disagree
+      // with another about the same record.
+      //
+      // MUTATION THAT KILLS IT is unchanged -- `() => false` in either write
+      // handler empties the write surface while the read surface keeps its
+      // members -- and the two preconditions below stop the comparison from
+      // being between two lists that a broken filter would empty together, or
+      // between two that never differed.
+      const ginaVisiblePets = gina.body.data.relationships.pets.data
+        .map(entry => entry.id)
+        .sort((a, b) => a - b);
+      assert.ok(ginaVisiblePets.length > 1,
+        `precondition: more than one of gina's pets is permitted (${ginaVisiblePets.join(', ')})`);
+      assert.ok(ginaPets.length > ginaVisiblePets.length,
+        `precondition: the store holds a pet NEITHER surface may name — #240 fixture 1's animal 18 (store: ${ginaPets.join(', ')})`);
+
       const ownerAge = gina.body.data.attributes.age;
       const ownerPatched = await sendJson('PATCH', '/owners/gina', {
         data: { type: 'owner', id: 'gina', attributes: { age: ownerAge } }
@@ -5282,8 +5322,8 @@ module('[Integration] ORM', function(hooks) {
       assert.strictEqual(ownerPatched.status, 200);
       assert.deepEqual(
         ownerPatched.body.data.relationships.pets.data.map(entry => entry.id).sort((a, b) => a - b),
-        ginaPets,
-        'PATCH /owners/gina still names every permitted pet');
+        ginaVisiblePets,
+        'PATCH /owners/gina names exactly the pets the read surface names — the permitted ones survive the write surface and the hidden one is not republished there either');
 
       let createdId;
 
@@ -5534,17 +5574,86 @@ module('[Integration] ORM', function(hooks) {
       // to re-specify. The assertion this replaced went RED there, 1007/4. So
       // the old one would have reddened a sibling's correct change and the new
       // one does not, while both catch the mutation this guard exists for.
-      const { status, body } = await getJson('/animals/1/relationships/owner');
+      // RE-SPECIFIED A SECOND TIME, BY abofs/stonyx-orm#232 LANDING AS PR #247,
+      // AND THE FIRST RE-SPECIFICATION'S OWN REASONING IS WHAT REQUIRES IT.
+      //
+      // What stood here, with its measurement:
+      //
+      //     assert.notOk(status === 200 && body.data === null,
+      //       'the relationships-linkage route does not answer with an EMPTIED
+      //        linkage — that shape is #235’s mechanism on #232’s route');
+      //
+      //   Measured when written: with #247's THEN-current change applied
+      //   (`if (!isLinkable(relatedData)) return 404;`) it stayed GREEN at
+      //   1008/3 against 1011/0, and the assertion it replaced went RED at
+      //   1007/4.
+      //
+      // WHY IT EXPIRED ANYWAY. It forbade `200 AND data === null` on the stated
+      // ground that "#232's mechanism is a MEMBERSHIP decision and does not
+      // produce that shape: it either refuses to serve the target (404) or
+      // leaves it published (200 with the id)". #247's fix round then changed
+      // #232's spelling to exactly that shape, because the 404 spelling was
+      // measured as an existence oracle -- unauthenticated, no query string, on
+      // `tag`, a model with no route mounted at all:
+      //
+      //     GET /traits/1/tag  [ABSENT]  -> 200  application/json  len 68
+      //     GET /traits/2/tag  [DENIED]  -> 404  text/plain        len  9
+      //
+      // while `GET /traits/1` and `GET /traits/2` report the same relationship
+      // as `{"data":null}` byte-identically, because #234 closed that oracle
+      // deliberately. So the forbidden shape is now #232's DELIBERATE answer,
+      // and forbidding it here is a claim on #232's answer -- the same mistake
+      // the FIRST re-specification was written to stop making, reached from the
+      // other direction. code-review.md § "A clean auto-merge in a shared file
+      // is not evidence of compatibility", rule 5: the second PR re-specifies
+      // rather than deletes, records the old assertion with its measurement,
+      // and pins the OWNERSHIP BOUNDARY rather than the state that legitimately
+      // changed.
+      //
+      // WHAT PINS THE BOUNDARY NOW, AND DOES NOT EXPIRE IN EITHER DIRECTION.
+      // #235's mechanism is `record.toJSON({ linkage })`. It acts on a
+      // DOCUMENT: it empties a relationship NESTED inside a resource and leaves
+      // that resource served, attributes and all. This route serves no
+      // document -- its top-level `data` IS the linkage, and there is no
+      // surrounding resource for that mechanism to have left behind. The two
+      // are therefore distinguishable by what they leave standing rather than
+      // by a status or a `data` value, and that stays true whatever #232
+      // chooses to answer. The SOURCE half of the same boundary -- that this
+      // route still builds `{type, id}` by hand and so cannot receive the
+      // `linkage` option at all -- is `[GUARD] #235 X2c` in
+      // test/unit/write-linkage-scope-test.ts, which is unchanged and green.
+      //
+      // MUTATION THAT KILLS IT: serialize this route's target through
+      // `record.toJSON({ linkage })` and return the resulting resource, which
+      // is how #235's mechanism would reach here -- the response gains
+      // `attributes` and the first assertion reds. Emptying the document
+      // surface's linkage without emptying the PATCH response's, or the
+      // reverse, reds the second pair.
+      // READ OFF A *PERMITTED* TARGET, DELIBERATELY. On `/animals/1` the owner
+      // is denied and `data` is `null`, so any "this is not a document" check
+      // there is satisfied by the null and could not fail -- the vacuous shape
+      // this suite has been bitten by before. `/animals/4`'s owner is gina, who
+      // is permitted, so the payload below is populated and the equality is
+      // load-bearing.
+      const { status, body } = await getJson('/animals/4/relationships/owner');
+      assert.strictEqual(status, 200, 'precondition: the relationships-linkage route answered');
+      assert.deepEqual(body.data, { type: 'owner', id: 'gina' },
+        'the relationships-linkage route serves LINKAGE and nothing else — a `toJSON({ linkage })` answer would carry `attributes` here, so #235’s document-shaped mechanism is not what produced it');
 
-      assert.notOk(status === 200 && body.data === null,
-        'the relationships-linkage route does not answer with an EMPTIED linkage — that shape is #235’s mechanism on #232’s route');
-
-      // Stated as an inequality against the surface this story DID close, so a
+      // Stated as an inequality against the surfaces this story DID close, so a
       // reader can see the boundary rather than infer it. This half is #235's
       // own territory and is unconditional.
       const document = await getJson('/animals/1');
       assert.strictEqual(document.body.data.relationships.owner.data, null,
         'while the document surface next door DOES empty it — the two are different questions, answered by different mechanisms');
+      assert.ok(document.body.data.attributes,
+        'and it empties the relationship while STILL SERVING the record, which is the signature of a linkage filter rather than a membership decision');
+
+      const patched = await sendJson('PATCH', '/animals/1', {
+        data: { type: 'animal', id: '1', attributes: { age: document.body.data.attributes.age } }
+      });
+      assert.strictEqual(patched.body.data.relationships.owner.data, null,
+        'and so does the PATCH response document — the third of #235’s own sites, on the same denied owner');
     });
 
     test('[DEFECT] #235 C1 — one linkage filter per handler invocation, one verdict per type', async function(assert) {
