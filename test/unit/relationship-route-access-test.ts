@@ -217,13 +217,36 @@ module('[Unit] relationship route access -- source pins (#232, #240)', function(
     //   one pass  -> '<!-- ' + LABEL + ' ... -->'   indexOf(LABEL) FINDS it
     //   fixed pt  -> ''                             indexOf(LABEL) is -1
     //
-    // The tampered document is a genuine HTML comment start to finish, so
-    // GitHub renders nothing and a consumer sees no disclosure. MEASURED OVER
-    // THE LIVE SUITE, with that wrap applied to README.md's copy of the
-    // disclosure: single-pass helper -> 1031 / 0, this test GREEN; fixed-point
-    // helper -> 1030 / 1, this test RED. That is exactly the tamper the block
-    // above claims to catch ("wrap it in an HTML comment -> also red"), so the
-    // claim was false for one spelling of the wrap and is true now.
+    // WHAT THE TAMPER DOES, AND WHAT IT DOES NOT DO. MEASURED OVER THE LIVE
+    // SUITE, with that wrap applied to README.md's copy of the disclosure:
+    // single-pass helper -> 1031 / 0, this test GREEN; fixed-point helper ->
+    // 1030 / 1, this test RED. So the single pass is defeatable AS A LEDGER
+    // GUARD -- a crafted nested wrap survives one pass and leaves the ledger
+    // green over a disclosure it is supposed to be pinning. That is exactly
+    // the tamper the block above claims to catch ("wrap it in an HTML comment
+    // -> also red"), so that claim was false for one spelling of the wrap and
+    // is true now. THE DEFEATABLE GUARD IS THE WHOLE JUSTIFICATION FOR THE
+    // FIXED POINT; there is no concealment claim underneath it.
+    //
+    // IT IS NOT SILENT CONCEALMENT, and that was measured too rather than
+    // assumed from the shape. The manufactured comment exists only in the
+    // SANITIZER'S OUTPUT, never in the source document, which is the wrong
+    // direction for hiding anything from a reader. `<!` followed by `<` starts
+    // neither a CommonMark comment nor a declaration, so a renderer escapes
+    // the `<!` to `&lt;!`, strips the inner `<!-- -->` as the real comment it
+    // is, and lays the remainder out as an ordinary paragraph. Rendering the
+    // exact tampered README (the full 114KB payload) through GitHub's own
+    // `POST /markdown` returns the disclosure FULLY VISIBLE, opening
+    // `<p>&lt;!-- <strong>Per-record denies ...</strong>`, at flush-left and
+    // at the README's 2-space indent alike; the control -- a genuine
+    // `<!-- LABEL ... -->` -- renders to `'\n'` and nothing more. The tamper
+    // defaces the README in public view; it does not hide it.
+    //
+    // NOT PROVEN, said rather than implied: exactly one spelling of the wrap
+    // was rendered. Nothing here rules out some other wrap that both survives
+    // a single pass AND is swallowed by the renderer -- a further reason to
+    // strip to a fixed point instead of reasoning about spellings one at a
+    // time.
     //
     // BEHAVIOUR-NEUTRAL ON THE REAL INPUTS, measured rather than assumed:
     // single-pass output === fixed-point output on both documents at this
