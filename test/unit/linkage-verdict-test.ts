@@ -800,8 +800,60 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     // survived at 17/0 before it was restored.
     assert.ok(/#232\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/232\) owns the\s+relationships-linkage route/.test(notYetCovered),
       '#232 is bound to the route it owns, adjacently — not merely linked somewhere nearby');
-    assert.ok(/#233\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/233\) owns whether a\s+related resource appears in `included`/.test(notYetCovered),
-      'and #233 is bound to what IT owns — membership in `included`, not linkage — adjacently');
+    // RE-SPECIFIED BY abofs/stonyx-orm#233, AND THE DIRECTION OF THE CLAIM IS
+    // INVERTED -- the same inversion, for the same reason, that #235 applied
+    // to its own two entries directly above.
+    //
+    // What it was, recorded rather than deleted:
+    //
+    //     assert.ok(/#233\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/233\)
+    //       owns whether a\s+related resource appears in `included`/
+    //       .test(notYetCovered),
+    //       'and #233 is bound to what IT owns — membership in `included`,
+    //        not linkage — adjacently');
+    //
+    //   It pinned #233 inside the **Not yet covered** list, where the README
+    //   said "a hidden record is still a **member** of that array" and that
+    //   `GET /animals/1?include=owner,owner.pets` "still includes the hidden
+    //   owner as a resource". Measured on dev @ c106cf9, that was true: nine
+    //   resources, the hidden owner plus her eight animals.
+    //
+    // WHY IT HAD TO GO. #233 has landed, so a README that lists it as deferred
+    // tells a reader their `?include=` still discloses records every other
+    // surface withholds -- the exact under-statement `#234 AC8` and `AC8c`
+    // were both re-specified to prevent. The entry has to move OUT of the
+    // exclusion list and be attributed as COVERED, which is what #235's own
+    // `notOk(/issues\/235/)` assertion above does for #235.
+    //
+    // WHAT IT PINS INSTEAD, AND THE ADJACENCY DISCIPLINE IS PRESERVED RATHER
+    // THAN DROPPED. The covered half of the bullet is sliced explicitly, so
+    // "#233 is cited in the covered part" cannot be satisfied by a citation in
+    // the exclusion list -- which is the shape of the bug this guard already
+    // recorded once (two independent presence checks that a link SWAP
+    // survived at 17/0). The same swap mutation is still caught in both
+    // directions: swap the #232 and #233 links and `notYetCovered` gains
+    // `issues/233` while `covered` loses the adjacent #233 claim, so BOTH
+    // assertions red.
+    //
+    // AND THE SUBSTANCE IS PINNED, NOT ONLY THE LINK. A bullet that cites #233
+    // as covered without saying WHAT is covered is the "naming the handlers is
+    // not a substitute for the measurement" failure this same test records
+    // against the write surfaces. The three claims below are the ones a
+    // consumer's behaviour depends on and that this README is the only
+    // findable place for.
+    const covered = bullet.slice(0, exclusionsStart);
+
+    assert.notOk(/issues\/233/.test(notYetCovered),
+      'and #233 no longer appears among the exclusions — it is closed, not deferred');
+    assert.ok(/#233\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/233\) owns whether a\s+related resource appears in `included` at all/.test(covered),
+      'and #233 is bound to what IT owns — membership in `included`, not linkage — adjacently, in the COVERED half of the bullet');
+
+    assert.ok(/subtree beneath it is never\s+traversed/.test(covered),
+      'the covered entry states the PRUNE, not merely the drop — a parent dropped after being descended through publishes its exact child set');
+    assert.ok(/no access class claims/.test(covered),
+      'and that an unclaimed model is denied on this path too');
+    assert.ok(/pruned\s+sideload is byte-identical to a genuinely empty one/.test(covered),
+      'and that denial is indistinguishable from absence, so `included` is not an existence oracle');
 
     // The write surfaces are named as COVERED, and the one thing an
     // implementer is most likely to get wrong about them is stated: the ask is

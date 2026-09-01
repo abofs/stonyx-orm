@@ -1117,6 +1117,27 @@ per-record filter. An input you cannot identify must **deny**.
   `404` on the `belongsTo` shape and did contradict this paragraph; that is
   measured and closed in the #232 bullet above.
 
+  **[#233](https://github.com/abofs/stonyx-orm/issues/233) owns whether a
+  related resource appears in `included` at all, and that question is now
+  answered too.** #235 filters what a record *already in* `included` may
+  **name**; #233 decides **membership**. They remain different questions
+  answered by different mechanisms and neither closes the other — a resource
+  can legitimately be a member while its own linkage is filtered. A related
+  resource is judged by **its own** model's access class at the traversal's
+  push site, so a record hidden on its own route is not a member, and **the
+  subtree beneath it is never traversed**: dropping a parent *after* descending
+  through it would publish that parent's exact child set. Measured on
+  `dev @ c106cf9`, `GET /animals/1?include=owner,owner.pets` returned nine
+  resources — the hidden owner plus her eight animals
+  `[1, 3, 7, 10, 11, 15, 17, 20]`, which *is* her `pets` array, reconstructed
+  for a caller who is `404` on the parent. It now returns no `included` array
+  at all. A model **no access class claims** (`getAccess()` → `undefined`) is
+  denied on this path too, so a collection the consumer never exposed is not
+  reachable as a sideloaded resource either. **Drop, never error:** a pruned
+  sideload is byte-identical to a genuinely empty one — same `200`, the same
+  top-level keys, no `included` member on either, no `errors` — so its absence
+  carries no signal about whether the record exists.
+
   **That resolves the right class; it does not guarantee a model-correct
   answer, and the failure direction is not the safe one.** Only a predicate that
   *reads* `context.model` can answer about the model it was asked about — see
@@ -1157,14 +1178,6 @@ per-record filter. An input you cannot identify must **deny**.
     [#247](https://github.com/abofs/stonyx-orm/pull/247) is in flight against
     this entry**; if it has landed, this route is covered and the bullet #247
     adds above supersedes this one.
-  - **Whether a related resource appears in `included` at all.**
-    [#233](https://github.com/abofs/stonyx-orm/issues/233) owns whether a
-    related resource appears in `included`. #235 filters what a record
-    *already in* `included` may **name**; a hidden record is still a
-    **member** of that array. The two are different questions and neither closes
-    the other: after #235, `GET /animals/1?include=owner,owner.pets` returns
-    `owner.data: null` on every permitted animal it sideloads **and still
-    includes the hidden owner as a resource**.
   - **A computed attribute that interpolates a related record's id.**
     [#245](https://github.com/abofs/stonyx-orm/issues/245) owns this channel,
     and **it is open as this is written**. `relationships.*.data` is a structure
