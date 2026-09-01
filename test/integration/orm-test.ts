@@ -1271,6 +1271,7 @@ module('[Integration] ORM', function(hooks) {
     const HIDDEN = 21;      // owned by `restricted` — filtered on every surface
     const VISIBLE = 7802;   // owned by gina — seeded by this module, destroyed by this module
     const NEVER_EXISTED = 7777;
+    const ARCHIVED_OWNER = 'archived'; // seeded by this module, destroyed by this module
     const COLLIDE = 7803;   // never created; used by the create-collision assertions
 
     // This module OWNS its subjects. An earlier revision used shared fixture
@@ -1285,12 +1286,49 @@ module('[Integration] ORM', function(hooks) {
       if (!store.get('animal', VISIBLE)) {
         createRecord('animal', { id: VISIBLE, type: 1, age: 5, size: 'small', owner: 'gina', traits: [] }, { serialize: false, _skipAutoPersist: true });
       }
+
+      // #227 fix round. THE /archived DENY HAD NO RECORD BEHIND IT. Every
+      // assertion on `GET /owners/archived` was measuring a 403 raised for a
+      // record that does not exist, so it could not tell a deny apart from an
+      // absence, and the claim that a context-only migration "turns this into a
+      // 200" was measured at 404 by the Test Coverage phase. With the record
+      // seeded the 403 is a real refusal of a real record, the deny-to-allow
+      // mutation really does produce a 200 carrying the record in full, and the
+      // DELETE assertion has something that can actually be destroyed.
+      //
+      // Module-owned, like VISIBLE above, and removed in `after` — no shared
+      // fixture is mutated and no owner count anywhere else in this file moves.
+      if (!store.get('owner', ARCHIVED_OWNER)) {
+        createRecord('owner', { id: ARCHIVED_OWNER, gender: 'secret', age: 99, pets: [], phoneNumbers: [] }, { serialize: false, _skipAutoPersist: true });
+      }
     });
 
     accessHooks.after(function() {
       for (const id of [VISIBLE, COLLIDE]) {
         if (store.get('animal', id)) store.remove('animal', id, { _skipAutoPersist: true });
       }
+
+      if (store.get('owner', ARCHIVED_OWNER)) store.remove('owner', ARCHIVED_OWNER, { _skipAutoPersist: true });
+    });
+
+    // Raw-socket dispatch through the real router. Hoisted to module scope by
+    // the #227 fix round: it was defined inside the variant-5 test, forty lines
+    // above the `/archived` assertions that also need it — `fetch()` cannot emit
+    // an absolute-form request-target, and the only absolute-form `/archived`
+    // coverage in the tree hand-supplies `request.path`, which is the exact
+    // field whose production value the surviving read depends on.
+    const rawRequest = (method, target, host = 'localhost') => new Promise((resolve, reject) => {
+      const socket = net.connect(config.restServer.port, '127.0.0.1', () => {
+        socket.write(`${method} ${target} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+      });
+      let buffer = '';
+      socket.setTimeout(5000, () => { socket.destroy(); reject(new Error('raw request timed out')); });
+      socket.on('data', chunk => { buffer += chunk; });
+      socket.on('end', () => resolve({
+        status: Number(buffer.split('\r\n')[0].split(' ')[1]),
+        body: buffer.split('\r\n\r\n').slice(1).join('\r\n\r\n'),
+      }));
+      socket.on('error', reject);
     });
 
     test('[DEFECT] the filter is live: hidden animals are absent from the collection but present in the store', async function(assert) {
@@ -1557,22 +1595,14 @@ module('[Integration] ORM', function(hooks) {
       // has to go over a raw socket, which is also the point: a consumer cannot
       // assume the request target is a path.
       //
-      // The matcher now reads `request.baseUrl`, which express sets from the
-      // pathname it matched, so the absolute form never reaches the comparison.
-      const { port } = config.restServer;
-      const rawRequest = (method, target, host = 'localhost') => new Promise((resolve, reject) => {
-        const socket = net.connect(port, '127.0.0.1', () => {
-          socket.write(`${method} ${target} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
-        });
-        let buffer = '';
-        socket.setTimeout(5000, () => { socket.destroy(); reject(new Error('raw request timed out')); });
-        socket.on('data', chunk => { buffer += chunk; });
-        socket.on('end', () => resolve({
-          status: Number(buffer.split('\r\n')[0].split(' ')[1]),
-          body: buffer.split('\r\n\r\n').slice(1).join('\r\n\r\n'),
-        }));
-        socket.on('error', reject);
-      });
+      // An intermediate revision then read `request.baseUrl`, which express sets
+      // from the pathname it matched, so the absolute form never reached the
+      // comparison. THAT IS ALSO HISTORY: the migrated sample reads neither, as
+      // the banner at the top of this test says — do not read this closing line
+      // as a description of what the matcher does today.
+      //
+      // `rawRequest` is defined at module scope, so the `/archived` assertions
+      // below can use it too.
 
       // Precondition: the raw socket reaches the same router the rest of this
       // module fetches from, and origin-form behaves as the fetch-based
@@ -1620,9 +1650,18 @@ module('[Integration] ORM', function(hooks) {
       // populates `request.path` the way the predicate assumes -- a fabricated
       // request is the harness fail-open variant 5 survived four review rounds
       // inside.
+      //
+      // AND THERE IS A REAL RECORD BEHIND THE DENY. Until the #227 fix round
+      // there was not: no fixture carried an owner with id `archived`, so every
+      // assertion here was a 403 raised on behalf of a record that does not
+      // exist, and the deny-to-allow mutation this test exists to catch was
+      // measured at 404 rather than 200. Seeded by this module's `before`.
+      assert.ok(store.get('owner', ARCHIVED_OWNER),
+        'precondition: the record the deny protects really does exist in the store');
+
       const archived = await fetch(`${endpoint}/owners/archived`);
       assert.equal(archived.status, 403,
-        'GET /owners/archived is 403 — the sub-path deny still fires (a context-only migration turns this into a 200)');
+        'GET /owners/archived is 403 — the sub-path deny still fires (a context-only migration turns this into a 200 carrying the record in full)');
 
       const nested = await fetch(`${endpoint}/owners/archived/2024`);
       assert.equal(nested.status, 403, 'and so is a path beneath it');
@@ -1631,11 +1670,63 @@ module('[Integration] ORM', function(hooks) {
       assert.equal(cased.status, 403,
         'and a case-varied sub-path cannot step around it — the router matched case-insensitively, so the rule must too');
 
+      // A DENIED DELETE MUST NOT DESTROY THE RECORD. Status alone is not
+      // sufficient evidence on a destructive verb.
+      const destroy = await fetch(`${endpoint}/owners/archived`, { method: 'DELETE' });
+
+      assert.equal(destroy.status, 403, 'DELETE /owners/archived is 403');
+      assert.ok(store.get('owner', ARCHIVED_OWNER), 'and the record survives the attempt');
+
+      // OVER A RAW SOCKET, IN ABSOLUTE FORM. `fetch()` always sends origin-form,
+      // and the only other absolute-form `/archived` coverage in the tree
+      // HAND-SUPPLIES `request.path` — which is the one field of argument one
+      // this predicate still reads, so a fabricated request is precisely the
+      // harness variant 5 survived four review rounds inside. This closes it at
+      // the tier that proves what express actually populates: measured on
+      // express 5.2.1, `req.path` is normalised out of the absolute form while
+      // `req.url` is not.
+      const absolute = await rawRequest('GET', `http://anything.example/owners/${ARCHIVED_OWNER}`);
+
+      assert.equal(absolute.status, 403,
+        'an absolute-form GET on /owners/archived is 403 too — express normalises request.path, which is what the deny reads');
+      assert.notOk(absolute.body.includes('"secret"'), 'and the response does not carry the record');
+
+      // ---------------------------------------------------------------------
+      // abofs/stonyx-orm#228 — A LIVE BYPASS, PINNED HERE, NOT FIXED HERE.
+      //
+      // Express sets `request.path` from the RAW, undecoded pathname while the
+      // router DECODES `:id`. So the predicate compares an undecoded string
+      // against a decoded dispatch and `%61rchived` walks straight past the
+      // deny. Pre-existing on `origin/dev`, out of scope for #222, filed as
+      // #228 (critical) with its own acceptance criteria — including the
+      // relationship route, the DELETE, and double-encoded spellings.
+      //
+      // THE ASSERTIONS BELOW RECORD THE DEFECT, THEY DO NOT ENDORSE IT. They
+      // are written to the MEASURED state so the suite stays honest, and they
+      // are the tripwire for #228: when #228 lands, these two red and must be
+      // inverted to 403 / not-present. Do not "repair" them by deleting them.
+      //
+      // No DELETE probe is run on the encoded form: the measured behaviour is
+      // 204 with the record destroyed, and #228 owns that assertion.
+      const encoded = await rawRequest('GET', '/owners/%61rchived');
+
+      assert.equal(encoded.status, 200,
+        'DEFECT #228: GET /owners/%61rchived is 200, NOT 403 — percent-encoding steps around the sub-path deny (invert this to 403 when #228 lands)');
+      assert.ok(encoded.body.includes('"secret"'),
+        'DEFECT #228: and it returns the protected record in full (invert this when #228 lands)');
+
+      // The negative control for the pair above: the canonical spelling of the
+      // same target, over the same socket, is still refused. Without it the two
+      // assertions are satisfiable by a router that 200s everything.
+      const canonical = await rawRequest('GET', '/owners/archived');
+
+      assert.equal(canonical.status, 403, 'while the canonical spelling over the same socket is still 403');
+
       // CONFIRM THE CHECK COULD FAIL. A 403 for every /owners request would
-      // satisfy the three above and mean nothing, so this pins that the same
-      // mount, one segment different, is NOT denied: it is authorised and then
-      // filtered per-record, which is a different mechanism with a different
-      // status.
+      // satisfy the assertions above and mean nothing, so this pins that the
+      // same mount, one segment different, is NOT denied: it is authorised and
+      // then filtered per-record, which is a different mechanism with a
+      // different status.
       const visible = await fetch(`${endpoint}/owners/gina`);
       const filtered = await fetch(`${endpoint}/owners/angela`);
 
