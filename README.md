@@ -864,7 +864,50 @@ per-record filter. An input you cannot identify must **deny**.
   related record without resolving that model's own access class, so a filter on
   `/owners` does not hide an owner reached through `/animals`. Tracked as
   [#196](https://github.com/abofs/stonyx-orm/issues/196), which covers
-  `include=`, related-resource routes and relationship-linkage routes.
+  `include=`, related-resource routes and relationship-linkage routes. This is
+  **membership** — whether the related resource is served at all — and it is a
+  different question from which ids a document may *name*, immediately below.
+- **Relationship linkage is filtered on the four request-bound read surfaces,
+  and only there.** A document's `relationships.*.data` used to publish the id
+  of every related record unconditionally, so a record hidden on every one of
+  its own surfaces was still named inside another model's document — with no
+  `include=`, no relationship route and no query string
+  ([#234](https://github.com/abofs/stonyx-orm/issues/234)). It is now filtered
+  through the related model's own access class on `GET /:models`,
+  `GET /:models/:id` and both `GET /:models/:id/{relationship}` shapes. A
+  filtered-out relationship is **indistinguishable from a genuinely empty one** —
+  an emptied `hasMany` is `data: []` and an emptied `belongsTo` is `data: null`,
+  both **keeping their `links`**, which are built from the serialized record's
+  own id and never from the related one. Nothing errors and no status changes,
+  because throwing here would be an existence oracle *and* would throw out of
+  the enclosing `JSON.stringify`. **Not yet covered:** `included`
+  ([#233](https://github.com/abofs/stonyx-orm/issues/233) owns whether a
+  resource appears there at all), the `POST`/`PATCH` response documents, and
+  `GET /:models/:id/relationships/{relationship}`, whose *primary data* is
+  linkage ([#196](https://github.com/abofs/stonyx-orm/issues/196)).
+- **A bare `toJSON()` still emits unfiltered linkage, and that is deliberate.**
+  `Record.toJSON()` **applies** a verdict; it never **resolves** one. It has no
+  request, and the documented `access()` contract permits a predicate to read
+  one — the sample in this README does, for its sub-path rule — so a filter
+  resolved inside `toJSON()` denies *permitted* records rather than hidden ones
+  (measured: 967 → 964, all three failures over-denials). `toJSON` is also the
+  `JSON.stringify` hook, so `JSON.stringify(record)`, `res.json(record)` and
+  `console.log(JSON.stringify(record))` reach it with a **string** in the
+  options slot and have no syntactic place to pass a verdict. The no-argument
+  call therefore returns the pre-#234 document unchanged. Fail-closed by default
+  is not available either: `Orm.instance.accessFunctions` is `{}` in any process
+  that never ran `setup-rest-server` — a CLI, an SQL-only process, a test — so
+  it would empty every relationship on every document in processes with no REST
+  surface to protect. Closing the residual means moving JSON:API serialization
+  **off** the `toJSON` name, tracked as
+  [#230](https://github.com/abofs/stonyx-orm/issues/230). If you hand a `Record`
+  to an untrusted consumer, serialize it through the REST layer or pass your own
+  resolved `linkage` option.
+- **`format()` and `serialize()` are deliberately not filtered, and must stay
+  that way.** `format()` is the **persistence** path — its output is what
+  `Orm.db.save()` writes to disk — so applying an access filter there would
+  write a truncated database. That is **data loss**, not disclosure prevention.
+  Neither method appears anywhere in the REST response path.
 - **A before-hook that returns a value short-circuits the request.** On write
   operations addressed to a record the filter is consulted first, so a hook
   cannot answer for a record the caller may not see. On reads it is not, so a

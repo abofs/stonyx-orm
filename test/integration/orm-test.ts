@@ -3330,4 +3330,456 @@ module('[Integration] ORM', function(hooks) {
       });
     });
   });
+
+  // ===========================================================================
+  // #234 -- RELATIONSHIP LINKAGE ACCESS
+  // ===========================================================================
+  //
+  // `Record.toJSON()` built `relationships.*.data` unconditionally, with no
+  // access parameter, so a record the filter hides on every one of its OWN
+  // surfaces was still named, by id, inside another model's document. Measured
+  // on origin/dev @ c5f7907:
+  //
+  //     GET /owners/angela  ->  404
+  //     GET /animals/1      ->  200, relationships.owner.data == {owner, angela}
+  //     GET /animals        ->  200, 8 of 20 records name angela, and that set
+  //                              is exactly angela.pets
+  //
+  // No `include=`, no relationship route, no query string at all. Every other
+  // surface in the #196 family requires the caller to ASK for the related
+  // resource; this one fires on the default request.
+  //
+  // ---------------------------------------------------------------------------
+  // SCOPE -- LINKAGE ONLY, ON THE FOUR REQUEST-BOUND READ SURFACES
+  // ---------------------------------------------------------------------------
+  // These assertions are about which IDS appear inside `relationships.*.data`.
+  // They say NOTHING about which resources appear in `included`, or about
+  // whether a related record is served at all -- that is MEMBERSHIP, and it
+  // belongs to abofs/stonyx-orm#233 and #196. A resource can legitimately
+  // appear while some document's linkage no longer names it.
+  //
+  // The four surfaces are the four `Record.toJSON()` call sites that already
+  // bind the request: `getCollectionHandler`, `getSingleHandler`, and the two
+  // related-resource route sites in `_generateRelationshipRoutes`.
+  //
+  // ---------------------------------------------------------------------------
+  // WHY THESE LIVE HERE AND NOT IN THEIR OWN FILE
+  // ---------------------------------------------------------------------------
+  // The outer module's `hooks.after` calls `RestServer.close()`, and the sample
+  // dataset is created by THIS file's nested `hooks.before` blocks. A separate
+  // integration file sorts after `orm-test.ts` and would fetch against a closed
+  // server; sorting it before would put its records in the store while the `Db`
+  // module asserts the saved file is empty. #190 and #202 reached the same
+  // conclusion and their live-router suites are nested here too.
+  //
+  // ---------------------------------------------------------------------------
+  // WHY TWO ASSERTIONS DRIVE THE REGISTRY INSTEAD OF THE FIXTURE
+  // ---------------------------------------------------------------------------
+  // AC1's hasMany half and AC4 cannot be made to FAIL against the shipped
+  // fixture, and asserted against it they are vacuously green:
+  //
+  //   - hasMany. A hidden animal is one owned by `restricted`, and `restricted`
+  //     is hidden himself, so no PERMITTED parent names a hidden child.
+  //     Measured: the hidden animal ids 21 and 22 appear in ZERO visible
+  //     owner's `pets` linkage. The `9999` in the issue body was a spliced
+  //     probe record, never a shipped one.
+  //   - AC4. All five sample models are claimed by `GlobalAccess`, so
+  //     `getAccess()` never returns `undefined` for anything in linkage range.
+  //
+  // Both gaps are closed by driving `Orm.instance.accessFunctions` -- the
+  // registry `getAccess()` reads, and the registry the documented cross-model
+  // path reads -- rather than by adding models and access classes to a fixture
+  // several other stories are editing this sprint.
+  //
+  // THE REQUEST IS STILL LIVE IN EVERY CASE. Nothing below hand-assembles one:
+  // every assertion goes over the express router through `fetch`, per the rule
+  // #202 adopted after variant 5 survived four review rounds inside a
+  // fabricating harness. Only the access REGISTRY is driven, and the registry
+  // is exactly the input a new unclaimed model or a tighter access class would
+  // change.
+  //
+  // It also buys a property a fixture could not: the mount loop passes `access`
+  // BY VALUE into each OrmRequest, so overriding a registry entry moves the
+  // LINKAGE answer without moving the mounted route's own filter. Two
+  // assertions below use that to prove linkage resolves through
+  // `Orm.instance.getAccess` -- the documented cross-model path -- and not
+  // through `state.filter`, which is always the ADDRESSED model's predicate and
+  // is not even distinguishable by identity
+  // (`getAccess('owner') === getAccess('animal')` is `true`).
+  //
+  // ASSERTION LABELS, as in test/unit/access-filter-enforcement-test.ts:
+  //   [DEFECT] -- observed FAILING against unfixed dev at c5f7907.
+  //   [GUARD]  -- passes on dev today; proves the fix did not overshoot.
+  //
+  module('Relationship Linkage Access (#234)', function(linkageHooks) {
+    // angela is hidden on every /owners surface and owns exactly these.
+    const ANGELA_PETS = [1, 3, 7, 10, 11, 15, 17, 20];
+
+    linkageHooks.before(function() {
+      // Idempotent, matching `JSON API Relationship Routes` above: earlier
+      // modules in this file have already created most of this, and a few of
+      // their own records besides. Nothing below assumes the collection
+      // contains ONLY the fixture -- every count is derived from the response
+      // or from the store, never hard-coded, so a record another module left
+      // behind cannot turn an assertion red or green by accident.
+      for (const category of serialized.categories) {
+        if (!store.get('category', category.id)) createRecord('category', category);
+      }
+      for (const owner of raw.owners) {
+        if (!store.get('owner', owner.name)) createRecord('owner', owner);
+      }
+      for (const animal of raw.animals) {
+        if (!store.get('animal', animal.id)) createRecord('animal', animal);
+      }
+    });
+
+    const getJson = async path => {
+      const response = await fetch(`${endpoint}${path}`);
+      const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
+
+      return { status: response.status, body };
+    };
+
+    /**
+     * Replace one registry entry for the duration of `fn`, then restore it.
+     *
+     * `Orm.instance.accessFunctions` holds ONE function object under several
+     * model keys (`accessFunctions.owner === accessFunctions.animal` against
+     * this fixture), so the replacement is written to a single KEY and every
+     * other model's resolution is untouched. `getAccess` reads the map live,
+     * which is why this reaches the linkage path at all.
+     */
+    const withAccess = async (model, replacement, fn) => {
+      const registry = Orm.instance.accessFunctions;
+      const had = Object.hasOwn(registry, model);
+      const original = registry[model];
+
+      if (replacement === undefined) delete registry[model];
+      else registry[model] = replacement;
+
+      try {
+        return await fn();
+      } finally {
+        if (had) registry[model] = original;
+        else delete registry[model];
+      }
+    };
+
+    /**
+     * Narrow a model's real predicate with an extra per-record rule, preserving
+     * every other branch of it. Anything that is not a per-record function -- a
+     * permission array, a bare `false` -- is passed through untouched, so this
+     * TIGHTENS the shipped fixture rather than replacing it, and an assertion
+     * cannot pass because the fixture was swapped for something permissive.
+     */
+    const narrow = (model, extra) => {
+      const original = Orm.instance.accessFunctions[model];
+
+      return function(request, context) {
+        const access = original.call(this, request, context);
+        if (typeof access !== 'function') return access;
+
+        return record => access(record) && extra(record);
+      };
+    };
+
+    test('[DEFECT] #234 AC1 — a hidden owner id is absent from a record document linkage', async function(assert) {
+      // The precondition, asserted rather than assumed: if angela ever stops
+      // being hidden every assertion in this module goes vacuously green, and
+      // this fixture has been blinded exactly that way before (#190).
+      const hidden = await getJson('/owners/angela');
+      assert.strictEqual(hidden.status, 404, 'precondition: GET /owners/angela is 404 — her existence is withheld');
+
+      // No query string. No `include=`. No relationship route.
+      const { status, body } = await getJson('/animals/1');
+
+      assert.strictEqual(status, 200, 'the animal itself is permitted and still served');
+      assert.notOk('included' in body, 'nothing was sideloaded — this is the bare document');
+      assert.strictEqual(body.data.relationships.owner.data, null,
+        'the hidden owner is not named (was: {type:"owner", id:"angela"})');
+
+      // A linkage id was dropped, not a document: everything else is intact.
+      assert.strictEqual(body.data.id, 1, 'the addressed record is unchanged');
+      assert.strictEqual(body.data.attributes.size, 'small', 'attributes are untouched');
+    });
+
+    test('[DEFECT] #234 AC1b — a hidden child id is absent from a permitted parent hasMany linkage', async function(assert) {
+      // Baseline first, so the assertion is a measured DELTA rather than a
+      // hard-coded pet list that an earlier module could have added to.
+      const before = await getJson('/owners/gina');
+      const petsBefore = before.body.data.relationships.pets.data.map(record => record.id);
+
+      assert.ok(petsBefore.includes(8), 'precondition: gina names animal 8 while it is permitted');
+
+      // Hide animal 8 in the REGISTRY -- the input `getAccess('animal')` reads
+      // -- leaving the mounted /animals route's own by-value filter alone.
+      await withAccess('animal', narrow('animal', record => record.id !== 8), async () => {
+        const { status, body } = await getJson('/owners/gina');
+        const pets = body.data.relationships.pets.data.map(record => record.id);
+
+        assert.strictEqual(status, 200, 'the permitted parent is still served');
+        assert.notOk(pets.includes(8), 'the hidden child is not named');
+        assert.deepEqual(pets, petsBefore.filter(id => id !== 8),
+          'and ONLY that child was dropped — every other pet is still named');
+
+        // Proves the linkage path consulted the ANIMAL model's predicate
+        // through `Orm.instance.getAccess`, not the owners route's
+        // `state.filter`: the mounted route still holds the boot-time snapshot,
+        // so /animals/8 is untouched by the override above.
+        const stillServed = await getJson('/animals/8');
+        assert.strictEqual(stillServed.status, 200,
+          'the mounted route is unaffected — the linkage answer came from the registry, cross-model');
+      });
+
+      const after = await getJson('/owners/gina');
+      assert.deepEqual(after.body.data.relationships.pets.data.map(record => record.id), petsBefore,
+        'and the override was restored');
+    });
+
+    test('[DEFECT] #234 AC1c — linkage inside a related-resource route document is filtered', async function(assert) {
+      // The two related-resource sites serve ANOTHER model's documents, and the
+      // linkage inside those documents was the least visible half of this
+      // defect.
+
+      // hasMany site: GET /owners/gina/pets emits animal documents, each naming
+      // its owner. Hide `gina` in the registry only.
+      const petsBefore = await getJson('/owners/gina/pets');
+      assert.ok(petsBefore.body.data.every(record => record.relationships.owner.data?.id === 'gina'),
+        'precondition: every pet document names gina while she is permitted');
+
+      await withAccess('owner', narrow('owner', record => record.id !== 'gina'), async () => {
+        const { status, body } = await getJson('/owners/gina/pets');
+
+        assert.strictEqual(status, 200, 'the addressed parent is still permitted by the mounted filter');
+        assert.strictEqual(body.data.length, petsBefore.body.data.length,
+          'the related records are all still SERVED — this story filters linkage, not membership');
+        assert.ok(body.data.every(record => record.relationships.owner.data === null),
+          'and none of them names the hidden owner');
+      });
+
+      // belongsTo site: GET /animals/4/owner emits gina's document, which names
+      // her pets. Hide animal 8 in the registry only.
+      const ownerBefore = await getJson('/animals/4/owner');
+      const ginaPets = ownerBefore.body.data.relationships.pets.data.map(record => record.id);
+      assert.ok(ginaPets.includes(8), 'precondition: the related owner document names animal 8');
+
+      await withAccess('animal', narrow('animal', record => record.id !== 8), async () => {
+        const { status, body } = await getJson('/animals/4/owner');
+
+        assert.strictEqual(status, 200, 'the related owner document is still served');
+        assert.deepEqual(body.data.relationships.pets.data.map(record => record.id), ginaPets.filter(id => id !== 8),
+          'the hidden child is not named on the related-resource route either');
+      });
+    });
+
+    test('[DEFECT] #234 AC2 — GET /animals names no owner that GET /owners/{id} 404s', async function(assert) {
+      const { status, body } = await getJson('/animals');
+
+      assert.strictEqual(status, 200);
+
+      // The general property. Every id this collection publishes must be an id
+      // the caller could have asked for directly.
+      const named = [...new Set(body.data.map(record => record.relationships.owner.data?.id).filter(id => id !== undefined))].sort();
+      assert.ok(named.length > 0, 'permitted owners are still named — this assertion is not vacuously green');
+
+      for (const id of named) {
+        const owner = await getJson(`/owners/${id}`);
+        assert.strictEqual(owner.status, 200, `every named owner is one GET /owners/${id} can reach`);
+      }
+
+      // And the specific one, because the leak was ATTRIBUTED and BULK: the 8
+      // records that named angela were exactly angela.pets.
+      assert.deepEqual(body.data.filter(record => record.relationships.owner.data?.id === 'angela').map(record => record.id), [],
+        'no record names angela (was: [1, 3, 7, 10, 11, 15, 17, 20] — angela.pets exactly)');
+
+      const emptied = body.data.filter(record => ANGELA_PETS.includes(record.id));
+      assert.strictEqual(emptied.length, ANGELA_PETS.length, 'precondition: all 8 of angela’s pets are in the collection');
+      assert.ok(emptied.every(record => record.relationships.owner.data === null),
+        'and each of them emitted an empty belongsTo rather than being dropped from the collection');
+    });
+
+    test('[GUARD] #234 AC3 — permitted linkage is still emitted on every surface', async function(assert) {
+      // The measured failure mode of the REJECTED design -- resolving the
+      // filter inside toJSON(), which has no request -- was not under-denial.
+      // It nulled gina along with angela and took orm-test.ts:953,
+      // orm-test.ts:841 and access-filter-enforcement-test.ts:1140 red
+      // (967 -> 964). This is the fourth copy of that tripwire, stated where an
+      // implementer of #232 or #233 will read it.
+      const single = await getJson('/animals/4');
+      assert.deepEqual(single.body.data.relationships.owner.data, { type: 'owner', id: 'gina' },
+        'GET /animals/4 still names gina');
+
+      const parent = await getJson('/owners/gina');
+      assert.ok(parent.body.data.relationships.pets.data.map(record => record.id).includes(4),
+        'GET /owners/gina still names her pets');
+
+      // A relationship whose model resolves to a PERMISSION ARRAY rather than a
+      // per-record function must be granted unconditionally: `trait` is claimed
+      // by GlobalAccess and falls through to ['read','create','update','delete'].
+      const withTraits = await getJson('/animals/1');
+      assert.deepEqual(withTraits.body.data.relationships.traits.data,
+        [{ type: 'trait', id: 1 }, { type: 'trait', id: 2 }],
+        'a permission-array model is still named in full, even on a record whose owner was dropped');
+
+      const collection = await getJson('/animals');
+      const permitted = collection.body.data.filter(record => !ANGELA_PETS.includes(record.id) && record.relationships.owner.data);
+      assert.ok(permitted.length > 0, 'the collection still names permitted owners');
+      assert.ok(permitted.every(record => ['gina', 'michael', 'bob'].includes(record.relationships.owner.data.id)),
+        'and every id it names belongs to a permitted owner');
+
+      const related = await getJson('/owners/gina/pets');
+      assert.ok(related.body.data.every(record => record.relationships.owner.data?.id === 'gina'),
+        'the related-resource route still names the permitted owner');
+    });
+
+    test('[DEFECT] #234 AC4 — a model with no resolvable access predicate never appears in linkage', async function(assert) {
+      // `undefined` from `getAccess` is NOT "this model is unrestricted". It
+      // covers both "no access class claims it" and "the class that claims it
+      // failed to LOAD" -- setup-rest-server catches a load failure, warns, and
+      // publishes the PARTIAL map -- and the caller cannot tell those apart. So
+      // the only safe reading is deny.
+      await withAccess('trait', undefined, async () => {
+        assert.strictEqual(Orm.instance.getAccess('trait'), undefined,
+          'precondition: no predicate resolves for this model');
+
+        const { status, body } = await getJson('/animals/1');
+
+        assert.strictEqual(status, 200, 'the request is not refused — only the linkage is dropped');
+        assert.deepEqual(body.data.relationships.traits.data, [],
+          'an unclaimed model is not named (was: [{trait,1},{trait,2}])');
+        assert.ok(body.data.relationships.traits.links,
+          'and the links survive — they are built from the SERIALIZED record id, never the related one');
+      });
+
+      // Restored, and observably so: a hole in the registry must not be sticky.
+      const after = await getJson('/animals/1');
+      assert.deepEqual(after.body.data.relationships.traits.data, [{ type: 'trait', id: 1 }, { type: 'trait', id: 2 }],
+        'the registry entry was restored');
+    });
+
+    test('[GUARD] #234 AC6 — a filtered relationship is indistinguishable from an empty one', async function(assert) {
+      // michael's `phone-numbers` is GENUINELY empty on this fixture, and
+      // nothing in this file creates one for him. It is the oracle-free
+      // reference shape, and it ALREADY SHIPS -- which is the whole reason
+      // "drop, never error" costs no new wire format and gives a client
+      // nothing to distinguish.
+      const michael = await getJson('/owners/michael');
+      const genuinelyEmpty = michael.body.data.relationships['phone-numbers'];
+
+      assert.deepEqual(genuinelyEmpty, {
+        data: [],
+        links: {
+          self: `${endpoint}/owners/michael/relationships/phone-numbers`,
+          related: `${endpoint}/owners/michael/phone-numbers`
+        }
+      }, 'reference shape: a genuinely-empty hasMany is `data: []` WITH links');
+
+      // A hasMany emptied entirely by the filter must match it key for key.
+      await withAccess('animal', narrow('animal', () => false), async () => {
+        const { status, body } = await getJson('/owners/michael');
+        const filteredEmpty = body.data.relationships.pets;
+
+        assert.strictEqual(status, 200, 'identical status');
+        assert.notOk('errors' in body, 'no `errors` member');
+        assert.deepEqual(Object.keys(filteredEmpty).sort(), Object.keys(genuinelyEmpty).sort(),
+          'no extra key distinguishes a filtered hasMany from an empty one');
+        assert.deepEqual(filteredEmpty, {
+          data: [],
+          links: {
+            self: `${endpoint}/owners/michael/relationships/pets`,
+            related: `${endpoint}/owners/michael/pets`
+          }
+        }, 'a filtered hasMany is byte-identical to the genuinely-empty shape');
+      });
+
+      // The belongsTo half. `data: null` WITH links already ships for a cleaned
+      // relationship (pinned by test/unit/record-tojson-cleaned-test.ts).
+      const animal = await getJson('/animals/1');
+      assert.strictEqual(animal.status, 200, 'identical status');
+      assert.notOk('errors' in animal.body, 'no `errors` member');
+      assert.deepEqual(animal.body.data.relationships.owner, {
+        data: null,
+        links: {
+          self: `${endpoint}/animals/1/relationships/owner`,
+          related: `${endpoint}/animals/1/owner`
+        }
+      }, 'a filtered belongsTo is `data: null` WITH links');
+
+      // Keeping the links is the load-bearing half. They are built from the
+      // SERIALIZED record's own id, never the related one, so they disclose
+      // nothing -- and stripping them for a filtered-empty relationship while
+      // keeping them for a genuinely-empty one would MANUFACTURE the oracle
+      // this change exists to close.
+      assert.notOk(JSON.stringify(animal.body.data.relationships.owner.links).includes('angela'),
+        'the surviving links name the serialized record, not the hidden one');
+    });
+
+    test('[GUARD] #234 AC7 — the verdict is cached per (type, id) and getAccess once per type', async function(assert) {
+      // `included` is deduplicated by buildResponse; LINKAGE is not deduplicated
+      // at all, so without a cache the module re-asks once per entry. Measured
+      // by the refiner on a bare GET /animals: 48 linkage entries, 7 distinct
+      // (type, id) pairs -- 6.9x.
+      const getAccessSpy = sinon.spy(Orm.instance, 'getAccess');
+
+      let predicateCalls = 0;   // consumer `access(request, context)` invocations
+      let recordCalls = 0;      // per-record filter invocations
+
+      const counting = model => {
+        const original = Orm.instance.accessFunctions[model];
+
+        return function(request, context) {
+          predicateCalls++;
+          const access = original.call(this, request, context);
+          if (typeof access !== 'function') return access;
+
+          return record => { recordCalls++; return access(record); };
+        };
+      };
+
+      try {
+        await withAccess('owner', counting('owner'), () =>
+          withAccess('trait', counting('trait'), async () => {
+            const { status, body } = await getJson('/animals');
+            assert.strictEqual(status, 200);
+
+            // Derived from the response and the store, never hard-coded: other
+            // modules in this file leave records behind, and a hard-coded 48
+            // would make this assertion a report on THEM.
+            const ownerEntries = body.data.filter(record => 'owner' in record.relationships).length;
+            const traitEntries = body.data.reduce((total, record) => total + (record.relationships.traits?.data.length ?? 0), 0);
+            const distinctOwners = new Set(
+              body.data.map(record => store.get('animal', record.id)?.owner?.id).filter(id => id !== undefined)
+            );
+
+            assert.ok(ownerEntries + traitEntries >= 48,
+              `precondition: at least the measured 48 linkage entries on the bare collection surface (saw ${ownerEntries + traitEntries})`);
+
+            assert.deepEqual([...new Set(getAccessSpy.getCalls().map(call => call.args[0]))].sort(), ['owner', 'trait'],
+              'getAccess was asked about exactly the two linked types');
+            assert.strictEqual(getAccessSpy.callCount, 2,
+              'and exactly once per TYPE — not once per linkage entry');
+            assert.strictEqual(predicateCalls, 2,
+              `the consumer predicate was invoked once per type (was: ${ownerEntries + traitEntries} without the per-type verdict cache)`);
+            assert.strictEqual(recordCalls, distinctOwners.size,
+              `the per-record filter ran once per DISTINCT (type, id) — ${distinctOwners.size} times for ${ownerEntries} owner entries`);
+            assert.ok(recordCalls < ownerEntries,
+              `and that is strictly fewer than one call per entry (${recordCalls} < ${ownerEntries})`);
+
+            // `trait` contributes ZERO per-record calls, and that is worth
+            // stating rather than leaving as an unexplained shortfall against
+            // the refinement's projected 7: GlobalAccess answers for `trait`
+            // with a permission ARRAY, which `interpretAccess` reads as an
+            // unconditional grant, so there is no per-record predicate to run.
+            // The per-TYPE verdict cache elides that case entirely, which is
+            // why the total lands BELOW the (type, id)-cache-only projection.
+            assert.strictEqual(
+              body.data.reduce((total, record) => total + (record.relationships.traits?.data.length ?? 0), 0),
+              traitEntries,
+              'every trait entry was still emitted despite zero per-record calls for that type');
+          }));
+      } finally {
+        getAccessSpy.restore();
+      }
+    });
+  });
 });
