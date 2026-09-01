@@ -1389,10 +1389,53 @@ export default class OrmRequest extends Request {
     // src/types/orm-types.ts. Nothing is fetched at this point and adding a
     // lookup here would put a store read in the middle of an authorization
     // path. The function return shape below IS the per-record hook.
+    //
+    // -------------------------------------------------------------------------
+    // #236 -- `recordId`, the DECODED route-parameter id, for the same reason.
+    //
+    // WHICH RECORD is the third structural fact the framework already holds and
+    // the consumer was left to re-derive, and re-deriving it failed OPEN. The
+    // documented sample compared `request.path` -- the RAW, undecoded pathname
+    // -- against a literal `/archived`, while the router DECODES `:id`. So
+    // `GET /owners/%61rchived` walked past the deny and was dispatched as the
+    // record `archived`: 200 with the record in full, and DELETE answered 204
+    // with the record destroyed, unauthenticated. Four spellings measured, all
+    // four through; 255 non-canonical spellings of that 8-character id decode
+    // to the same key, so this was never a deny-list of one.
+    //
+    // TWO CONSUMER-SIDE NORMALISATIONS WERE MEASURED WRONG IN OPPOSITE
+    // DIRECTIONS, which is the argument for doing it once, here.
+    // `.toLowerCase()` case-folds a route-parameter VALUE on the axis that
+    // governs literal SEGMENTS: with a distinct owner seeded at `ARCHIVED`,
+    // `GET /owners/ARCHIVED` was a false DENY on the wrong record and
+    // `GET /owners/%41RCHIVED` a false ALLOW on that same one.
+    // `decodeURIComponent(request.path)` decodes THEN splits while the router
+    // splits THEN decodes, so it over-denied `/owners/archived%2fx` -- 403 for
+    // a genuinely distinct record. Failing closed there was luck, not design.
+    //
+    // `getId(request.params)` AND NOT `request.params.id`, for exactly the
+    // reason `operation` is a `methodAccessMap` lookup: it is the SAME single
+    // coercion the store lookup one layer down performs, so the predicate and
+    // the dispatch cannot disagree about which record a request addresses.
+    // The raw string would reintroduce that divergence on hex-shaped ids --
+    // `GET /animals/0x2391` looks up record `9105`.
+    //
+    // NOTHING HERE PARSES THE REQUEST TARGET EITHER. `request.params` is what
+    // the router matched, so a mount prefix, an absolute-form target, a query
+    // string or a case-varied mount cannot move this value -- the same
+    // guarantee `model` carries, by the same means.
+    //
+    // `null` and not `undefined` on a collection route, so the KEY IS ALWAYS
+    // PRESENT -- the rule `operation`'s own docblock already establishes. A
+    // context reaching a predicate WITHOUT the key therefore did not come from
+    // here; it was hand-assembled by a caller resolving the predicate through
+    // `Orm.instance.getAccess()`, and that absence stays deniable only because
+    // `auth()` never produces it.
     // -------------------------------------------------------------------------
     const context: AccessContext = {
       model: this.model,
       operation: methodAccessMap[request.method],
+      recordId: request.params && 'id' in request.params ? getId(request.params) : null,
     };
 
     let access: AccessMethod;

@@ -2598,9 +2598,110 @@ module('[Integration] ORM', function(hooks) {
       assert.strictEqual(Orm.instance.getAccess('animal'), restore, 'the boot registry is left exactly as it was found');
     });
 
-    todo('#236 — `recordId` is the DECODED route-parameter id, over the live router', async function(assert) {
-      // SCAFFOLD. Full ACs: the refinement comment on #228, §8 "#228a".
-      assert.ok(false, 'SCAFFOLD — not implemented');
+    test('#236 — `recordId` is the DECODED route-parameter id express matched, over the live router', async function(assert) {
+      // THE TIER THAT CAN ACTUALLY PROVE IT. The unit half
+      // (test/unit/access-context-test.ts) pins what `auth()` does to a
+      // `params` object it is handed. The claim this story is FOR — that what
+      // express puts in `params` is the DECODED id, while `request.path` is
+      // still the raw one — is only knowable from the real router, and a
+      // fabricated request is the harness fail-open variant 5 survived four
+      // review rounds inside.
+      //
+      // Raw socket, not `fetch()`: `fetch` percent-normalises the target and
+      // cannot emit an absolute-form request-target at all, so the two shapes
+      // this assertion most needs are unreachable through it.
+      const contextFor = async (method, target) => {
+        const from = observed.length;
+        const response = await rawRequest(method, target);
+        const seen = observed.slice(from);
+
+        assert.equal(seen.length, 1, `INPUT ${method} ${target} -> ${response.status}: the predicate was consulted exactly once`);
+
+        return { context: seen[0].context, request: seen[0].request, response };
+      };
+
+      // ASSERTION 2 — the decoded id, and the raw path beside it. Printing both
+      // in one assertion is the whole finding: they DISAGREE, and every
+      // consumer that read the left-hand one failed open.
+      const encoded = await contextFor('GET', `/${CTX_MOUNT}/%61rchived`);
+
+      assert.strictEqual(encoded.context.recordId, 'archived',
+        'INPUT GET /ctx-animals/%61rchived: recordId is the DECODED `archived` — the same string the store lookup is about to use');
+      assert.strictEqual(encoded.request.path, '/%61rchived',
+        'while request.path on that same request is still the RAW `/%61rchived` — the disagreement this key exists to end');
+
+      // Not a deny-list of one spelling: three more of the 255, each encoding a
+      // different character, and a fully-encoded one.
+      for (const target of [`/${CTX_MOUNT}/a%72chived`, `/${CTX_MOUNT}/archive%64`, `/${CTX_MOUNT}/%61%72%63%68%69%76%65%64`]) {
+        const { context } = await contextFor('GET', target);
+
+        assert.strictEqual(context.recordId, 'archived', `INPUT GET ${target}: recordId is the decoded \`archived\` too — the comparison is on the decoded value, not on a spelling`);
+      }
+
+      // AND EXACTLY ONE DECODE. Express decodes a route parameter once, which
+      // is what a route parameter means. `%2561rchived` is the LEGITIMATE id
+      // `%61rchived`; a framework that decoded until stable would report
+      // `archived` here and hand every consumer a false deny.
+      const doubled = await contextFor('GET', `/${CTX_MOUNT}/%2561rchived`);
+
+      assert.strictEqual(doubled.context.recordId, '%61rchived',
+        'INPUT GET /ctx-animals/%2561rchived: recordId is the literal `%61rchived`, NOT `archived` — one decode, not a loop');
+
+      // ASSERTION 3 — the collection route addresses no record, and says so
+      // with a PRESENT key. `undefined` would be indistinguishable from a
+      // context that never came from auth() at all.
+      const collection = await contextFor('GET', `/${CTX_MOUNT}`);
+
+      assert.true('recordId' in collection.context, 'INPUT GET /ctx-animals: the recordId key is present on a collection route');
+      assert.strictEqual(collection.context.recordId, null, 'and its value is null — addressed to no record');
+
+      // ASSERTION 4 — byte-identical to `getId(request.params)`, the coercion
+      // the dispatch itself uses. On a hex-shaped id the raw string and the
+      // lookup key name two DIFFERENT records, so this is the assertion that
+      // pins predicate and dispatch to one answer.
+      const hex = await contextFor('GET', `/${CTX_MOUNT}/0x2391`);
+
+      assert.strictEqual(hex.context.recordId, 9105,
+        'INPUT GET /ctx-animals/0x2391: recordId is 9105, the key the store lookup resolves — not the raw string');
+      assert.strictEqual(hex.request.params.id, '0x2391',
+        'confirming that could fail: express matched the raw `0x2391`, so the coercion is the framework\'s, not the router\'s');
+
+      // The record surfaces all name the same record. This key answers WHICH
+      // RECORD, not which surface — the related-resource gap is #196 and is
+      // untouched.
+      for (const target of [`/${CTX_MOUNT}/%61rchived/owner`, `/${CTX_MOUNT}/%61rchived/relationships/owner`]) {
+        const { context } = await contextFor('GET', target);
+
+        assert.strictEqual(context.recordId, 'archived', `INPUT GET ${target}: the relationship surfaces carry the same decoded recordId`);
+      }
+
+      // ASSERTION 5 — NEGATIVE CONTROL: recordId is never parsed out of the
+      // request target. A mount prefix (variant 4), an absolute-form target
+      // (variant 5), a case-varied mount (variant 3) and a query string
+      // (variant 2) are the four shapes that broke every URL-derived matcher.
+      // None of them is an input here, so none of them moves the answer.
+      const invariant = [];
+
+      for (const [method, target] of [
+        ['GET', `/${CTX_MOUNT}/%61rchived?filter[age]=30`],
+        ['GET', `/${CTX_PREFIXED_MOUNT}/%61rchived`],
+        ['GET', `/${CTX_MOUNT.toUpperCase()}/%61rchived`],
+        ['GET', `http://anything.example/${CTX_MOUNT}/%61rchived`],
+        ['DELETE', `/${CTX_MOUNT}/%61rchived`],
+      ]) {
+        const { context } = await contextFor(method, target);
+        invariant.push(context.recordId);
+      }
+
+      assert.deepEqual(invariant, ['archived', 'archived', 'archived', 'archived', 'archived'],
+        'a query string, an ORM_REST_ROUTE-shaped mount prefix, a case-varied mount, an absolute-form target and a destructive verb all give ONE answer');
+
+      // CONFIRM THE WHOLE TEST COULD FAIL: a different record on the same mount
+      // reports a different id, so none of the above is satisfiable by a
+      // constant.
+      const other = await contextFor('GET', `/${CTX_MOUNT}/${CTX_VISIBLE}`);
+
+      assert.strictEqual(other.context.recordId, CTX_VISIBLE, `INPUT GET /ctx-animals/${CTX_VISIBLE}: a different record reports a different recordId`);
     });
   });
   });

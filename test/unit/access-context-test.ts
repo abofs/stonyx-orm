@@ -56,7 +56,7 @@ module('[Unit] access() context argument (#202)', function(hooks) {
   // test/unit/access-filter-enforcement-test.ts:190.
   setupIntegrationTests(hooks);
 
-  test('AC4 — the auth-time context carries no `record` key, and no key beyond model and operation', function(assert) {
+  test('AC4 — the auth-time context carries no `record` key, and no key beyond model, operation and recordId', function(assert) {
     // An earlier draft of the issue proposed `{ model, operation, record }` and
     // it was refuted: @stonyx/rest-server `src/request.ts:58-60` runs `auth()`
     // after route matching but BEFORE any handler, so nothing has been fetched.
@@ -89,8 +89,13 @@ module('[Unit] access() context argument (#202)', function(hooks) {
     assert.equal(seen.length, 4, 'the predicate was called once per operation');
 
     for (const context of seen) {
-      assert.deepEqual(Object.keys(context).sort(), ['model', 'operation'],
-        'the context carries exactly `model` and `operation`');
+      // #236 CONTRACT UPDATE, NOT A LOOSENING. This pin was `['model',
+      // 'operation']` and it went red when `recordId` landed — correctly: it is
+      // the assertion that makes an additive context key a deliberate change
+      // rather than a silent one. It stays an EXACT set, so a fourth key is
+      // still a red.
+      assert.deepEqual(Object.keys(context).sort(), ['model', 'operation', 'recordId'],
+        'the context carries exactly `model`, `operation` and `recordId`');
       assert.notOk('record' in context,
         'and NO `record` key — auth() runs before anything is fetched, so a record could only come from a new pre-fetch');
       assert.strictEqual(context.record, undefined, 'nor a record under any other reading');
@@ -102,10 +107,79 @@ module('[Unit] access() context argument (#202)', function(hooks) {
       'with `model` fixed at mount time on every one of them');
   });
 
-  todo('AC1 (#236) — the auth-time context carries exactly `model`, `operation` and `recordId`', function(assert) {
-    // SCAFFOLD. Replaces the two-key pin in AC4 above; see the refinement
-    // comment on #228, §8 "#228a" assertion 1.
-    assert.ok(false, 'SCAFFOLD — not implemented');
+  test('AC1/AC3/AC4 (#236) — `recordId` is `getId(request.params)`, always present, and is neither decoded again nor case-folded', function(assert) {
+    // THE UNIT HALF, AND ONLY THE HALF THAT IS HONESTLY UNIT-TIER. The claim
+    // here is about the context object's OWN construction from a `params`
+    // object: which key it puts the id under, what it does to the VALUE, and
+    // what it does when there is no id. What express actually populates
+    // `params` with — the whole point of the story — is not knowable from a
+    // fabricated request and is asserted over a raw socket against the live
+    // router in test/integration/orm-test.ts. A unit assertion that hand-built
+    // `params` and called that proof would be the harness variant 5 survived
+    // four review rounds inside.
+    const seen = [];
+    const ormRequest = new OrmRequest({
+      model: 'animal',
+      access: (request, context) => {
+        seen.push(context);
+
+        return true;
+      },
+    });
+
+    const contextFor = request => {
+      seen.length = 0;
+      ormRequest.auth(request, {});
+
+      return seen[0];
+    };
+
+    // AC3 — THE KEY IS ALWAYS PRESENT, AND ABSENCE OF A RECORD IS `null`.
+    // `undefined` would make "this route addresses no record" indistinguishable
+    // from "this context did not come from auth()", and the second is the only
+    // one a predicate may safely refuse on. Same rule `operation` states.
+    const collection = contextFor({ method: 'GET' });
+
+    assert.true('recordId' in collection, 'the key is present on a collection route, so its absence stays a distinguishable signal');
+    assert.strictEqual(collection.recordId, null, 'and its value is null — addressed to no record');
+    assert.strictEqual(contextFor({ method: 'GET', params: {} }).recordId, null,
+      'an empty params object is the same answer: null, not undefined and not the empty string');
+
+    // AC4 — IT IS `getId(request.params)`, THE COERCION THE STORE LOOKUP USES.
+    // Not `request.params.id`. `getId` runs `parseInt` behind an `isNaN` gate,
+    // so `GET /animals/0x2391` is dispatched against record 9105 — and a
+    // predicate handed the raw string `'0x2391'` would be answering about a
+    // record the dispatch is not touching. `operation` is a `methodAccessMap`
+    // lookup for exactly this reason; `recordId` is the same discipline.
+    const hex = contextFor({ method: 'GET', params: { id: '0x2391' } });
+
+    assert.strictEqual(hex.recordId, 9105, 'a hex-shaped id is coerced the way the store lookup coerces it (9105), not passed through raw');
+    assert.notStrictEqual(hex.recordId, '0x2391', 'confirming this could fail: the raw string is NOT what the predicate is handed');
+    assert.strictEqual(contextFor({ method: 'GET', params: { id: '7802' } }).recordId, 7802,
+      'and a numeric-looking id arrives as the number it is filed under');
+    assert.strictEqual(contextFor({ method: 'GET', params: { id: 'gina' } }).recordId, 'gina',
+      'while a non-numeric id is left exactly as the router matched it');
+
+    // AC1 — AND NOTHING ELSE IS DONE TO IT. Express decodes a route parameter
+    // exactly ONCE; decoding again would deny the legitimate id `%61rchived`,
+    // and case-folding would deny a distinct record spelled `ARCHIVED` while
+    // still admitting `%41RCHIVED`. Both were measured wrong, in opposite
+    // directions, which is why the framework does one decode and stops.
+    assert.strictEqual(contextFor({ method: 'GET', params: { id: '%61rchived' } }).recordId, '%61rchived',
+      'a literal `%61rchived` id is NOT decoded a second time (a loop-until-stable fix would report `archived` and deny a record it was never asked about)');
+    assert.strictEqual(contextFor({ method: 'GET', params: { id: 'ARCHIVED' } }).recordId, 'ARCHIVED',
+      'and it is not case-folded — a record id is a value, not a literal route segment');
+    assert.strictEqual(contextFor({ method: 'GET', params: { id: 'archived/x' } }).recordId, 'archived/x',
+      'and an id carrying a decoded separator stays one id, because the router split before it decoded');
+
+    // AND IT IS NOT DERIVED FROM THE REQUEST TARGET. Same params, every URL
+    // shape the five fail-open variants were built from: the answer does not
+    // move, because none of these is an input.
+    const answers = new Set(['/owners/%61rchived', 'http://anything.example/OWNERS/archived?x=1', '/api/owners/archived', undefined].map(
+      path => contextFor({ method: 'GET', path, originalUrl: path, baseUrl: '/api', params: { id: 'archived' } }).recordId));
+
+    assert.deepEqual([...answers], ['archived'],
+      'a mount prefix, a case-varied mount, a query string, an absolute-form target and an ABSENT path all give one answer — recordId is never parsed out of the request target');
   });
 
   test('AC6 — src/orm-request.ts documents the second argument, its keys and the four-verb vocabulary', async function(assert) {

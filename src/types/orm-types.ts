@@ -252,6 +252,62 @@ export interface AccessContext {
    * from one that classified the request and found nothing.
    */
   operation: AccessOperation | undefined;
+
+  /**
+   * The record this route was addressed to, as the store key -- or `null` on a
+   * collection route, which is addressed to no record (abofs/stonyx-orm#236).
+   *
+   * IT IS ALREADY DECODED, AND THAT IS THE WHOLE POINT. Express decodes route
+   * PARAMETERS while leaving `request.path` raw, so a consumer comparing
+   * `request.path` against a literal compares an undecoded string against a
+   * decoded dispatch. `GET /owners/%61rchived` reached such a comparison as
+   * `/%61rchived`, walked past a `/archived` deny, and was dispatched as the
+   * record `archived` -- 200 with the record in full, and `DELETE` destroyed
+   * it, unauthenticated. 255 non-canonical spellings of an 8-character id
+   * decode to the same key, so a deny-list of spellings is the wrong shape.
+   *
+   * SO DO NOT NORMALISE THIS, AND DO NOT NORMALISE ANYTHING ELSE INSTEAD:
+   *
+   * - Do NOT decode it. Express decodes exactly ONCE, which is what a route
+   *   parameter means. `GET /owners/%2561rchived` is the legitimate id
+   *   `%61rchived`, not a second-order spelling of `archived`; a predicate that
+   *   decoded until stable would deny a record it was never asked about.
+   * - Do NOT case-fold it. A record id is a VALUE, not a literal route segment,
+   *   and express's `case sensitive routing` governs literal segments only.
+   *   With a distinct owner seeded at `ARCHIVED`, `.toLowerCase()` was measured
+   *   wrong in BOTH directions at once: `GET /owners/ARCHIVED` 403 (a false
+   *   deny, on the wrong record) and `GET /owners/%41RCHIVED` 200 (a false
+   *   allow, on that same record).
+   * - Do NOT derive it from `request.path` or the request target. Decoding the
+   *   whole path decodes THEN splits, while the router splits THEN decodes, so
+   *   `/owners/archived%2fx` -- a genuinely distinct record whose id is
+   *   `archived/x` -- was measured over-denied 403.
+   *
+   * IT IS `getId(request.params)`, BYTE FOR BYTE -- the same single coercion
+   * the store lookup uses, exactly as `operation` is the same `methodAccessMap`
+   * lookup the permission-array branch uses. The predicate and the dispatch
+   * therefore cannot disagree about which record a request addresses. Handing
+   * over the raw `request.params.id` instead would reintroduce that divergence
+   * on hex-shaped ids: `GET /animals/0x2391` looks up record `9105`.
+   *
+   * It inherits abofs/stonyx-orm#209 along with that coercion -- on a model
+   * declaring `id = attr('string')`, `'9107'` arrives here as the number
+   * `9107`. That is consistency WITH THE LOOKUP, which is the property this key
+   * exists to buy; it is not a defect to repair here.
+   *
+   * `null`, not `undefined`, on a collection route -- and the KEY IS ALWAYS
+   * PRESENT, the same rule `operation` states above. `auth()` always sets it,
+   * so a context arriving WITHOUT the key did not come from `auth()`: it was
+   * hand-assembled by a caller resolving the predicate through
+   * `Orm.instance.getAccess()`. That absence stays a distinguishable, deniable
+   * signal only because the framework never produces it.
+   *
+   * IT NAMES WHICH RECORD, NOT WHICH SURFACE. `GET /owners/gina`,
+   * `GET /owners/gina/pets` and `GET /owners/gina/relationships/pets` all
+   * carry `recordId: 'gina'`; the related-resource gap is abofs/stonyx-orm#196
+   * and is untouched by this key.
+   */
+  recordId: string | number | null;
 }
 
 /**
