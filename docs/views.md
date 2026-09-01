@@ -196,11 +196,7 @@ When a view is included in an access configuration, only GET endpoints are mount
 
 - `GET /view-plural-name` — Returns list of view records
 - `GET /view-plural-name/:id` — Returns single view record
-- `GET /view-plural-name/:id/{relationship}` — Related resources. Like the
-  model route of the same shape, the related record is filtered by its **own**
-  model's access predicate; a denied `belongsTo` target answers `200` with
-  `data: null` and a denied `hasMany` member is dropped from the array
-  ([#232](https://github.com/abofs/stonyx-orm/issues/232))
+- `GET /view-plural-name/:id/{relationship}` — Related resources
 - No POST, PATCH, DELETE endpoints
 
 ## JSON Mode (In-Memory Resolver)

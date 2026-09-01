@@ -27,16 +27,6 @@ import { count, avg, sum, min, max } from './aggregates.js';
 export { default } from './main.js';
 export { store, relationships } from './main.js';
 export type { PersistErrorDetail } from './main.js';
-export type { AccessContext, AccessFunction, AccessMethod, AccessOperation } from './types/orm-types.js'; // access() contract (#202)
-export type { LinkageFilter } from './types/orm-types.js'; // linkage verdict contract (#234)
-// The request-scoped linkage-verdict factory (#234). PUBLIC on purpose: the
-// README tells a consumer serializing a `Record` outside the REST layer to pass
-// their own resolved `linkage` option, and without an exported factory the only
-// way to follow that advice is to write a SECOND reading of `access()` in
-// consumer code -- the exact "unreviewed second authorization vocabulary" that
-// src/access-verdict.ts exists to prevent, reproduced where no reviewer sees it
-// drift. Give them the one interpreter instead of an invitation to fork it.
-export { createLinkageFilter } from './access-verdict.js';
 export { Model, View, Serializer }; // base classes
 export { attr, belongsTo, hasMany, createRecord, updateRecord }; // helpers
 export { count, avg, sum, min, max }; // aggregate helpers

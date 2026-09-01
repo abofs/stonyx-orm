@@ -25,7 +25,6 @@ import baseTransforms from './transforms.js';
 import Store from './store.js';
 import Serializer from './serializer.js';
 import { setup } from '@stonyx/events';
-import type { AccessFunction } from './types/orm-types.js';
 
 interface OrmOptions {
   dbType?: string;
@@ -69,53 +68,6 @@ export default class Orm {
   views: Record<string, unknown> = {};
   transforms: Record<string, (value: unknown) => unknown> = { ...baseTransforms };
   warnings: Set<string> = new Set();
-
-  /**
-   * Model name -> the `access` predicate of the access class that CLAIMS that
-   * model (abofs/stonyx-orm#202).
-   *
-   * Not "that model's own predicate". One access class may claim many models
-   * -- `GlobalAccess` in this repo's fixtures declares five, and `models = '*'`
-   * claims every model in the store -- and it declares ONE `access` method, so
-   * the same function object is registered under every one of those keys.
-   * `getAccess('owner') === getAccess('animal')` is `true` there. The
-   * one-to-one guarantee below is key -> function, never function -> model,
-   * and a caller must not read a resolved predicate as being animal-specific.
-   * What makes the ANSWER model-specific is the context the caller passes and
-   * the predicate actually reading it -- see {@link Orm#getAccess}.
-   *
-   * NAMED FOR WHAT IT HOLDS. It was `accessFiles` through review, inherited
-   * from the function-local in `setup-rest-server.ts` where the values came
-   * straight out of `forEachFileImport` and "files" was defensible. The values
-   * are `AccessFunction`s, and the sibling public registries on this class
-   * (`models`, `serializers`, `views`, `transforms`) are all plural nouns of
-   * the thing held. Renamed here because #202 is the last moment it is free.
-   *
-   * Populated by `setup-rest-server.ts` at boot, from the access classes under
-   * `config.orm.paths.access`, BEFORE any route is mounted -- so it is complete
-   * and reachable before the first request can be served. The mapping is
-   * one-to-one by construction: setup-rest-server throws if two access classes
-   * claim the same model.
-   *
-   * Keys are model names as declared and stored (kebab-case, e.g.
-   * `'phone-number'`), NOT pluralised or mount-prefixed route names.
-   *
-   * WHY THIS EXISTS AS A FIELD. It used to be a function-local in
-   * setup-rest-server that was discarded when that function returned, so at
-   * request time there was no way to get from a model name to that model's
-   * predicate at all. Each `OrmRequest` held only its OWN model's predicate.
-   * That made cross-model authorization -- asking model X's predicate about a
-   * request routed to model Y -- inexpressible, which is the capability
-   * abofs/stonyx-orm#196 and abofs/stonyx-orm#207 are built on.
-   *
-   * Empty when the REST server is disabled, and PARTIAL when one access file
-   * failed to load (`setup-rest-server.ts` catches, warns and assigns whatever
-   * it had). So a missing key does NOT mean the model has no access class.
-   * Prefer {@link Orm#getAccess} over indexing this directly -- it is guarded
-   * against the prototype chain and this is not.
-   */
-  accessFunctions: Record<string, AccessFunction> = {};
-
   options!: OrmOptions;
   sqlDb?: SqlDb;
   db?: OrmDB | SqlDb;
@@ -241,81 +193,6 @@ export default class Orm {
 
     Orm.ready = await Promise.all(promises);
     Orm.initialized = true;
-  }
-
-  /**
-   * Resolve the `access` predicate registered for a model name
-   * (abofs/stonyx-orm#202).
-   *
-   * This is the supported way to reach another model's predicate while
-   * servicing a request routed to a different model. Call it with the model
-   * name and invoke the result with the live request and an explicit context
-   * naming THAT model:
-   *
-   * ```js
-   * const predicate = Orm.instance.getAccess('animal');
-   * if (!predicate) return deny;
-   * const verdict = predicate(request, { model: 'animal', operation: 'read' });
-   * ```
-   *
-   * WHAT IT RESOLVES. The predicate of the access CLASS that claims the model,
-   * which is not necessarily specific to it: one class may claim many models
-   * and declares one `access` method, so
-   * `getAccess('owner') === getAccess('animal')` is `true` against this repo's
-   * fixture. See {@link Orm#accessFunctions}.
-   *
-   * `undefined` means NO PREDICATE COULD BE RESOLVED for that name. That
-   * includes a model whose access class failed to LOAD -- `setup-rest-server`
-   * catches, warns and publishes the partial map -- so it is not the same claim
-   * as "this model is unrestricted". Treat it as DENY, the same way
-   * `AccessContext.operation === undefined` is treated.
-   *
-   * PASSING THE CONTEXT MAKES A MODEL-CORRECT ANSWER POSSIBLE. It does not, on
-   * its own, make the answer model-correct: the resolved predicate has to READ
-   * the context. Measured against this repo's shipped access class on a request
-   * express dispatched to `GET /owners/angela`, asked about ANIMALS:
-   *
-   * ```
-   * getAccess('animal')(ownersRequest, { model: 'animal', operation: 'read' })
-   *   ->  record => record.id !== 'angela' && record.id !== 'restricted'
-   * ```
-   *
-   * The OWNERS filter, which returns `true` for animal 21 -- the record hidden
-   * on every animal surface. Under a mount that predicate recognises neither
-   * way it falls through to `['read', 'create', 'update', 'delete']`, a full
-   * CRUD grant. Either way: context supplied, answer not the animal answer,
-   * wrong in the GRANTING direction, because that predicate is arity-1 and
-   * identifies its collection from the request. AC9 asserts the first case on a
-   * live dispatch.
-   *
-   * Every predicate in this repo and in every consumer tree is arity-1 today,
-   * and there is no supported way for the caller to tell which kind it got; the
-   * boot-time arity warning that would surface it is abofs/stonyx-orm#213. Pass
-   * the context, and do not treat a resolved predicate's answer as
-   * model-specific until that predicate reads it.
-   *
-   * OWN PROPERTIES ONLY. A bare `this.accessFunctions[modelName]` walks the
-   * prototype chain, so `getAccess('constructor')` resolved `Object` and
-   * `getAccess('toString')` resolved `Object.prototype.toString` -- both
-   * callable, and the documented `predicate?.(request, ctx)` pattern then
-   * returned a TRUTHY value (`Object(request)` is the request), bypassing the
-   * `undefined`-means-deny contract entirely. Nothing in the ORM calls
-   * `getAccess` yet, so it was not exploitable as shipped -- but #207 takes the
-   * model name from the REQUEST BODY (`data.relationships.<key>.data.type`),
-   * which would have made a one-field body an authorization bypass. Guarded
-   * here at the read point rather than by constructing the map with a null
-   * prototype, because the field is public and reassignable and the guard has
-   * to hold whatever object it is holding.
-   *
-   * @param modelName - Model name as declared and stored (kebab-case).
-   * @returns The predicate, or `undefined` when no predicate could be resolved
-   *   for that name. `undefined` is NOT "this model is unrestricted" -- see the
-   *   note above. Treat it as deny.
-   */
-  getAccess(modelName: string): AccessFunction | undefined {
-    if (!Object.hasOwn(this.accessFunctions, modelName)) return undefined;
-
-    return this.accessFunctions[modelName];
   }
 
   async startup(): Promise<void> {

@@ -37,21 +37,7 @@ export interface HookContext {
   state?: Record<string, unknown>;
   /** Previous record state (available in update hooks). */
   oldState?: unknown;
-  /**
-   * Target record ID for single-record operations.
-   *
-   * SET ONLY UNDER `delete`. `_withHooks` assigns this key in the two
-   * `operation === 'delete'` branches and nowhere else, so on `get`, `list`,
-   * `create` and `update` the key is ABSENT -- not `undefined`-valued, absent.
-   * A hook rule written as `ctx.recordId === '<id>'` never fires on an update;
-   * the addressed id is in `ctx.params`. Tracked as abofs/stonyx-orm#242.
-   *
-   * @see AccessContext.recordId in ./types/orm-types.ts -- an identically-named
-   * key on an identically-shaped context object, and NOT interchangeable with
-   * this one: it is present on every route `auth()` classifies, and spells
-   * absence as `null` rather than `undefined`. They differ in coverage on four
-   * of five operations, not only in the absence spelling.
-   */
+  /** Target record ID for single-record operations. */
   recordId?: string | number;
   /** Response data (available in after hooks). */
   response?: unknown;
