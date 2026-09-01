@@ -455,13 +455,49 @@ property of the function it lives in, if there is one.
 | GATE 2's `Number.isInteger(response) &&` | **equivalent mutant, retained** | The only non-integer a handler in this file returns is a `{ data, links }` object, and `{} >= 400` is `false` by coercion, so dropping it changes no reachable outcome. Kept because `>=` coerces rather than rejects and the shapes it coerces are not obvious — `[500] >= 400` is **true**, so a handler that returned an array would have every response read as a denial. **Becomes killable the moment a handler returns anything array-like or numeric-string-like.** |
 | `normalizeBodyId`'s `id === ''` early return | **killable** — assertion 44 | `''` is the only body id that means "no id": `createRecord` treats it as absent and assigns a server id. Coercing it gives `parseInt('') === NaN`, and a record **can** be held under `NaN`, so `POST {"id":""}` would answer 409 against a record it never named. Its whitespace sibling (`id.trim() === ''`) was **deleted** rather than kept: it made the body surface disagree with `getId`, which maps `'   '` to `NaN` and therefore addresses that slot on every other route. |
 
-> **Known gap (reads):** the predicate is evaluated against the record the route
-> is addressed to. It is **not** applied to related or included records — those
-> resolve a different model's access class, which is not implemented yet. So
-> `GET /owners/angela` can be 404 while `GET /animals/1/owner` returns angela in
-> full. Tracked as [#196](https://github.com/abofs/stonyx-orm/issues/196),
-> which covers `include=`, related-resource routes and relationship-linkage
-> routes.
+> **Known gap (reads) — MEMBERSHIP.** The predicate is evaluated against the
+> record the route is addressed to. It is **not** applied to the related or
+> included record itself, so `GET /owners/angela` can be 404 while
+> `GET /animals/1/owner` returns angela in full. Tracked as
+> [#196](https://github.com/abofs/stonyx-orm/issues/196), which covers
+> `include=`, related-resource routes and relationship-linkage routes; the filed
+> children are [#232](https://github.com/abofs/stonyx-orm/issues/232) (the two
+> relationship route families) and
+> [#233](https://github.com/abofs/stonyx-orm/issues/233) (`include=` traversal).
+>
+> **NAMING is a different question, and cross-model resolution IS now
+> implemented for it.** Which ids a document may *name* —
+> `relationships.*.data` — was closed on four surfaces by
+> [#234](https://github.com/abofs/stonyx-orm/issues/234), so the clause that
+> stood here ("those resolve a different model's access class, which is not
+> implemented yet") is corrected rather than deleted. `src/access-verdict.ts`
+> `resolveVerdict` resolves the **related** model's own access class through
+> `Orm.instance.getAccess(type)` and asks it `{ model: type, operation: 'read' }`;
+> `createLinkageFilter` is wired on the four `toJSON()` call sites that already
+> bind the request — `getCollectionHandler`, `getSingleHandler`, and both
+> related-resource route sites. `getAccess()` returning `undefined`, and a
+> predicate that throws, both **deny**.
+>
+> Three limits on that, all measured, none of them closed by #234:
+>
+> 1. **An arity-1 predicate can make it GRANT.** The resolved class is asked the
+>    model-correct question, but only a predicate that READS `context.model` can
+>    give a model-correct answer. `setup-rest-server.ts` still declares
+>    single-parameter predicates valid and they remain the default in every
+>    consumer tree. Measured against this repo's own fixture with `reg.owner`
+>    replaced by an arity-1 predicate that hides angela on `/owners`:
+>    `GET /owners` → `["gina","michael","bob"]`, and `GET /animals/1` →
+>    `owner.data {"type":"owner","id":"angela"}` — the #234 defect, after the
+>    #234 fix. The arity signal is
+>    [#213](https://github.com/abofs/stonyx-orm/issues/213) /
+>    [#221](https://github.com/abofs/stonyx-orm/issues/221), unshipped.
+> 2. **Four surfaces, not all of them.** `included`, the `POST`/`PATCH` response
+>    documents and `GET /:id/relationships/{rel}` still publish unfiltered
+>    linkage — [#235](https://github.com/abofs/stonyx-orm/issues/235) and #232.
+>    Measured: `PATCH /animals/1` returns 200 naming `angela` seconds after
+>    `GET /animals/1` returns `owner.data: null`.
+> 3. **A bare `toJSON()` is unchanged and stays that way** — it holds no request
+>    to resolve against ([#230](https://github.com/abofs/stonyx-orm/issues/230)).
 >
 > **Known gap (writes) — [#207](https://github.com/abofs/stonyx-orm/issues/207),
 > and no artifact may claim otherwise.** The same per-model scoping applies to
@@ -485,8 +521,10 @@ property of the function it lives in, if there is one.
 > corrected rather than deleted, because this file is where the next reader
 > checks whether the chain is still blocked.
 >
-> **The mechanism exists; the ORM does not yet use it on this path**, so the
-> re-parenting write above is still unrefused. That enforcement is
+> **The mechanism exists, and as of #234 the ORM does use it — on the linkage
+> READ path only, never on this one.** The re-parenting write above is still
+> unrefused: `createHandler` and `updateHandler` consult only the ADDRESSED
+> model's predicate, exactly as before. That enforcement is
 > [#196](https://github.com/abofs/stonyx-orm/issues/196) then
 > [#207](https://github.com/abofs/stonyx-orm/issues/207), which were blocked on
 > #202 and are now free to proceed. Two limits on the mechanism they inherit:

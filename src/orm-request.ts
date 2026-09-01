@@ -269,6 +269,7 @@ import config from 'stonyx/config';
 import log from 'stonyx/log';
 import type { OrmRecord, AccessContext, AccessFunction, AccessMethod, AccessOperation } from './types/orm-types.js';
 import { isOrmRecord, NO_FREE_ID_ERROR } from './utils.js';
+import { interpretAccess, createLinkageFilter } from './access-verdict.js';
 
 interface OrmRequest$ extends Request {
   protocol?: string;
@@ -481,6 +482,13 @@ function buildResponse(
 
   const includedRecords = collectIncludedRecords(recordOrRecords, includes);
   if (includedRecords.length > 0) {
+    // NO `linkage` ARGUMENT, deliberately, and abofs/stonyx-orm#235 owns adding
+    // one. Until it does, a PERMITTED record here emits the full pre-#234
+    // document: `GET /animals/1?include=owner` filters the primary document's
+    // `owner.data` to `null` and then names `owner:angela` in `included`.
+    // Whether a resource reaches this array at all is a different question
+    // (membership, abofs/stonyx-orm#233) and closing that one does not close
+    // this one.
     response.included = includedRecords.map(record => record.toJSON?.({ baseUrl }));
   }
 
@@ -681,7 +689,14 @@ export default class OrmRequest extends Request {
       if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate as (record: OrmRecord) => boolean);
 
       const baseUrl = getBaseUrl(request);
-      const data = recordsToReturn.map(record => record.toJSON?.({ fields: modelFields, baseUrl }));
+
+      // ONE filter per REQUEST, not one per record: it carries the per-type
+      // verdict cache and the per-(type, id) decision cache, and both are
+      // worthless if it is rebuilt inside the map. Measured on this exact
+      // surface with no `include=`: 48 linkage entries collapse to 7 distinct
+      // (type, id) pairs.
+      const linkage = createLinkageFilter(request);
+      const data = recordsToReturn.map(record => record.toJSON?.({ fields: modelFields, baseUrl, linkage }));
 
       return buildResponse(data, request.query?.include, recordsToReturn, {
         links: { self: `${baseUrl}/${pluralizedModel}` },
@@ -701,7 +716,25 @@ export default class OrmRequest extends Request {
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
       const baseUrl = getBaseUrl(request);
-      return buildResponse(record.toJSON?.({ fields: modelFields, baseUrl }), request.query?.include, record, {
+      const linkage = createLinkageFilter(request);
+
+      // `buildResponse` is deliberately NOT given the linkage filter, and the
+      // residual that leaves is NOT the one #233 owns. Two different questions:
+      //
+      //   - WHETHER A RESOURCE APPEARS in `included` at all is MEMBERSHIP ->
+      //     abofs/stonyx-orm#233.
+      //   - What a record already IN `included` may NAME is LINKAGE -- the same
+      //     question #234 answers for the primary document -- and it is
+      //     abofs/stonyx-orm#235, which also owns createHandler/updateHandler.
+      //
+      // The residual, stated so the next reader does not have to derive it:
+      // `buildResponse` calls `record.toJSON?.({ baseUrl })` with no `linkage`
+      // argument, so a PERMITTED record in `included` emits the full pre-#234
+      // document. Measured: `GET /animals/1?include=owner` returns
+      // `owner.data: null` on the primary document and `owner:angela` in
+      // `included`. One query parameter deep. Only the PRIMARY document's
+      // linkage is filtered here.
+      return buildResponse(record.toJSON?.({ fields: modelFields, baseUrl, linkage }), request.query?.include, record, {
         links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
         baseUrl
       });
@@ -1331,14 +1364,21 @@ export default class OrmRequest extends Request {
         const relatedData = record.__relationships[relationshipName];
         const baseUrl = getBaseUrl(request);
 
+        // LINKAGE ONLY. This filter decides which ids the emitted documents may
+        // NAME in their own `relationships.*.data`; it does NOT decide whether
+        // the related records themselves are served -- that is the parent-only
+        // filtering this route has done since #190, and widening it to the
+        // related record is abofs/stonyx-orm#196.
+        const linkage = createLinkageFilter(request);
+
         let data: unknown;
         if (info.isArray) {
           // hasMany - return array
           const related = Array.isArray(relatedData) ? relatedData.filter(isOrmRecord) : [];
-          data = related.map(r => r.toJSON?.({ baseUrl }));
+          data = related.map(r => r.toJSON?.({ baseUrl, linkage }));
         } else {
           // belongsTo - return single or null
-          data = isOrmRecord(relatedData) ? relatedData.toJSON?.({ baseUrl }) : null;
+          data = isOrmRecord(relatedData) ? relatedData.toJSON?.({ baseUrl, linkage }) : null;
         }
 
         return {
@@ -1498,24 +1538,23 @@ export default class OrmRequest extends Request {
       return 403; // Forbidden
     }
 
-    if (!access) return 403;
-    if (typeof access === 'function') {
-      state.filter = access;
-      return undefined;
-    }
-    if (access === true) return undefined;
+    // THE READING OF THE RETURN SHAPE LIVES IN ONE PLACE (#234).
+    //
+    // It used to be inline here, and it was the only copy, which was fine while
+    // `auth()` was the only thing that had to ask. It is not any more: the
+    // linkage path has to ask model X's predicate about model X's records while
+    // servicing a request routed to model Y, and a second inline copy of these
+    // six branches would be a second authorization vocabulary -- one that can
+    // drift, and that reviewers would have to notice had drifted. The branch
+    // order in `interpretAccess` is this block, moved, not rewritten.
+    const verdict = interpretAccess(access, methodAccessMap[request.method]);
 
-    // `AccessMethod` declares `string` legal and it fell through every branch
-    // above, returning undefined -- i.e. FULL CRUD, no filter. `return 'read'`
-    // is the natural reading of a type that lists `string` first, and it
-    // granted DELETE. A bare string is one permission, not a grant of all four.
-    const permitted = typeof access === 'string' ? [access] : access;
+    if (!verdict.granted) return 403;
 
-    // Anything that is not a permission array by this point -- an object, a
-    // number, a Symbol -- is a consumer mistake, and the only safe reading of a
-    // shape the contract does not define is a denial. Fail CLOSED.
-    if (!Array.isArray(permitted)) return 403;
-    if (!permitted.includes(methodAccessMap[request.method])) return 403;
+    // The function return shape is the per-record hook, and `state` is the
+    // whole transport for it: @stonyx/rest-server memoises one state object per
+    // request and hands the same one to `auth()` and to the handler.
+    if (verdict.filter) state.filter = verdict.filter;
 
     return undefined;
   }
