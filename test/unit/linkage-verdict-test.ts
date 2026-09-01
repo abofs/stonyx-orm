@@ -462,9 +462,21 @@ module('[Unit] #234 linkage verdict', function(hooks) {
     // handlers -- is #235, which appeared nowhere in this repository. A reader
     // who follows the only link given lands on membership and is never told
     // that a PERMITTED record still publishes hidden ids.
-    assert.ok(/issues\/235/.test(section),
-      'and the deferred LINKAGE residual is attributed to #235, not folded into the membership issue');
-    assert.ok(section.includes('PATCH /animals/1'),
+    // Scoped to the linkage BULLET, not to `section`. The section slice runs to
+    // the next `## ` heading, which is ~480 lines away and swallows the
+    // `?include=` documentation -- so a section-wide `/issues\/235/` is
+    // satisfied by a cross-reference elsewhere and does not pin this bullet.
+    // Measured: it survived the mutation that put #233 back on the `included`
+    // exclusion and stripped the link off the POST/PATCH one.
+    const bulletStart = section.indexOf('- **Relationship linkage is filtered on the four request-bound read surfaces');
+    assert.ok(bulletStart > -1, 'precondition: the linkage bullet is findable');
+    const bullet = section.slice(bulletStart, section.indexOf('\n- **', bulletStart + 10));
+
+    assert.strictEqual((bullet.match(/issues\/235/g) || []).length, 2,
+      'BOTH deferred LINKAGE exclusions — `included` and the POST/PATCH documents — are attributed to #235');
+    assert.ok(/#233\]\(https:\/\/github\.com\/abofs\/stonyx-orm\/issues\/233\) owns whether a/.test(bullet),
+      'and #233 is kept for what it actually owns: whether a resource appears in `included` at all');
+    assert.ok(bullet.includes('PATCH /animals/1'),
       'the POST/PATCH exclusion states its consequence rather than naming the handlers');
 
     // The security claim this section is not permitted to make unqualified.
