@@ -5717,4 +5717,59 @@ module('[Integration] ORM', function(hooks) {
       }
     });
   });
+
+  // ==========================================================================
+  // abofs/stonyx-orm#233 — `include=` traversal MEMBERSHIP
+  // ==========================================================================
+  //
+  // SCAFFOLD. Every `test.todo` below is one acceptance criterion and asserts
+  // nothing yet; the unit-tier half lives in
+  // test/unit/include-membership-access-test.ts.
+  //
+  // The boundary with the two siblings that landed first, restated because it
+  // is the whole reason this module exists separately from theirs:
+  //
+  //   - #235 owns LINKAGE inside a record that is already in `included` — what
+  //     `relationships.*.data` may NAME.
+  //   - #232 owns the two relationship ROUTE families.
+  //   - THIS story owns MEMBERSHIP — whether a resource enters `included` at
+  //     all — and the PRUNE of the subtree beneath a resource that does not.
+  //
+  module('Include Traversal Membership Access (#233)', function(includeHooks) {
+    includeHooks.before(function() {
+      // TODO: idempotent fixture top-up, matching the #232/#235 modules.
+    });
+
+    test.todo('[DEFECT] #233 AC2 — a record hidden by its own model’s predicate is not a member of `included`', function(assert) {
+      assert.ok(false, 'TODO');
+    });
+
+    test.todo('[DEFECT] #233 AC2b — a hidden CHILD of a permitted parent is not a member either', function(assert) {
+      assert.ok(false, 'TODO');
+    });
+
+    test.todo('[DEFECT] #233 AC3 — a model no access class claims is never disclosed as a sideloaded resource', function(assert) {
+      assert.ok(false, 'TODO');
+    });
+
+    test.todo('[DEFECT] #233 AC4 — the subtree beneath a dropped parent is PRUNED, not traversed through', function(assert) {
+      assert.ok(false, 'TODO');
+    });
+
+    test.todo('[DEFECT] #233 AC4b — the prune holds at depth 2 and depth 3', function(assert) {
+      assert.ok(false, 'TODO');
+    });
+
+    test.todo('#233 AC6/AC10 — drop, never error: a pruned sideload is shaped exactly like a genuinely empty one', function(assert) {
+      assert.ok(false, 'TODO');
+    });
+
+    test.todo('[GUARD] #233 AC7 — negative control: permitted resources are still sideloaded, at every depth', function(assert) {
+      assert.ok(false, 'TODO');
+    });
+
+    test.todo('[GUARD] #233 AC8 — one verdict per type and one decision per (type, id) across the whole traversal', function(assert) {
+      assert.ok(false, 'TODO');
+    });
+  });
 });
