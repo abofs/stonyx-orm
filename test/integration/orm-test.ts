@@ -5683,14 +5683,64 @@ module('[Integration] ORM', function(hooks) {
       //
       // MUTATION THAT KILLS IT: pass `linkage: () => false` at the
       // `buildResponse` `included` site.
+      //
+      // ---------------------------------------------------------------------
+      // RE-SPECIFIED BY abofs/stonyx-orm#233. ONE PRECONDITION NARROWED. THE
+      // CRITERION IS UNTOUCHED, AND SO IS EVERY ASSERTION THAT CARRIES IT.
+      // ---------------------------------------------------------------------
+      // What the precondition was, recorded rather than dropped, with the
+      // measurement that justified it:
+      //
+      //     const ginaPets = storeIds('owner', 'gina', 'pets');
+      //     assert.deepEqual(includedAnimals.map(animal => animal.id)
+      //         .sort((a, b) => a - b), ginaPets,
+      //       'precondition: every one of gina's pets was sideloaded, and
+      //        membership is untouched');
+      //
+      //   Measured on dev @ c106cf9: `GET /owners/gina?include=pets` returned
+      //   included = [4, 8, 13, 18, 24], which IS `storeIds('owner', 'gina',
+      //   'pets')` -- animal 18 among them, while `GET /animals/18` was
+      //   already 404.
+      //
+      // WHY IT HAD TO GO, AND WHAT EXACTLY CHANGED. "membership is untouched"
+      // was a true statement about #235 and it is a false statement about the
+      // codebase, because #233 touched membership: animal 18 is hidden by the
+      // ANIMAL predicate and is no longer a member of `included`. Note what
+      // did NOT change -- I2 is about LINKAGE, and no linkage assertion in
+      // this test moved. Only the set this test expects to iterate narrowed,
+      // from "gina's pets" to "gina's pets THIS CALLER MAY READ".
+      //
+      // SO THE NAME STILL MEANS WHAT IT SAYS, and the narrowing is stated
+      // rather than left for a reader to infer: `[GUARD] #235 I2` asserts that
+      // linkage survives inside `included` for records that ARE members. It
+      // never asserted which records are members; it merely used a set that
+      // happened to be all of them.
+      //
+      // THE PERMITTED SET IS ASKED OF THE LIVE ROUTER, NOT HARD-CODED. A
+      // literal `[4, 8, 13, 24]` would go quietly vacuous the moment the
+      // fixture's hidden child moves, and it would also re-encode #233's
+      // answer as this test's expectation -- which is the thing that made the
+      // old precondition expire.
+      //
+      // ADDITIONAL MUTATION THAT KILLS THE RE-SPECIFICATION: make the
+      // membership filter drop gina's permitted pets too. `permitted` and
+      // `includedAnimals` then disagree and the re-specified precondition
+      // reds, so this cannot go green by emptying `included`.
       const { status, body } = await getJson('/owners/gina?include=pets');
       assert.strictEqual(status, 200, 'precondition: gina is a PERMITTED owner');
 
       const includedAnimals = body.included.filter(resource => resource.type === 'animal');
       const ginaPets = storeIds('owner', 'gina', 'pets');
+      const permitted = [];
 
-      assert.deepEqual(includedAnimals.map(animal => animal.id).sort((a, b) => a - b), ginaPets,
-        'precondition: every one of gina’s pets was sideloaded, and membership is untouched');
+      for (const id of ginaPets) {
+        if ((await getJson(`/animals/${id}`)).status === 200) permitted.push(id);
+      }
+
+      assert.ok(permitted.length < ginaPets.length,
+        `precondition: at least one of gina’s pets is HIDDEN (${ginaPets.join(', ')} in the store, ${permitted.join(', ')} readable) — otherwise the narrowing below is vacuous and this test is the old one`);
+      assert.deepEqual(includedAnimals.map(animal => animal.id).sort((a, b) => a - b), permitted,
+        'precondition: every one of gina’s READABLE pets was sideloaded — membership is #233’s, and it admits exactly these');
       assert.ok(includedAnimals.length > 1, 'precondition: there is more than one of them');
 
       for (const animal of includedAnimals) {
@@ -5705,23 +5755,98 @@ module('[Integration] ORM', function(hooks) {
         'and a sideloaded animal still names its permitted traits');
     });
 
-    test('[GUARD] #235 X1 — #233’s `included` membership pin still passes', async function(assert) {
-      // OUT OF SCOPE, DELIBERATELY. WHETHER a hidden owner appears in
-      // `included` at all is MEMBERSHIP and it is abofs/stonyx-orm#233's
-      // reproduction, pinned green here as correct-for-now behaviour so that
-      // this story cannot close #233's issue incidentally. It is the same
-      // assertion as the `included.find(...)` at the nested-include test above,
-      // restated where a reader of #235 will see it -- a criterion a sibling
-      // satisfies is not a criterion.
+    test('[GUARD] #235 X1 — membership and linkage are separate decisions, and #235’s mechanism is not the one that decides membership', async function(assert) {
+      // ---------------------------------------------------------------------
+      // RE-SPECIFIED BY abofs/stonyx-orm#233, AND THE TEST NAME CHANGED WITH
+      // IT. READ THIS BEFORE ASSUMING THE OLD NAME STILL DESCRIBES THE BODY.
+      // ---------------------------------------------------------------------
+      // THE NAME USED TO BE `#233's included membership pin still passes`. It
+      // does not still pass, because #233 landed. The name is changed rather
+      // than kept, deliberately: this guard's sibling `[GUARD] #235 X2` was
+      // once re-specified in a way that left the NAME implying the old claim
+      // while the body quietly checked a different one, and that re-spec then
+      // stayed green when the change it named was backed out entirely. A
+      // re-specification that changes what a guard checks must change what the
+      // guard is called.
       //
-      // MUTATION THAT KILLS IT: filter `collectIncludedRecords`' output through
-      // the linkage filter (which is #233's change) -- angela stops being a
-      // member and this goes red, correctly, in Sprint 87.
-      const { status, body } = await getJson('/animals/1?include=owner,owner.pets');
+      // What it was, recorded rather than deleted, with the measurement that
+      // justified it:
+      //
+      //     const { status, body } = await getJson('/animals/1?include=owner,owner.pets');
+      //     assert.strictEqual(status, 200);
+      //     assert.ok(body.included.find(resource => resource.type === 'owner'
+      //         && resource.id === 'angela'),
+      //       'the hidden owner is STILL a member of included — that is #233,
+      //        not this story');
+      //
+      //   Measured on dev @ c106cf9: that request returned `included` = 9
+      //   resources, `["owner:angela","animal:1","animal:3","animal:7",
+      //   "animal:10","animal:11","animal:15","animal:17","animal:20"]`.
+      //
+      // WHY IT HAD TO GO. It pinned a NEIGHBOUR'S CURRENT STATE. #233 is the
+      // story that makes angela stop being a member, so an assertion that she
+      // still is one is an assertion that #233 has not landed -- and #235
+      // would have reddened its sibling's correct change. That is the same
+      // defect this same file already recorded against `X2`: pinning a
+      // neighbour's current state is not a scope boundary, it is a claim on
+      // their territory that expires the moment they do their job. Worse here,
+      // the whole request now returns no `included` key at all, so the old
+      // body is not merely wrong, it throws.
+      //
+      // WHAT IT PINS INSTEAD, WHICH DOES NOT EXPIRE: the BOUNDARY the old
+      // assertion was reaching for. #235 and #233 answer two different
+      // questions with two different mechanisms, and one response exhibits
+      // BOTH answers at once, on the SAME model, in a way that separates them:
+      //
+      //   MEMBERSHIP (#233, the traversal push site) -- animal 18 is not in
+      //     `included` at all.
+      //   LINKAGE (#235, `toJSON({ linkage })`) -- gina IS in `included`, and
+      //     the `pets` array INSIDE her included copy does not name 18 either.
+      //
+      // Those are separable, and separating them is the point: #235's
+      // mechanism can only null a `relationships.*.data` entry, it can never
+      // remove a resource from the `included` ARRAY. So if the membership
+      // assertion below were satisfied by #235's mechanism, that mechanism
+      // would have to do something it structurally cannot.
+      //
+      // TAMPER TESTED IN BOTH DIRECTIONS, WHICH IS WHAT MAKES THIS A BOUNDARY
+      // AND NOT A RESTATEMENT OF EITHER STORY:
+      //   - back out #233 alone (drop the `linkage` argument from
+      //     `collectIncludedRecords`) with #235 fully intact -> animal 18
+      //     returns as a MEMBER, the membership assertion reds, and the
+      //     linkage assertion stays GREEN.
+      //   - back out #235 alone (drop the `linkage` option from the `included`
+      //     map) with #233 fully intact -> 18 reappears inside gina's `pets`
+      //     LINKAGE, the linkage assertion reds, and the membership assertion
+      //     stays green.
+      // Neither mutation reds both. A guard that could not tell them apart
+      // would red on both, or on neither.
+      const subject = await permittedAnimalOwnedBy('gina');
+      assert.ok(subject, 'precondition: gina has a readable pet to address');
+
+      assert.strictEqual((await getJson('/animals/18')).status, 404,
+        'precondition: animal 18 is hidden — asserted, not assumed');
+
+      const { status, body } = await getJson(`/animals/${subject}?include=owner,owner.pets`);
 
       assert.strictEqual(status, 200);
-      assert.ok(body.included.find(resource => resource.type === 'owner' && resource.id === 'angela'),
-        'the hidden owner is STILL a member of included — that is #233, not this story');
+
+      const includedGina = (body.included ?? []).find(resource => resource.type === 'owner' && resource.id === 'gina');
+
+      // PRECONDITION: MEMBERSHIP SAID YES TO SOMETHING. Without this the two
+      // assertions below are both satisfiable by an empty `included`, which is
+      // exactly the shape a re-specification must not be able to take.
+      assert.ok(includedGina, 'precondition: the PERMITTED owner IS a member of `included` — membership is not simply denying everything');
+      assert.ok(includedGina.relationships.pets.data.length > 0,
+        'precondition: and her `pets` linkage inside that member is populated, so there is linkage to inspect');
+
+      // #233's ANSWER: the hidden record is not a member of the array.
+      assert.notOk((body.included ?? []).some(resource => resource.type === 'animal' && String(resource.id) === '18'),
+        'MEMBERSHIP (#233): the hidden record is not in the `included` array — a decision #235’s linkage filter structurally cannot make');
+
+      // #235's ANSWER: a record that IS a member does not NAME it.
+      assert.notOk(includedGina.relationships.pets.data.some(member => String(member.id) === '18'),
+        'LINKAGE (#235): and the member that names it does not name it either — a decision #233’s membership filter does not make');
     });
 
     test('[GUARD] #235 X2 — #235’s mechanism does not reach the relationships-linkage route, which is #232’s', async function(assert) {
@@ -5879,6 +6004,10 @@ module('[Integration] ORM', function(hooks) {
       // `included` map in `buildResponse`, or inside either write handler's
       // `toJSON` call rather than once per invocation -- the count goes to one
       // per RECORD instead of one per TYPE.
+      const subject = await permittedAnimalOwnedBy('gina');
+      assert.ok(subject, 'precondition: gina has a readable pet to address');
+
+      const subjectPath = `/animals/${subject}`;
       const getAccessSpy = sinon.spy(Orm.instance, 'getAccess');
 
       try {
@@ -5900,7 +6029,40 @@ module('[Integration] ORM', function(hooks) {
 
         getAccessSpy.resetHistory();
 
-        const { body } = await getJson('/animals/1?include=owner,owner.pets');
+        // ---------------------------------------------------------------------
+        // RE-SPECIFIED BY abofs/stonyx-orm#233. THE SUBJECT MOVED; THE CLAIM,
+        // THE COUNTS AND THE KILLING MUTATION ARE ALL UNCHANGED.
+        // ---------------------------------------------------------------------
+        // The subject was `/animals/1?include=owner,owner.pets`. Recorded with
+        // the measurement that justified it: on dev @ 8dda5d6 that request
+        // returned `included` = 9 resources (angela plus her eight animals),
+        // and the included records were serialized with no filter at all, so
+        // `animal` was never asked about -- only the primary document's own
+        // `owner` and `trait`. That absence WAS the defect.
+        //
+        // WHY IT HAD TO MOVE. Animal 1's owner is angela, whom #233 now drops
+        // at the push site, so that request produces NO `included` array at
+        // all -- `body.included.length` throws, and `animal` is legitimately
+        // never asked about because nothing of that type is ever reached. A
+        // cache assertion needs a traversal that actually happens.
+        //
+        // WHAT IT PINS INSTEAD, WHICH DOES NOT EXPIRE: the same claim on a
+        // subject whose subtree survives. `subject` is a PERMITTED pet of
+        // gina's, so `owner,owner.pets` reaches an owner at depth 1 and
+        // animals at depth 2, and `animal` must still be asked about exactly
+        // once. #233 STRENGTHENS this rather than weakening it: membership now
+        // asks the same filter object once per traversed record, so if the
+        // caches were not shared the count would rise with the size of the
+        // subtree instead of staying at one per type.
+        // RESOLVED BEFORE `resetHistory()`, NOT AFTER, AND THE FIRST DRAFT GOT
+        // THIS WRONG. `permittedAnimalOwnedBy` asks the live router
+        // `GET /animals/{id}` until one answers 200, and every one of those
+        // requests builds its own per-request filter and resolves its own
+        // verdicts. Called inside the measurement window it added two
+        // resolutions to a count of three and reported 5, which reads exactly
+        // like the cache regression this test exists to catch. A spy window
+        // that contains its own setup measures the setup.
+        const { body } = await getJson(`${subjectPath}?include=owner,owner.pets`);
         const distinct = [...new Set(getAccessSpy.getCalls().map(call => call.args[0]))].sort();
 
         // [DEFECT] on dev @ 8dda5d6 the included records were serialized with
