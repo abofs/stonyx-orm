@@ -4186,46 +4186,567 @@ module('[Integration] ORM', function(hooks) {
   // #235 -- LINKAGE ON THE TWO WRITE HANDLERS, AND INSIDE `included`
   // ===========================================================================
   //
-  // SCAFFOLD. Every assertion below is `todo` until it has been shown failing
-  // against unfixed `dev` (defect tests) or killed by a named mutation
-  // (guards). abofs/stonyx-orm#235.
+  // #234 filtered `relationships.*.data` on the four request-bound READ
+  // surfaces. Three surfaces were left, and all three still publish the ids
+  // those four withhold. Measured over the live express router on dev @
+  // 8dda5d6, with `GET /owners/angela` answering 404 throughout:
   //
-  module('Write & Included Linkage Access (#235)', function() {
-    QUnit.todo('[DEFECT] #235 W1 — PATCH /animals/1 does not name a hidden owner id', function(assert) {
-      assert.ok(false, 'scaffold');
+  //     PATCH /animals/1  {age:N}            -> 200, owner.data {owner, angela}
+  //     POST  /animals    {owner:'angela'}   -> 200, owner.data {owner, angela}
+  //     GET   /animals/1?include=owner,owner.pets
+  //                                          -> 9 included `animal` records,
+  //                                             EACH naming {owner, angela}
+  //
+  // `POST` is a SECOND, INDEPENDENT VECTOR rather than a variant of `PATCH`.
+  // The two handlers are separate functions with different option objects
+  // (`createHandler` passes `{ fields }`, `updateHandler` passes nothing), so a
+  // fix wired into one and not the other passes a PATCH-only criterion. W1 and
+  // W2 are therefore two assertions, not one parameterised over a verb.
+  //
+  // ---------------------------------------------------------------------------
+  // WHY EVERY WRITE ASSERTION HERE IS A [DEFECT] AND NONE IS A RE-SPECIFICATION
+  // ---------------------------------------------------------------------------
+  // The whole write half is six changed lines and it moved NO existing test:
+  // dev @ 8dda5d6 with both handlers bound and both `toJSON` calls given
+  // `createLinkageFilter(request)` measures 995 pass / 0 fail, the same numbers
+  // as unpatched dev. That is not evidence the fix is clean -- it is evidence
+  // that no assertion among the 995 could have caught the leak, and that none
+  // could catch its regression. Each [DEFECT] below was run against unfixed
+  // `dev` and its failure output is in the PR body.
+  //
+  // ---------------------------------------------------------------------------
+  // WHAT THIS MODULE DELIBERATELY DOES NOT TOUCH
+  // ---------------------------------------------------------------------------
+  //   - `GET /:models/:id/relationships/{relationship}` (orm-request.ts:1390)
+  //     builds its `{type, id}` linkage BY HAND and never calls `toJSON`, so it
+  //     never sees a filter. It is red today and it is
+  //     abofs/stonyx-orm#232's -- its primary data IS linkage, which makes
+  //     filtering it a MEMBERSHIP decision. X2 pins it unchanged. Wiring it
+  //     here measures 993/2 and turns `orm-test.ts:1199` red, which is #232's
+  //     own reproduction.
+  //   - WHETHER a resource enters `included` at all is membership, and it is
+  //     abofs/stonyx-orm#233's. X1 pins #233's reproduction (a hidden owner IS
+  //     still a member) green, so that this story cannot satisfy #233's
+  //     criterion incidentally and #233 still arrives with something to prove.
+  //
+  // ---------------------------------------------------------------------------
+  // NOTHING BELOW HARD-CODES A COLLECTION MEMBERSHIP
+  // ---------------------------------------------------------------------------
+  // Earlier modules in this file create records and leave some behind -- gina
+  // owns five animals by the time this module runs, not the four the fixture
+  // ships, and one of them has no traits. Every expected id set is read out of
+  // the store or off the response at assertion time. A hard-coded list here
+  // would be an assertion about which modules ran first.
+  //
+  // ASSERTION LABELS, as in the #234 module above:
+  //   [DEFECT] -- observed FAILING against unfixed dev at 8dda5d6.
+  //   [GUARD]  -- passes on dev today; each names the mutation that kills it.
+  // Where one test carries both, every assertion is labelled inline.
+  //
+  module('Write & Included Linkage Access (#235)', function(writeHooks) {
+    writeHooks.before(function() {
+      // Idempotent, exactly as the #234 module's own `before` is: earlier
+      // modules in this file have created most of this already.
+      for (const category of serialized.categories) {
+        if (!store.get('category', category.id)) createRecord('category', category);
+      }
+      for (const owner of raw.owners) {
+        if (!store.get('owner', owner.name)) createRecord('owner', owner);
+      }
+      for (const animal of raw.animals) {
+        if (!store.get('animal', animal.id)) createRecord('animal', animal);
+      }
     });
 
-    QUnit.todo('[DEFECT] #235 W2 — POST /animals does not name a hidden owner id', function(assert) {
-      assert.ok(false, 'scaffold');
+    const getJson = async path => {
+      const response = await fetch(`${endpoint}${path}`);
+      const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
+
+      return { status: response.status, body };
+    };
+
+    const sendJson = async (method, path, payload) => {
+      const response = await fetch(`${endpoint}${path}`, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const body = response.status === 204 ? undefined : await response.json().catch(() => undefined);
+
+      return { status: response.status, body };
+    };
+
+    // Read a hasMany's member ids straight out of the store, so an expectation
+    // is never a transcription of the fixture file.
+    const storeIds = (model, id, relationship) =>
+      [...(store.get(model, id)?.[relationship] ?? [])]
+        .map(member => member?.id ?? member)
+        .sort((a, b) => (a > b ? 1 : a < b ? -1 : 0));
+
+    /**
+     * Replace one registry entry for the duration of `fn`, then restore it.
+     * Same construction as the #234 module's, and for the same reason:
+     * `Orm.instance.accessFunctions` holds ONE function object under several
+     * model keys, so the replacement is written to a single KEY and every other
+     * model resolves through the untouched original. Deliberately a local copy
+     * rather than a hoist out of the #234 module -- moving that helper would
+     * edit a module this story does not own.
+     */
+    const withAccess = async (model, replacement, fn) => {
+      const registry = Orm.instance.accessFunctions;
+      const had = Object.hasOwn(registry, model);
+      const original = registry[model];
+
+      if (replacement === undefined) delete registry[model];
+      else registry[model] = replacement;
+
+      try {
+        return await fn();
+      } finally {
+        if (had) registry[model] = original;
+        else delete registry[model];
+      }
+    };
+
+    /**
+     * TIGHTEN a model's real predicate with an extra per-record rule rather
+     * than replacing it, so an assertion cannot pass because the fixture was
+     * swapped for something permissive.
+     *
+     * ONLY USABLE ON A MODEL WHOSE `access()` RETURNS A PER-RECORD FUNCTION.
+     * `GlobalAccess` answers for `trait` with a permission ARRAY, which this
+     * passes through untouched -- so `narrow('trait', () => false)` is a no-op
+     * and an assertion built on it would be vacuously green. `animal` and
+     * `owner` return functions; those are the two this may be used on.
+     */
+    const narrow = (model, extra) => {
+      const original = Orm.instance.accessFunctions[model];
+
+      return function(request, context) {
+        const access = original.call(this, request, context);
+        if (typeof access !== 'function') return access;
+
+        return record => access(record) && extra(record);
+      };
+    };
+
+    test('[DEFECT] #235 W1 — PATCH /animals/1 does not name a hidden owner id', async function(assert) {
+      // PRECONDITION, asserted rather than assumed. If angela ever stops being
+      // hidden this whole module goes vacuously green, and this fixture has
+      // been blinded that way before (#190).
+      const hidden = await getJson('/owners/angela');
+      assert.strictEqual(hidden.status, 404, 'precondition: GET /owners/angela is 404 — her existence is withheld');
+
+      // And the READ surface for the SAME record already withholds her, which
+      // is what makes this a one-verb bypass rather than an unfixed read.
+      const read = await getJson('/animals/1');
+      assert.strictEqual(read.body.data.relationships.owner.data, null,
+        'precondition: GET /animals/1 (a #234 surface) already returns owner.data null');
+
+      const originalAge = read.body.data.attributes.age;
+      assert.strictEqual(typeof originalAge, 'number', 'precondition: animal 1 has a numeric age to move');
+
+      try {
+        const { status, body } = await sendJson('PATCH', '/animals/1', {
+          data: { type: 'animal', id: '1', attributes: { age: originalAge + 1 } }
+        });
+
+        assert.strictEqual(status, 200, 'the update is permitted and still answers 200');
+
+        // THE UPDATE REALLY HAPPENED. Without this the assertion below would
+        // hold equally against a handler that rejected the body outright, and
+        // "PATCH does not leak" would be true for the wrong reason.
+        assert.strictEqual(body.data.attributes.age, originalAge + 1, 'precondition: the attribute was actually applied');
+
+        // [DEFECT] Measured on dev @ 8dda5d6: {"type":"owner","id":"angela"}.
+        assert.deepEqual(body.data.relationships.owner, { data: null },
+          'the hidden owner is not named in the PATCH response document');
+
+        // A linkage id was dropped, not a document.
+        assert.strictEqual(body.data.id, 1, 'the addressed record is unchanged');
+        assert.strictEqual(body.data.attributes.size, 'small', 'the other attributes are untouched');
+
+        // [GUARD] The write document agrees with the #234-filtered READ
+        // document about the PERMITTED half. Derived from the read surface
+        // rather than transcribed, so the two surfaces are compared against
+        // each other instead of against a copy of the fixture.
+        // MUTATION THAT KILLS IT: deny all linkage in `updateHandler`.
+        assert.deepEqual(body.data.relationships.traits.data, read.body.data.relationships.traits.data,
+          'and the PERMITTED trait linkage matches what the read surface publishes for the same record');
+        assert.ok(body.data.relationships.traits.data.length > 0,
+          'precondition: that permitted comparison is not between two empty arrays');
+      } finally {
+        await sendJson('PATCH', '/animals/1', {
+          data: { type: 'animal', id: '1', attributes: { age: originalAge } }
+        });
+      }
+
+      const restored = await getJson('/animals/1');
+      assert.strictEqual(restored.body.data.attributes.age, originalAge, 'the fixture is restored for the modules after this one');
     });
 
-    QUnit.todo('[GUARD] #235 W3 — permitted linkage survives on both write surfaces', function(assert) {
-      assert.ok(false, 'scaffold');
+    test('[DEFECT] #235 W2 — POST /animals does not name a hidden owner id', async function(assert) {
+      const hidden = await getJson('/owners/angela');
+      assert.strictEqual(hidden.status, 404, 'precondition: GET /owners/angela is 404');
+
+      const petsBefore = storeIds('owner', 'angela', 'pets');
+      let createdId;
+
+      try {
+        const { status, body } = await sendJson('POST', '/animals', {
+          data: {
+            type: 'animal',
+            attributes: { type: 'dog', age: 3, size: 'small', owner: 'angela' }
+          }
+        });
+
+        createdId = body?.data?.id;
+
+        assert.strictEqual(status, 200, 'the create is permitted and still answers 200');
+        assert.ok(createdId !== undefined, 'precondition: a record was actually created and given an id');
+
+        // PRECONDITION ON THE ONE THING THAT COULD MAKE THIS VACUOUS: the
+        // relationship was really established. If `owner: 'angela'` had simply
+        // been ignored, `owner.data` would be null for a reason that has
+        // nothing to do with access filtering.
+        assert.strictEqual(store.get('animal', createdId)?.owner?.id, 'angela',
+          'precondition: the created record really does belong to the hidden owner in the store');
+
+        // [DEFECT] Measured on dev @ 8dda5d6: {"type":"owner","id":"angela"}.
+        assert.deepEqual(body.data.relationships.owner, { data: null },
+          'the hidden owner is not named in the POST response document');
+
+        // The create handler is a SEPARATE function from the update handler and
+        // passes a different option object, so this is a second wiring site.
+        // [DEFECT] on dev: the id appears in the relationships block.
+        assert.notOk(JSON.stringify(body).includes('angela'),
+          'and angela does not appear anywhere else in the create response either');
+      } finally {
+        if (createdId !== undefined) store.remove('animal', createdId, { _skipAutoPersist: true });
+      }
+
+      // The fixture is left exactly as it was found, so the modules after this
+      // one still see the collection they were written against.
+      assert.strictEqual(store.get('animal', createdId), undefined, 'the created record was removed again');
+      assert.deepEqual(storeIds('owner', 'angela', 'pets'), petsBefore,
+        'and the hidden owner has exactly the pets she had before this test');
     });
 
-    QUnit.todo('[GUARD] #235 W4 — a filtered write-surface relationship matches the empty shape', function(assert) {
-      assert.ok(false, 'scaffold');
+    test('[GUARD] #235 W3 — permitted linkage survives on both write surfaces', async function(assert) {
+      // The over-denial control. A fix that binds the request and then denies
+      // everything satisfies W1 and W2 perfectly.
+      //
+      // MUTATION THAT KILLS IT: replace `createLinkageFilter(request)` with
+      // `() => false` in either write handler.
+      const gina = await getJson('/owners/gina');
+      assert.strictEqual(gina.status, 200, 'precondition: gina is a PERMITTED owner');
+
+      const animalRead = await getJson('/animals/4');
+      const originalAge = animalRead.body.data.attributes.age;
+
+      try {
+        const patched = await sendJson('PATCH', '/animals/4', {
+          data: { type: 'animal', id: '4', attributes: { age: originalAge + 1 } }
+        });
+
+        assert.strictEqual(patched.status, 200);
+        assert.deepEqual(patched.body.data.relationships.owner, { data: { type: 'owner', id: 'gina' } },
+          'PATCH still names a permitted belongsTo in full');
+        assert.deepEqual(patched.body.data.relationships.traits.data, animalRead.body.data.relationships.traits.data,
+          'and its permitted hasMany matches what the read surface publishes');
+        assert.ok(patched.body.data.relationships.traits.data.length > 0,
+          'precondition: that comparison is not between two empty arrays');
+      } finally {
+        await sendJson('PATCH', '/animals/4', {
+          data: { type: 'animal', id: '4', attributes: { age: originalAge } }
+        });
+      }
+
+      // The hasMany half, on the write surface, from the parent side. Expected
+      // members come from the store, never from the fixture file.
+      const ginaPets = storeIds('owner', 'gina', 'pets');
+      assert.ok(ginaPets.length > 1, `precondition: gina owns more than one animal (${ginaPets.join(', ')})`);
+
+      const ownerAge = gina.body.data.attributes.age;
+      const ownerPatched = await sendJson('PATCH', '/owners/gina', {
+        data: { type: 'owner', id: 'gina', attributes: { age: ownerAge } }
+      });
+
+      assert.strictEqual(ownerPatched.status, 200);
+      assert.deepEqual(
+        ownerPatched.body.data.relationships.pets.data.map(entry => entry.id).sort((a, b) => a - b),
+        ginaPets,
+        'PATCH /owners/gina still names every permitted pet');
+
+      let createdId;
+
+      try {
+        const created = await sendJson('POST', '/animals', {
+          data: { type: 'animal', attributes: { type: 'dog', age: 2, size: 'small', owner: 'gina' } }
+        });
+
+        createdId = created.body?.data?.id;
+        assert.deepEqual(created.body.data.relationships.owner, { data: { type: 'owner', id: 'gina' } },
+          'POST still names a permitted belongsTo in full');
+      } finally {
+        if (createdId !== undefined) store.remove('animal', createdId, { _skipAutoPersist: true });
+      }
     });
 
-    QUnit.todo('[DEFECT] #235 I1 — a record already in `included` names no hidden id', function(assert) {
-      assert.ok(false, 'scaffold');
+    test('[GUARD] #235 W4a — the write surfaces carry no `links`, so an empty relationship is a bare `{data}`', async function(assert) {
+      // The write handlers pass no `baseUrl`, so NOTHING on their documents
+      // carries `links`. That is PRE-EXISTING and this story deliberately does
+      // not change it: adding `baseUrl` here would be an unrelated behaviour
+      // change, and #224 AC6's "emits `data: []` WITH links" is a statement
+      // about the READ surfaces only. This pins the shape a filtered
+      // relationship has to match, and it is measured on records the filter
+      // never touched.
+      //
+      // MUTATION THAT KILLS IT: pass `baseUrl: getBaseUrl(request)` in either
+      // write handler's `toJSON` options -- every relationship gains a `links`
+      // member and all four assertions below go red.
+      let createdId;
+
+      try {
+        const created = await sendJson('POST', '/animals', {
+          data: { type: 'animal', attributes: { type: 'goat', age: 1, size: 'small' } }
+        });
+
+        createdId = created.body?.data?.id;
+
+        assert.strictEqual(created.status, 200, 'precondition: the reference record was created');
+        assert.deepEqual(created.body.data.relationships.traits, { data: [] },
+          'reference shape: a genuinely-empty hasMany on a write surface is `{data: []}` and carries NO links');
+        assert.deepEqual(created.body.data.relationships.owner, { data: null },
+          'reference shape: an absent belongsTo on a write surface is `{data: null}` and carries NO links');
+        assert.notOk('links' in created.body, 'and the create document has no top-level links either');
+      } finally {
+        if (createdId !== undefined) store.remove('animal', createdId, { _skipAutoPersist: true });
+      }
+
+      // The same on the update surface, on a record with a PERMITTED owner, so
+      // the shape is measured where the filter drops nothing.
+      const originalAge = (await getJson('/animals/4')).body.data.attributes.age;
+      const patched = await sendJson('PATCH', '/animals/4', {
+        data: { type: 'animal', id: '4', attributes: { age: originalAge } }
+      });
+
+      assert.notOk('links' in patched.body.data.relationships.owner,
+        'the update surface emits no relationship links either — the reference shape holds on both handlers');
     });
 
-    QUnit.todo('[GUARD] #235 I2 — permitted linkage survives inside `included`', function(assert) {
-      assert.ok(false, 'scaffold');
+    test('[DEFECT] #235 W4b — a filtered write-surface relationship is byte-identical to an empty one', async function(assert) {
+      // The oracle question. A filtered relationship must be indistinguishable
+      // from a genuinely empty one -- the shapes W4a pinned -- or the fix
+      // trades a disclosure for a narrower one.
+      const hidden = await getJson('/owners/angela');
+      assert.strictEqual(hidden.status, 404, 'precondition: GET /owners/angela is 404');
+
+      const originalAge = (await getJson('/animals/1')).body.data.attributes.age;
+
+      // The belongsTo half, on the shipped fixture: angela is hidden.
+      // [DEFECT] on dev @ 8dda5d6 this is {"data":{"type":"owner","id":"angela"}}.
+      const patched = await sendJson('PATCH', '/animals/1', {
+        data: { type: 'animal', id: '1', attributes: { age: originalAge } }
+      });
+
+      assert.strictEqual(patched.status, 200, 'identical status — a filtered relationship is not an error');
+      assert.notOk('errors' in patched.body, 'no `errors` member');
+      assert.deepEqual(patched.body.data.relationships.owner, { data: null },
+        'a belongsTo emptied by the filter is byte-identical to an absent one');
+
+      // The hasMany half. `narrow` is used on `animal`, whose access() returns
+      // a per-record FUNCTION -- see the note on `narrow` above for why it may
+      // not be used on `trait`.
+      const ginaPets = storeIds('owner', 'gina', 'pets');
+      assert.ok(ginaPets.length > 1, `precondition: gina's pets linkage is non-empty to begin with (${ginaPets.join(', ')})`);
+
+      const ownerAge = (await getJson('/owners/gina')).body.data.attributes.age;
+
+      // [DEFECT] on dev @ 8dda5d6 this names every one of gina's pets.
+      await withAccess('animal', narrow('animal', () => false), async () => {
+        const { status, body } = await sendJson('PATCH', '/owners/gina', {
+          data: { type: 'owner', id: 'gina', attributes: { age: ownerAge } }
+        });
+
+        assert.strictEqual(status, 200, 'identical status');
+        assert.notOk('errors' in body, 'no `errors` member');
+        assert.deepEqual(body.data.relationships.pets, { data: [] },
+          'a hasMany emptied by the filter is byte-identical to a genuinely-empty one');
+      });
     });
 
-    QUnit.todo('[GUARD] #235 X1 — #233\'s `included` membership pin still passes', function(assert) {
-      assert.ok(false, 'scaffold');
+    test('[DEFECT] #235 I1 — a record already in `included` names no hidden id', async function(assert) {
+      const hidden = await getJson('/owners/angela');
+      assert.strictEqual(hidden.status, 404, 'precondition: GET /owners/angela is 404');
+
+      const { status, body } = await getJson('/animals/1?include=owner,owner.pets');
+      assert.strictEqual(status, 200);
+
+      const includedAnimals = body.included.filter(resource => resource.type === 'animal');
+
+      // THE PRECONDITION THAT KEEPS THIS CRITERION #235's AND NOT #233's.
+      // Phrased as "no hidden id appears anywhere in `included`", this
+      // assertion would be satisfied incidentally by #233 simply REMOVING
+      // members. It is asserted on records that are PERMITTED AND PRESENT, and
+      // their presence is a precondition in this same test.
+      assert.ok(includedAnimals.length > 1,
+        `precondition: permitted animal records ARE present in included (saw ${includedAnimals.length})`);
+
+      // [DEFECT] Measured on dev @ 8dda5d6: 9 included animals, each naming
+      // {"type":"owner","id":"angela"}.
+      const naming = includedAnimals
+        .filter(resource => resource.relationships.owner?.data !== null)
+        .map(resource => `${resource.type}:${resource.id} -> ${JSON.stringify(resource.relationships.owner?.data)}`);
+
+      assert.deepEqual(naming, [],
+        'no record already in `included` names the hidden owner in its own linkage');
+
+      // ASSERT THE EFFECT, NOT THE ABSENCE OF ONE STRING: every owner id still
+      // named anywhere in `included` is one this caller can actually read. This
+      // is derived from the response, so a fixture change cannot make it
+      // vacuous in the way a hard-coded 'angela' could.
+      const namedOwnerIds = new Set();
+      for (const resource of body.included) {
+        const owner = resource.relationships?.owner?.data;
+        if (owner) namedOwnerIds.add(owner.id);
+      }
+
+      for (const ownerId of namedOwnerIds) {
+        const probe = await getJson(`/owners/${ownerId}`);
+        assert.strictEqual(probe.status, 200, `an owner id named inside included (${ownerId}) is readable by this caller`);
+      }
+
+      // And the sideload itself still happened, so the assertion above is not
+      // green because `included` was emptied.
+      assert.ok(body.included.length > 1, 'the sideload still produced an included array');
     });
 
-    QUnit.todo('[GUARD] #235 X2 — the relationships-linkage route is #232\'s and is untouched', function(assert) {
-      assert.ok(false, 'scaffold');
+    test('[GUARD] #235 I2 — permitted linkage survives inside `included`', async function(assert) {
+      // The over-denial control for the `included` half.
+      //
+      // MUTATION THAT KILLS IT: pass `linkage: () => false` at the
+      // `buildResponse` `included` site.
+      const { status, body } = await getJson('/owners/gina?include=pets');
+      assert.strictEqual(status, 200, 'precondition: gina is a PERMITTED owner');
+
+      const includedAnimals = body.included.filter(resource => resource.type === 'animal');
+      const ginaPets = storeIds('owner', 'gina', 'pets');
+
+      assert.deepEqual(includedAnimals.map(animal => animal.id).sort((a, b) => a - b), ginaPets,
+        'precondition: every one of gina’s pets was sideloaded, and membership is untouched');
+      assert.ok(includedAnimals.length > 1, 'precondition: there is more than one of them');
+
+      for (const animal of includedAnimals) {
+        assert.deepEqual(animal.relationships.owner.data, { type: 'owner', id: 'gina' },
+          `included animal ${animal.id} still names its permitted owner in full`);
+      }
+
+      // The permitted hasMany inside `included` is untouched too. Asserted as
+      // "at least one", because a record another module left behind may
+      // legitimately have no traits.
+      assert.ok(includedAnimals.some(animal => animal.relationships.traits.data.length > 0),
+        'and a sideloaded animal still names its permitted traits');
     });
 
-    QUnit.todo('[GUARD] #235 C1 — one linkage filter per handler invocation', function(assert) {
-      assert.ok(false, 'scaffold');
+    test('[GUARD] #235 X1 — #233’s `included` membership pin still passes', async function(assert) {
+      // OUT OF SCOPE, DELIBERATELY. WHETHER a hidden owner appears in
+      // `included` at all is MEMBERSHIP and it is abofs/stonyx-orm#233's
+      // reproduction, pinned green here as correct-for-now behaviour so that
+      // this story cannot close #233's issue incidentally. It is the same
+      // assertion as the `included.find(...)` at the nested-include test above,
+      // restated where a reader of #235 will see it -- a criterion a sibling
+      // satisfies is not a criterion.
+      //
+      // MUTATION THAT KILLS IT: filter `collectIncludedRecords`' output through
+      // the linkage filter (which is #233's change) -- angela stops being a
+      // member and this goes red, correctly, in Sprint 87.
+      const { status, body } = await getJson('/animals/1?include=owner,owner.pets');
+
+      assert.strictEqual(status, 200);
+      assert.ok(body.included.find(resource => resource.type === 'owner' && resource.id === 'angela'),
+        'the hidden owner is STILL a member of included — that is #233, not this story');
+    });
+
+    test('[GUARD] #235 X2 — the relationships-linkage route is #232’s and is untouched', async function(assert) {
+      // OUT OF SCOPE, DELIBERATELY. `orm-request.ts:1390` builds its
+      // `{type, id}` linkage BY HAND and never calls `toJSON`, so it never sees
+      // a filter. It is NOT in #224 §2a's seven-site inventory, its primary
+      // data IS linkage (making it a MEMBERSHIP decision), and #232's own
+      // inversion budget already names the assertion at the
+      // `GET /animals/:id/relationships/owner` test above.
+      //
+      // MUTATION THAT KILLS IT: wire `createLinkageFilter` into
+      // `_generateRelationshipRoutes`' relationships-linkage branch. Measured:
+      // the suite goes to 993/2 and that test -- #232's reproduction -- goes
+      // red with it.
+      const { status, body } = await getJson('/animals/1/relationships/owner');
+
+      assert.strictEqual(status, 200);
+      assert.deepEqual(body.data, { type: 'owner', id: 'angela' },
+        'the relationships-linkage route still publishes the hidden id — that is #232, not this story');
+
+      // Stated as an inequality against the surface this story DID close, so a
+      // reader can see the boundary rather than infer it.
+      const document = await getJson('/animals/1');
+      assert.strictEqual(document.body.data.relationships.owner.data, null,
+        'while the document surface next door does not — the two are different questions');
+    });
+
+    test('[DEFECT] #235 C1 — one linkage filter per handler invocation, one verdict per type', async function(assert) {
+      // The filter carries a per-TYPE verdict cache and a per-(type, id)
+      // decision cache, and both are worthless if it is rebuilt inside a map.
+      // Hoisting it the other way -- into the OrmRequest constructor, where the
+      // other per-mount values live -- is worse than worthless: a verdict
+      // cached across requests answers a second caller with the FIRST caller's
+      // authorization.
+      //
+      // `Orm.instance.getAccess` is called from exactly one place in `src`
+      // (`resolveVerdict`), so its call count IS the number of verdict
+      // resolutions.
+      //
+      // MUTATION THAT KILLS THE [GUARD] HALVES: build the filter inside the
+      // `included` map in `buildResponse`, or inside either write handler's
+      // `toJSON` call rather than once per invocation -- the count goes to one
+      // per RECORD instead of one per TYPE.
+      const getAccessSpy = sinon.spy(Orm.instance, 'getAccess');
+
+      try {
+        const originalAge = (await getJson('/animals/1')).body.data.attributes.age;
+        getAccessSpy.resetHistory();
+
+        await sendJson('PATCH', '/animals/1', {
+          data: { type: 'animal', id: '1', attributes: { age: originalAge } }
+        });
+
+        // [DEFECT] `[]` on dev @ 8dda5d6: the write handler resolved no verdict
+        // at all, because it never built a filter.
+        assert.deepEqual([...new Set(getAccessSpy.getCalls().map(call => call.args[0]))].sort(), ['owner', 'trait'],
+          'the PATCH handler asked about exactly the two linked types');
+
+        // [GUARD] once per TYPE, not once per linkage entry: animal 1 names one
+        // owner and two traits, so a per-record build would be three.
+        assert.strictEqual(getAccessSpy.callCount, 2, 'and exactly once per type — one filter for the whole document');
+
+        getAccessSpy.resetHistory();
+
+        const { body } = await getJson('/animals/1?include=owner,owner.pets');
+        const distinct = [...new Set(getAccessSpy.getCalls().map(call => call.args[0]))].sort();
+
+        // [DEFECT] on dev @ 8dda5d6 the included records were serialized with
+        // no filter at all, so `animal` was never asked about -- only the
+        // primary document's own `owner` and `trait`.
+        assert.ok(distinct.includes('animal'),
+          'the `included` site resolves verdicts too — `animal` is asked about, which only the sideloaded owner names');
+
+        // [GUARD] ONE filter for the primary document AND the whole `included`
+        // array. A filter rebuilt per record would resolve many times per type.
+        assert.ok(body.included.length > 1, `precondition: the sideload produced ${body.included.length} included resources`);
+        assert.strictEqual(getAccessSpy.callCount, distinct.length,
+          `exactly one verdict resolution per distinct type (${distinct.length} types, ${getAccessSpy.callCount} resolutions) across the primary document and included`);
+      } finally {
+        getAccessSpy.restore();
+      }
     });
   });
-
 });
