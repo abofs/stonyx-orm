@@ -73,39 +73,58 @@
  * one string comparison this migration leaves behind. Read SURVIVING IS NOT THE
  * SAME AS BEING SOUND, below, before quoting the sentence above.
  *
- * ONE READ OF ARGUMENT ONE SURVIVES, AND IT MUST. The context names which model
- * and which verb, NOT which route — `GET /owners`, `GET /owners/gina` and
- * `GET /owners/archived` all produce `{ model: 'owner', operation: 'read' }`.
- * So the `/archived` deny cannot be expressed from the context alone, and a
- * predicate migrated to context-ONLY would silently drop it: a deny becoming an
- * allow. `request.path` is mount-relative and query-free, and reading it for a
- * sub-path rule is the one read of the raw request README
- * `### Identifying the collection` sanctions. See also README
- * `#### What the context does not tell you: which surface`, which records the six
- * owner surfaces that produce one identical context.
+ * THAT SENTENCE IS SUPERSEDED BY abofs/stonyx-orm#236/#237 AND IS LEFT STANDING
+ * ON PURPOSE. The string comparison is gone; the sub-path rule is now a
+ * comparison against the DECODED `recordId` the framework supplies, so variant
+ * 3 no longer has a comparison to be stepped around. It is not edited here
+ * because the same "variant 3 survives" wording appears at four sites — this
+ * header, README.md twice, and `src/orm-request.ts` — three of which SHIP, and
+ * retiring one of four leaves the shipped copies contradicting each other.
+ * Retiring all four, with the measurement that retires them rather than by
+ * deletion, is abofs/stonyx-orm#238.
  *
- * SURVIVING IS NOT THE SAME AS BEING SOUND. The `.toLowerCase()` below matches
- * the case-insensitive router, and that is the only gap it closes. Express sets
- * `request.path` from the RAW pathname while the router DECODES `:id`, so
- * `GET /owners/%61rchived` reaches the comparison as `/%61rchived`, walks past
- * the deny, and is dispatched as the record `archived` — measured, 200 on GET
- * and 204 on DELETE with the record destroyed. That is VARIANT 3 in a spelling
- * this sample does not handle; it is pre-existing, it is NOT fixed here, and it
- * is tracked as abofs/stonyx-orm#228. Read the line below as a rule that must
- * normalise the way the router does, not as a recipe that already has.
+ * ONE READ OF ARGUMENT ONE SURVIVED #222, AND IT IS GONE AS OF
+ * abofs/stonyx-orm#236/#237. The paragraph that follows is kept because it
+ * states the constraint the fix had to satisfy, not because it still describes
+ * the code: the context named which model and which verb, NOT which route —
+ * `GET /owners`, `GET /owners/gina` and `GET /owners/archived` all produced
+ * `{ model: 'owner', operation: 'read' }`. So the `/archived` deny could not be
+ * expressed from the context alone, and a predicate migrated to context-ONLY
+ * would have silently dropped it: a deny becoming an allow. `request.path` was
+ * therefore read for the sub-path rule. #236 added `recordId` — the DECODED
+ * route-parameter id — to that context, which is what made the deny expressible
+ * from argument two, and the read of argument one was retired rather than
+ * dropped. The rule it enforced is still enforced, against a better input.
  *
- * `?? ''` IS NOT A DEFENCE, and that lesson still applies to the one read that
- * is left. A previous revision wrote `String(request.originalUrl ?? '')`, which
- * turns an absent request target into an empty string, which matches no
- * collection, which falls through to the CRUD grant. A guard added to stop a
- * throw traded fail-closed for fail-open. An input this function cannot
- * identify DENIES — which is why an absent `model` returns `false` below rather
- * than falling through, AND why an absent or non-string `request.path` does
- * too. Since #202 the guard and the read can sit on DIFFERENT ARGUMENTS, and a
- * guard on argument two does not protect a read of argument one: with the
- * context supplied and `request.path` absent, `?? ''` matched no sub-path rule
- * and fell through to the per-record filter — a DENY became an ALLOW. Both
- * arguments are guarded below.
+ * SURVIVING WAS NOT THE SAME AS BEING SOUND, AND THAT IS WHY IT WAS RETIRED.
+ * The `.toLowerCase()` that used to sit below matched the case-insensitive
+ * router and closed exactly one gap. Express sets `request.path` from the RAW
+ * pathname while the router DECODES `:id`, so `GET /owners/%61rchived` reached
+ * the comparison as `/%61rchived`, walked past the deny, and was dispatched as
+ * the record `archived` — measured, 200 on GET and 204 on DELETE with the
+ * record DESTROYED, unauthenticated. It was wrong in the other direction at the
+ * same time: a record id is a VALUE, not a literal route segment, so with a
+ * distinct owner seeded at `ARCHIVED` it 403'd `GET /owners/ARCHIVED` — the
+ * wrong record — while still admitting `GET /owners/%41RCHIVED`. Two
+ * consumer-side normalisation schemes were measured wrong in OPPOSITE
+ * directions (the other was `decodeURIComponent(request.path)`, which
+ * over-denied the distinct record at `/owners/archived%2fx` because it decodes
+ * THEN splits while the router splits THEN decodes). That is the argument for
+ * the framework doing it once: #236, closed by #237.
+ *
+ * `?? ''` IS NOT A DEFENCE, and the lesson outlived the read it was about. A
+ * previous revision wrote `String(request.originalUrl ?? '')`, which turns an
+ * absent request target into an empty string, which matches no collection,
+ * which falls through to the CRUD grant. A guard added to stop a throw traded
+ * fail-closed for fail-open. An input this function cannot identify DENIES —
+ * which is why an absent `model` returns `false` below rather than falling
+ * through, AND why an absent `recordId` does too. The guard MOVED WITH THE
+ * READ: argument one is no longer read, so guarding it would be theatre, and
+ * the thing that can now be missing is the context key. `auth()` always sets
+ * `recordId` (`null` on a collection route), so `undefined` means the context
+ * was hand-assembled by a caller resolving this predicate through
+ * `Orm.instance.getAccess()` — and letting that through falls to the per-record
+ * filter, which is a DENY becoming an ALLOW. Measured before the guard existed.
  *
  * AND IT IS NOT A GUARANTEE THAT A HIDDEN RECORD CANNOT BE MODIFIED. `restricted`
  * is hidden on every ANIMAL surface, but a write to `/owners` can re-parent
@@ -125,66 +144,73 @@
 export default class GlobalAccess {
   models = ['owner', 'animal', 'trait', 'category', 'phone-number']; // * instead of an array will allow access to all models
 
-  access(request, { model, operation }) {
+  access(request, { model, operation, recordId }) {
     // `model` is the model this route was mounted for. It is assigned once, at
     // mount time, and no request can influence it — not a mount prefix, not a
     // query string, not a case-varied path, not an absolute-form request
-    // target. Nothing below parses anything, so variants 1, 2, 4 and 5 are not
-    // constructible against this predicate any more — they are history, not
-    // rules to follow. VARIANT 3 IS THE EXCEPTION AND THE CLAIM IS NARROWER
-    // THAN IT WAS: a matcher stricter than the router can still be stepped
-    // around, because the sub-path rule below is still a string comparison.
-    // Case is handled; percent-encoding is not — abofs/stonyx-orm#228.
+    // target. `recordId` is the record this route was ADDRESSED TO, decoded by
+    // the router and coerced to the key the store lookup uses. Nothing below
+    // parses anything, and since abofs/stonyx-orm#236 nothing below reads
+    // argument one AT ALL. Variants 1, 2, 4 and 5 were already unconstructible;
+    // the sub-path STRING COMPARISON that variant 3 lived in is gone too,
+    // replaced by a comparison against the decoded id. Retiring the "variant 3
+    // survives" wording at the four sites that still carry it — with the
+    // measurement that retires it, rather than by deletion — is
+    // abofs/stonyx-orm#238.
     //
     // `operation` is destructured to name the whole contract at the point of
-    // use. This sample's rules are per-model and per-sub-path rather than
+    // use. This sample's rules are per-model and per-record rather than
     // per-verb, so it does not branch on it; the permission array at the bottom
     // is where the verb is answered.
 
-    // FAIL CLOSED ON ARGUMENT TWO. `model` is absent for any caller that
-    // resolved this predicate without supplying the context, and a request this
-    // function cannot identify DENIES rather than falling through to the CRUD
-    // grant at the bottom. An unidentifiable input must never be the permissive
-    // path. Argument ONE is guarded at its own read, below — this guard does
-    // not cover it.
+    // FAIL CLOSED ON AN UNIDENTIFIABLE MODEL. `model` is absent for any caller
+    // that resolved this predicate without supplying the context, and a request
+    // this function cannot identify DENIES rather than falling through to the
+    // CRUD grant at the bottom. An unidentifiable input must never be the
+    // permissive path.
     if (typeof model !== 'string' || model === '') return false;
 
     if (model === 'owner') {
-      // The context names WHICH MODEL and WHICH VERB — not which route. Six
-      // distinct owner surfaces produce one identical context, so a rule that
-      // depends on the SUB-PATH still needs argument one. `request.path` is
-      // mount-relative and query-free, and it is the one read of the raw
-      // request the README sanctions. false → 403 for the whole request.
-      //
-      // THIS DENY CANNOT BE EXPRESSED FROM THE CONTEXT ALONE. Migrating it away
-      // does not remove a rule, it turns a deny into an ALLOW, silently.
-      //
-      // FAIL CLOSED ON ARGUMENT ONE TOO. The guard above covers the context;
-      // this one covers the request, and since #202 they are two different
-      // objects. A caller that resolves this predicate through the documented
-      // `Orm.instance.getAccess()` path and hand-assembles a request can supply
-      // a perfectly valid context with no usable `path` — and
-      // `String(request.path ?? '')` is then `''`, which matches no sub-path
-      // rule and falls straight through to the per-record filter below. That is
-      // a DENY becoming an ALLOW. An input this function cannot identify DENIES,
-      // whichever ARGUMENT it arrived on — which is also why the `?? ''` this
-      // file's header condemns does not appear below.
-      if (typeof request?.path !== 'string' || request.path === '') return false;
+      // FAIL CLOSED ON AN ABSENT `recordId` TOO, AND `undefined` IS THE ONLY
+      // SPELLING OF ABSENT. `auth()` ALWAYS sets the key — `null` on a
+      // collection route, which is addressed to no record — so `undefined`
+      // means the context did not come from `auth()`: it was hand-assembled by
+      // a caller resolving this predicate through the documented
+      // `Orm.instance.getAccess()` path. Letting that through would fall
+      // straight to the per-record filter below, which is a DENY becoming an
+      // ALLOW. This is the same rule the old guard on `request.path` enforced,
+      // moved to the argument this predicate now actually reads.
+      if (recordId === undefined) return false;
 
-      // Lower-cased because the router matched case-insensitively, so a
-      // case-sensitive rule here would be stricter than the router and could be
-      // stepped around.
+      // THE `/archived` DENY, EXPRESSED AGAINST THE DECODED ID. It used to be
+      // `request.path.toLowerCase()` compared against `'/archived'`, and that
+      // was wrong in both directions at once.
       //
-      // CASE-FOLDING ALONE IS NOT A SUFFICIENT NORMALISATION, and this line is
-      // not a recipe for one. Express sets `request.path` from the RAW pathname
-      // while the router DECODES `:id`, so `GET /owners/%61rchived` reaches this
-      // comparison as `/%61rchived`, walks past the deny, and is dispatched as
-      // the record `archived` — abofs/stonyx-orm#228. A matcher must normalise
-      // the way the router that dispatched the request does. Record ids are
-      // case-sensitive and must be compared at their real case.
-      const path = request.path.toLowerCase();
-
-      if (path === '/archived' || path.startsWith('/archived/')) return false;
+      // TOO PERMISSIVE: express sets `request.path` from the RAW pathname while
+      // the router DECODES `:id`, so `GET /owners/%61rchived` reached the
+      // comparison as `/%61rchived`, walked past the deny and was dispatched as
+      // the record `archived` — 200 with the record in full, and DELETE
+      // answered 204 with the record DESTROYED, unauthenticated. 255
+      // non-canonical spellings of that 8-character id decode to the same key,
+      // so no deny-list of spellings was ever going to close it.
+      //
+      // TOO STRICT: a record id is a VALUE, not a literal route segment, and
+      // express's `case sensitive routing` governs literal segments only. With
+      // a distinct owner seeded at `ARCHIVED`, the `.toLowerCase()` 403'd
+      // `GET /owners/ARCHIVED` — the wrong record — while still admitting
+      // `GET /owners/%41RCHIVED`, the same record encoded.
+      //
+      // SO DO NOT NORMALISE `recordId`. It is already decoded, exactly ONCE,
+      // which is what a route parameter means: `/owners/%2561rchived` is the
+      // legitimate id `%61rchived`, and decoding until stable would deny it. Do
+      // not case-fold it. Do not rebuild it from `request.path` — decoding the
+      // whole path decodes THEN splits while the router splits THEN decodes,
+      // which over-denies the distinct record at `/owners/archived%2fx`.
+      //
+      // THE DENY IS NOW EXPRESSIBLE FROM THE CONTEXT ALONE, which is exactly
+      // what `recordId` bought — and it still must not be dropped. Deleting it
+      // does not remove a rule loudly, it turns a deny into an ALLOW, silently.
+      if (recordId === 'archived') return false;
 
       // Returning a function plugs it in as a per-record filter, and it is
       // enforced on every surface addressed to one of these records:

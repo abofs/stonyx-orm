@@ -183,7 +183,7 @@ await Orm.db.save();
 export default class GlobalAccess {
   models = ['owner', 'animal']; // or '*' for all
 
-  access(request, { model, operation }) {
+  access(request, { model, operation, recordId }) {
     // WHY THERE IS NO MATCHING HERE. `model` is the model name
     // setup-rest-server mounted this route for, assigned once at mount time.
     // No request can influence it, so there is nothing to parse and no variant
@@ -219,55 +219,65 @@ export default class GlobalAccess {
     // MATCHED, which closed all five. It was still a transport artifact
     // standing in for a structural fact. `model` is the structural fact, so
     // VARIANTS 1, 2, 4 AND 5 are now unconstructible rather than handled — and
-    // neither `baseUrl` nor `originalUrl` appears below. VARIANT 3 SURVIVES in
-    // a narrower form: the sub-path rule below is still a string comparison, so
-    // a matcher stricter than the router can be stepped around. Case is
-    // handled; percent-encoding is not — abofs/stonyx-orm#228.
+    // neither `baseUrl` nor `originalUrl` appears below. THE STRING COMPARISON
+    // VARIANT 3 LIVED IN IS GONE TOO, as of abofs/stonyx-orm#236: the sub-path
+    // rule is now a comparison against `recordId`, the record this route was
+    // ADDRESSED TO — decoded by the router and coerced to the key the store
+    // lookup uses. Nothing below reads argument one at all. (Retiring the
+    // "variant 3 survives" wording across the copies that still carry it is
+    // abofs/stonyx-orm#238.)
     //
     // `operation` is destructured to name the whole contract at the point of
-    // use; this sample's rules are per-model and per-sub-path, so the verb is
+    // use; this sample's rules are per-model and per-record, so the verb is
     // answered by the permission array at the bottom.
 
-    // FAIL CLOSED ON ARGUMENT TWO. `String(request.originalUrl ?? '')` was once
-    // added to stop a TypeError and traded fail-closed for fail-OPEN: '' matched
-    // no collection, so access() fell through and granted full CRUD. The same
-    // rule applies to the context — an input this function cannot identify
-    // DENIES. Argument ONE is guarded at its own read, below; this guard does
-    // not cover it.
+    // FAIL CLOSED ON AN UNIDENTIFIABLE MODEL. `String(request.originalUrl ?? '')`
+    // was once added to stop a TypeError and traded fail-closed for fail-OPEN:
+    // '' matched no collection, so access() fell through and granted full CRUD.
+    // The same rule applies to the context — an input this function cannot
+    // identify DENIES.
     if (typeof model !== 'string' || model === '') return false;
 
     if (model === 'owner') {
-      // THE ONE READ OF ARGUMENT ONE, AND IT CANNOT BE MIGRATED AWAY. The
-      // context names which model and which verb, NOT which route: GET /owners,
-      // GET /owners/gina and GET /owners/archived all produce
-      // { model: 'owner', operation: 'read' }. So a SUB-PATH rule still needs
-      // `request.path` — mount-relative and query-free. Dropping it does not
-      // remove a rule, it turns a deny into an ALLOW, silently.
-      //
-      // FAIL CLOSED ON ARGUMENT ONE TOO. The guard above covers the context;
-      // this one covers the request, and since #202 they are two different
-      // objects. A caller that resolves this predicate through the documented
-      // `Orm.instance.getAccess()` path and hand-assembles a request can supply
-      // a perfectly valid context with no usable `path` — and
-      // `String(request.path ?? '')` is then `''`, which matches no sub-path
-      // rule and falls straight through to the per-record filter below: a DENY
-      // becoming an ALLOW. An input this function cannot identify DENIES,
-      // whichever ARGUMENT it arrived on.
-      if (typeof request?.path !== 'string' || request.path === '') return false;
+      // FAIL CLOSED ON AN ABSENT `recordId` TOO, AND `undefined` IS THE ONLY
+      // SPELLING OF ABSENT. `auth()` ALWAYS sets the key — `null` on a
+      // collection route, which is addressed to no record — so `undefined`
+      // means the context did not come from `auth()`: it was hand-assembled by
+      // a caller resolving this predicate through the documented
+      // `Orm.instance.getAccess()` path. Letting that through falls straight to
+      // the per-record filter below: a DENY becoming an ALLOW. This is the same
+      // rule the old guard on `request.path` enforced, moved to the argument
+      // this predicate now actually reads.
+      if (recordId === undefined) return false;
 
-      // Lower-cased for the same reason variant 3 exists: the router matched
-      // case-insensitively, so a case-sensitive sub-path rule is stricter than
-      // the router and can be stepped around. Deny an entire surface outright
-      // -> 403.
+      // THE /archived DENY, AGAINST THE DECODED ID. It was
+      // `request.path.toLowerCase()` compared against '/archived', and that was
+      // wrong in BOTH directions at once.
       //
-      // CASE-FOLDING ALONE IS NOT A SUFFICIENT NORMALISATION. Express sets
-      // `request.path` from the RAW pathname while the router DECODES `:id`, so
-      // GET /owners/%61rchived reaches this comparison as /%61rchived and walks
-      // past the deny — abofs/stonyx-orm#228. Normalise the way the router
-      // that dispatched the request does. Record ids stay at their real case.
-      const path = request.path.toLowerCase();
-
-      if (path === '/archived' || path.startsWith('/archived/')) return false;
+      // TOO PERMISSIVE: express sets `request.path` from the RAW pathname while
+      // the router DECODES `:id`, so GET /owners/%61rchived reached the
+      // comparison as /%61rchived, walked past the deny and was dispatched as
+      // the record `archived` — 200 with the record in full, and DELETE
+      // answered 204 with the record DESTROYED, unauthenticated. 255
+      // non-canonical spellings of that 8-character id decode to the same key.
+      //
+      // TOO STRICT: a record id is a VALUE, not a literal route segment, and
+      // express's `case sensitive routing` governs literal segments only. With
+      // a distinct owner seeded at ARCHIVED the .toLowerCase() 403'd
+      // GET /owners/ARCHIVED — the wrong record — while still admitting
+      // GET /owners/%41RCHIVED, the same record encoded.
+      //
+      // SO DO NOT NORMALISE `recordId`: it is already decoded, exactly once,
+      // which is what a route parameter means. /owners/%2561rchived is the
+      // legitimate id %61rchived and decoding until stable would deny it; do
+      // not case-fold; do not rebuild it from `request.path`, which decodes
+      // THEN splits while the router splits THEN decodes and so over-denies the
+      // distinct record at /owners/archived%2fx.
+      //
+      // THE DENY IS NOW EXPRESSIBLE FROM THE CONTEXT ALONE — that is what
+      // `recordId` bought — and it still must not be dropped. Deleting it does
+      // not remove a rule, it turns a deny into an ALLOW, silently.
+      if (recordId === 'archived') return false;
 
       // Per-record filter. Enforced on every surface ADDRESSED TO a record — the
       // collection, GET/PATCH/DELETE by id, and both relationship route families

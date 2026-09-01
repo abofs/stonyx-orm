@@ -302,6 +302,17 @@ export interface AccessContext {
    * `Orm.instance.getAccess()`. That absence stays a distinguishable, deniable
    * signal only because the framework never produces it.
    *
+   * IT IS THE ONE KEY THE HOOK VOCABULARY DOES *NOT* DISAGREE WITH.
+   * `HookContext.recordId` (`src/hooks.ts`) is an identically-named key on an
+   * identically-shaped context object, which is the exact configuration that
+   * makes `operation` fail-open shaped -- a hook sees `'get'` where `access()`
+   * sees `'read'`. Here they AGREE, and not by coincidence: `_withHooks` sets
+   * `context.recordId = getId(request.params)`, the same single coercion this
+   * key is built from. They differ in ONE way and it is the absence spelling --
+   * `HookContext.recordId` is optional and `undefined` when unset, while this
+   * key is always present and `null` on a collection route. A predicate must
+   * not read `undefined` here as "collection".
+   *
    * IT NAMES WHICH RECORD, NOT WHICH SURFACE. `GET /owners/gina`,
    * `GET /owners/gina/pets` and `GET /owners/gina/relationships/pets` all
    * carry `recordId: 'gina'`; the related-resource gap is abofs/stonyx-orm#196
