@@ -4181,4 +4181,51 @@ module('[Integration] ORM', function(hooks) {
       }
     });
   });
+
+  // ===========================================================================
+  // #235 -- LINKAGE ON THE TWO WRITE HANDLERS, AND INSIDE `included`
+  // ===========================================================================
+  //
+  // SCAFFOLD. Every assertion below is `todo` until it has been shown failing
+  // against unfixed `dev` (defect tests) or killed by a named mutation
+  // (guards). abofs/stonyx-orm#235.
+  //
+  module('Write & Included Linkage Access (#235)', function() {
+    QUnit.todo('[DEFECT] #235 W1 — PATCH /animals/1 does not name a hidden owner id', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+
+    QUnit.todo('[DEFECT] #235 W2 — POST /animals does not name a hidden owner id', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+
+    QUnit.todo('[GUARD] #235 W3 — permitted linkage survives on both write surfaces', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+
+    QUnit.todo('[GUARD] #235 W4 — a filtered write-surface relationship matches the empty shape', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+
+    QUnit.todo('[DEFECT] #235 I1 — a record already in `included` names no hidden id', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+
+    QUnit.todo('[GUARD] #235 I2 — permitted linkage survives inside `included`', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+
+    QUnit.todo('[GUARD] #235 X1 — #233\'s `included` membership pin still passes', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+
+    QUnit.todo('[GUARD] #235 X2 — the relationships-linkage route is #232\'s and is untouched', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+
+    QUnit.todo('[GUARD] #235 C1 — one linkage filter per handler invocation', function(assert) {
+      assert.ok(false, 'scaffold');
+    });
+  });
+
 });
