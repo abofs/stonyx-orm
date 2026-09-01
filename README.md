@@ -325,6 +325,19 @@ Access classes define models and provide custom filtering/authorization logic.
 > deny — which folds case but does not decode, so `GET /owners/%61rchived` steps
 > past it ([#228](https://github.com/abofs/stonyx-orm/issues/228)).
 >
+> **Superseded 2026-09-01 by [#236](https://github.com/abofs/stonyx-orm/issues/236) /
+> [#237](https://github.com/abofs/stonyx-orm/issues/237), and left standing rather
+> than rewritten.** Both claims above are now false: `#228` is **closed**, and the
+> one string comparison variant 3 lived in is gone — the sample below compares the
+> **decoded `recordId`** the access context supplies, so there is no comparison
+> left to step around. The paragraph about `request.path` further down is
+> superseded the same way. Nothing here is deleted because the same "variant 3
+> survives" wording sits at four sites (this file twice, `src/orm-request.ts`, and
+> the test fixture) and retiring one of four leaves the shipped copies
+> contradicting each other; retiring all four **with the measurement that retires
+> them** is [#238](https://github.com/abofs/stonyx-orm/issues/238), which also owns
+> this blockquote and the reference section below.
+>
 > That is still a stopgap. **The real fix is
 > [#202](https://github.com/abofs/stonyx-orm/issues/202)** — `access()` should
 > receive the model, the operation and the record, so there is nothing to
@@ -336,6 +349,14 @@ Access classes define models and provide custom filtering/authorization logic.
 > which verb, not which route, so that deny **cannot be expressed from the
 > context alone** and a context-only rewrite would silently turn it into an
 > allow.
+>
+> **Superseded 2026-09-01 by [#236](https://github.com/abofs/stonyx-orm/issues/236) /
+> [#237](https://github.com/abofs/stonyx-orm/issues/237)** — see the dated note
+> above. No read of argument **one** survives in the sample below: the context
+> carries `recordId`, the decoded route-parameter id, so the `/archived` deny **is**
+> expressible from the context alone. It still must not be dropped — expressible is
+> not optional. Retirement of this wording:
+> [#238](https://github.com/abofs/stonyx-orm/issues/238).
 >
 > The same warning is repeated at the top of `src/orm-request.ts`, which ships;
 > the longer write-up in `docs/usage-patterns.md` does **not** ship, so this
@@ -498,6 +519,16 @@ mount-relative and query-free, and the one read of argument one that
 access class shipped with this repo has such a rule: its `/archived` deny
 **cannot be expressed from the context alone**, and a predicate migrated to
 context-only would silently drop it — a deny becoming an allow.
+
+**Superseded 2026-09-01 by [#236](https://github.com/abofs/stonyx-orm/issues/236) /
+[#237](https://github.com/abofs/stonyx-orm/issues/237).** The context also carries
+`recordId` — the record this route was addressed to, already decoded — so the
+`/archived` deny **is** expressible from the context alone, and the shipped sample
+no longer reads `request.path`. The full contract is `AccessContext.recordId` in
+`src/types/orm-types.ts`, which ships. This section — the signature, the key table
+and this paragraph — is corrected by
+[#238](https://github.com/abofs/stonyx-orm/issues/238); the pointer is here because
+what it currently says is an instruction, and the instruction is wrong.
 
 Note also that the related-resource and `?include=` surfaces serve *another
 model's* records under `model: 'owner'`, and the context gives a predicate no
@@ -794,6 +825,17 @@ these values should be matched on:
 | `GET http://anything.example/owners/angela` | `http://anything.example/angela` | `http://anything.example/owners/angela` | `/owners` | `/angela` |
 | `GET /api/animals/22` (`ORM_REST_ROUTE=/api`) | `/22` | `/api/animals/22` | `/api/animals` | `/22` |
 
+**Superseded 2026-09-01 by [#236](https://github.com/abofs/stonyx-orm/issues/236) /
+[#237](https://github.com/abofs/stonyx-orm/issues/237) — "Variant 3 survives" above,
+and the two paragraphs below, are no longer true.** The access context now carries
+`recordId`, the **decoded** route-parameter id, and the sample compares against it:
+the one string comparison variant 3 lived in is gone, `#228` is **closed**, and no
+read of argument one survives in the sample. The wording is left standing rather
+than deleted because it appears at four sites (this file twice,
+`src/orm-request.ts`, and the test fixture) and retiring one of four leaves the
+shipped copies contradicting each other; retiring all four **with the measurement
+that retires them** is [#238](https://github.com/abofs/stonyx-orm/issues/238).
+
 **One read of argument one survives, and it must: `request.path`.** It is
 mount-relative and query-free, and it is for rules that distinguish **sub-paths**
 beneath the mount — as the `/archived` deny in the sample above does. The context
@@ -812,6 +854,20 @@ comparison as `/%61rchived`, walks past the deny, and is dispatched as the recor
 [#228](https://github.com/abofs/stonyx-orm/issues/228) — **do not read the
 `.toLowerCase()` there as a complete normalisation recipe.** Record ids are
 case-sensitive and must be compared at their real case.
+
+**Do not follow the two paragraphs above — superseded 2026-09-01 by
+[#236](https://github.com/abofs/stonyx-orm/issues/236) /
+[#237](https://github.com/abofs/stonyx-orm/issues/237).** They are *instructions*,
+not merely stale observations, which is why this note is louder than a date. The
+sample no longer reads `request.path` and no longer calls `.toLowerCase()` on
+anything it compares: `.toLowerCase()` was measured wrong in **both directions at
+once** — with a distinct owner seeded at `ARCHIVED`, `GET /owners/ARCHIVED` was a
+false **deny** on the wrong record and `GET /owners/%41RCHIVED` a false **allow**
+on that same record. Compare `recordId` **as it arrives**: do not case-fold it, do
+not decode it, do not derive it from `request.path`. The contract is
+`AccessContext.recordId` in `src/types/orm-types.ts`, which ships and says "Do NOT
+case-fold it". Retirement of this wording, with its measurement:
+[#238](https://github.com/abofs/stonyx-orm/issues/238).
 
 **Fail closed on anything you cannot identify — on *either* argument.**
 `String(request.originalUrl ?? '')` was once added here to stop a `TypeError`,
