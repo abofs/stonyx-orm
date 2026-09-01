@@ -44,6 +44,39 @@
 // two-record minimum programmatically and three over the route.
 // ---------------------------------------------------------------------------
 //
+// ---------------------------------------------------------------------------
+// MUTATION MATRIX — MEASURED, not reasoned. Every row was applied to the fixed
+// src/manage-record.ts, built, and run as:
+//
+//   ORM_TEST_REST_PORT=42801 node --import tsx/esm --import ./test/setup.ts \
+//     node_modules/qunit/bin/qunit.js test/unit/assign-record-id-test.ts test/zz-exit-test.ts
+//
+// Unmutated: 6 pass / 0 fail. Read this table as the answer to "could this
+// assertion have failed?" — every AC here has a production change that turns it
+// red, and none of them turns ALL of them red, which is what distinguishes
+// coverage from a tripwire.
+//
+//   mutation applied to src/manage-record.ts        | red             | green
+//   ------------------------------------------------|-----------------|-------------
+//   A  revert selection to `at(-1).id + 1`          | AC1, AC2        | AC3-AC6
+//   B  `Math.max(0, ...ids)` for the reduce         | AC2, AC3, AC5   | AC1, AC4, AC6
+//   C  occupancy guard on the RAW value             | AC4             | rest
+//   D  delete the :209-213 SQL early return         | AC5 (5.3, "got 9641")   | rest
+//   E  blanket duplicate refusal in createRecord    | AC5 (5.2)       | rest
+//   F  restore `if (rawData.id) return;`            | AC6             | rest
+//   G  refuse EVERY server-assigned create          | AC1,2,3,5,6     | AC4
+//
+// Two rows are worth reading twice:
+//
+//   B is the naive fix. It leaves AC1 green — the max IS correct — and is
+//   caught only by AC2 and AC3. Before this file existed it scored 951/0.
+//
+//   G leaves AC4 GREEN, and that is by design: AC4 accepts "refused with a
+//   defined error" as well as "landed on a free key", because either is an
+//   acceptable collision policy and silence is the only unacceptable one. AC5.1
+//   is the control that catches refuse-all, which is exactly why it exists.
+// ---------------------------------------------------------------------------
+//
 import QUnit from 'qunit';
 import Orm, { createRecord, store } from '@stonyx/orm';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
