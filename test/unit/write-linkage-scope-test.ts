@@ -117,7 +117,7 @@ module('[Unit] #235 write & included linkage — cross-file scope', function() {
 
   test('[GUARD] #235 R1c — the nested-include leak-pinning selector is re-specified, not deleted', async function(assert) {
     // `included.filter(r => r.type === 'animal' && r.relationships.owner?.data?.id === 'angela')`
-    // was THE LEAK WRITTEN AS A REQUIREMENT: it asserted that nine permitted
+    // was THE LEAK WRITTEN AS A REQUIREMENT: it asserted that eight permitted
     // animals each publish the id of an owner the caller gets a 404 for. #235
     // nulls that linkage, so the old selector matches nothing and the
     // assertion goes red for the right reason.

@@ -850,7 +850,7 @@ module('[Integration] ORM', function(hooks) {
       // RE-SPECIFIED BY abofs/stonyx-orm#235, AND ONLY THIS ASSERTION. It used
       // to select the sideloaded animals by
       // `r.relationships.owner?.data?.id === 'angela'` -- which is the LEAK
-      // written as a requirement: it asserted that nine permitted animals each
+      // written as a requirement: it asserted that eight permitted animals each
       // publish the id of an owner this caller gets a 404 for. #235 nulls that
       // linkage, so the old selector matched nothing and the assertion went red
       // for the RIGHT reason. It is re-specified rather than deleted, and it is
@@ -4221,8 +4221,10 @@ module('[Integration] ORM', function(hooks) {
   //     PATCH /animals/1  {age:N}            -> 200, owner.data {owner, angela}
   //     POST  /animals    {owner:'angela'}   -> 200, owner.data {owner, angela}
   //     GET   /animals/1?include=owner,owner.pets
-  //                                          -> 9 included `animal` records,
+  //                                          -> 8 included `animal` records,
   //                                             EACH naming {owner, angela}
+  //                                             (9 included RESOURCES; the
+  //                                             ninth is the hidden owner)
   //
   // `POST` is a SECOND, INDEPENDENT VECTOR rather than a variant of `PATCH`.
   // The two handlers are separate functions with different option objects
@@ -4648,8 +4650,10 @@ module('[Integration] ORM', function(hooks) {
       assert.ok(includedAnimals.length > 1,
         `precondition: permitted animal records ARE present in included (saw ${includedAnimals.length})`);
 
-      // [DEFECT] Measured on dev @ 8dda5d6: 9 included animals, each naming
-      // {"type":"owner","id":"angela"}.
+      // [DEFECT] Measured on dev @ 8dda5d6: 8 included animals, each naming
+      // {"type":"owner","id":"angela"}. `included` holds 9 RESOURCES -- those
+      // 8 animals plus the hidden owner, who is a member by #233 and is not
+      // an animal.
       const naming = includedAnimals
         .filter(resource => resource.relationships.owner?.data !== null)
         .map(resource => `${resource.type}:${resource.id} -> ${JSON.stringify(resource.relationships.owner?.data)}`);

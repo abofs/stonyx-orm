@@ -496,8 +496,12 @@ function buildResponse(
     //     for the primary document -- and that is what the `linkage` option
     //     below decides. Before it, `GET /animals/1?include=owner,owner.pets`
     //     filtered the primary document's `owner.data` to `null` and then
-    //     handed back nine PERMITTED animals in `included` each naming
-    //     `{"type":"owner","id":"angela"}`. Neither #233 nor #234 closes that.
+    //     handed back eight PERMITTED animals in `included` each naming
+    //     `{"type":"owner","id":"angela"}` -- angela's whole `pets` set,
+    //     `[1, 3, 7, 10, 11, 15, 17, 20]`. `included` itself is NINE
+    //     resources there: those eight animals plus the hidden owner, whose
+    //     membership is #233's and not an animal. Neither #233 nor #234
+    //     closes that.
     //
     // THE FILTER IS THE CALLER'S, PASSED IN, NOT BUILT HERE. Both call sites
     // already hold one for the primary document, and sharing it is what keeps
