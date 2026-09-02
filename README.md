@@ -113,6 +113,12 @@ export default {
 };
 ```
 
+> **`route` and JSON:API `links`.** Generated endpoints are mounted under `route`, and every
+> `links.self` / `links.related` the ORM emits is an absolute URL that includes it. With
+> `ORM_REST_ROUTE='/api'` the animal collection is served at `/api/animals` and advertises
+> `http://host/api/animals`, so published links are followable as-is — do not prepend the
+> mount yourself.
+
 Then run the application via the Stonyx CLI, which auto-initializes all modules including the ORM:
 
 ```bash

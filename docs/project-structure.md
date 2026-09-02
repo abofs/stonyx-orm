@@ -196,6 +196,11 @@ Auto-generated REST endpoints for each model with an access class:
 | GET | `/:models/:id/:relationship` | Related resource | Returns full related records (array for hasMany, single for belongsTo) |
 | GET | `/:models/:id/relationships/:relationship` | Relationship linkage | Returns JSON:API linkage objects with `links.self` and `links.related` |
 
+**Links.** Document, resource and relationship `links.self`/`links.related` are absolute URLs
+built from the request: `{protocol}://{host}{ORM_REST_ROUTE}{path}`. They therefore include the
+configured mount route and can be followed verbatim. At the default `ORM_REST_ROUTE='/'` the
+prefix is empty and links are `{protocol}://{host}{path}`.
+
 **Include parameter** supports comma-separated relationships and dot-notation nesting: `?include=owner.pets,traits`
 
 **Fields parameter** supports sparse fieldsets: `?fields[animals]=age,size`
@@ -272,7 +277,7 @@ Located in `config/environment.js`. All values overridable via environment varia
 | `ORM_TRANSFORM_PATH` | `'./transforms'` | Transforms directory |
 | `ORM_ACCESS_PATH` | `'./access'` | Access classes directory |
 | `ORM_USE_REST_SERVER` | `'true'` | Enable auto REST route generation |
-| `ORM_REST_ROUTE` | `'/'` | Base route for REST endpoints |
+| `ORM_REST_ROUTE` | `'/'` | Base route for REST endpoints. Included in every emitted `links.self`/`links.related` (see [REST Endpoints](#rest-endpoints)) |
 | `MYSQL_HOST` | undefined | Enables MySQL mode when set |
 | `MYSQL_PORT` | `3306` | MySQL port |
 | `MYSQL_USER` | `'root'` | MySQL user |
