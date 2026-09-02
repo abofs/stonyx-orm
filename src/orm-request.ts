@@ -10,6 +10,10 @@ import { isOrmRecord } from './utils.js';
 
 interface OrmRequest$ extends Request {
   protocol?: string;
+  // Express sets this to the path the router was mounted at, e.g. '/api/animals'
+  // when orm.restServer.route is '/api'. Optional because non-Express callers
+  // (unit tests, programmatic handler invocation) do not supply it.
+  baseUrl?: string;
   method: string;
   params: { [key: string]: string };
   body?: { [key: string]: unknown };
@@ -77,11 +81,30 @@ function getModelRelationships(modelName: string): { [key: string]: Relationship
   return relationships;
 }
 
-// Helper to build base URL from request
-function getBaseUrl(request: OrmRequest$): string {
+/**
+ * Build the absolute base URL that every advertised link hangs off — origin
+ * plus the prefix the ORM's routes are actually mounted at.
+ *
+ * The prefix is derived from the *request*, not from
+ * `config.orm.restServer.route`. Express sets `request.baseUrl` to the real
+ * mountpath registered by `RestServer.mountRoute`, which for this module is
+ * always `<prefix>/<pluralizedModel>` (see setup-rest-server.ts). Stripping the
+ * trailing model segment therefore yields the prefix by construction, and the
+ * link builder cannot drift from the mount registrar the way a second,
+ * independent normalisation of `route` would.
+ *
+ * When `request.baseUrl` is absent or does not end in the model segment the
+ * prefix is empty, which reproduces the previous origin-only behaviour.
+ */
+function getBaseUrl(request: OrmRequest$, pluralizedModel: string): string {
   const protocol = request.protocol || 'http';
   const host = request.get('host');
-  return `${protocol}://${host}`;
+
+  const modelSegment = `/${pluralizedModel}`;
+  const mountPath = request.baseUrl ?? '';
+  const prefix = mountPath.endsWith(modelSegment) ? mountPath.slice(0, -modelSegment.length) : '';
+
+  return `${protocol}://${host}${prefix}`;
 }
 
 function getId(params: { id?: string; [key: string]: unknown }): string | number {
@@ -278,7 +301,7 @@ export default class OrmRequest extends Request {
       if (accessFilter) recordsToReturn = recordsToReturn.filter(accessFilter as (record: OrmRecord) => boolean);
       if (queryFilterPredicate) recordsToReturn = recordsToReturn.filter(queryFilterPredicate as (record: OrmRecord) => boolean);
 
-      const baseUrl = getBaseUrl(request);
+      const baseUrl = getBaseUrl(request, pluralizedModel);
       const data = recordsToReturn.map(record => record.toJSON?.({ fields: modelFields, baseUrl }));
 
       return buildResponse(data, request.query?.include, recordsToReturn, {
@@ -294,7 +317,7 @@ export default class OrmRequest extends Request {
       const fieldsMap = parseFields(request.query);
       const modelFields = fieldsMap.get(pluralizedModel) || fieldsMap.get(model);
 
-      const baseUrl = getBaseUrl(request);
+      const baseUrl = getBaseUrl(request, pluralizedModel);
       return buildResponse(record.toJSON?.({ fields: modelFields, baseUrl }), request.query?.include, record, {
         links: { self: `${baseUrl}/${pluralizedModel}/${request.params.id}` },
         baseUrl
@@ -502,7 +525,7 @@ export default class OrmRequest extends Request {
         if (!record) return 404;
 
         const relatedData = record.__relationships[relationshipName];
-        const baseUrl = getBaseUrl(request);
+        const baseUrl = getBaseUrl(request, pluralizedModel);
 
         let data: unknown;
         if (info.isArray) {
@@ -526,7 +549,7 @@ export default class OrmRequest extends Request {
         if (!record) return 404;
 
         const relatedData = record.__relationships[relationshipName];
-        const baseUrl = getBaseUrl(request);
+        const baseUrl = getBaseUrl(request, pluralizedModel);
 
         let data: unknown;
         if (info.isArray) {
