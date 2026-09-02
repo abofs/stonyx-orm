@@ -16,6 +16,8 @@
 !package-lock.json
 !tsconfig.json
 !tsconfig.test.json
+# committed golden fixture for the #254 byte-identity gate
+!test/sample/links-golden.json
 *.log
 
 # npm auth (never commit tokens)

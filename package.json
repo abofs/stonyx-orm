@@ -40,7 +40,8 @@
   "scripts": {
     "build": "tsc",
     "build:test": "tsc -p tsconfig.test.json",
-    "test": "pnpm build && NODE_ENV=test node --import tsx/esm --import ./test/setup.ts node_modules/qunit/bin/qunit.js 'test/**/*-test.ts'",
+    "test": "pnpm build && NODE_ENV=test node --import tsx/esm --import ./test/setup.ts node_modules/qunit/bin/qunit.js 'test/**/*-test.ts' && ORM_TEST_ROUTE=/ pnpm test:mounted && ORM_TEST_ROUTE=/api pnpm test:mounted && ORM_TEST_ROUTE=api pnpm test:mounted && ORM_TEST_ROUTE=/api/v1 pnpm test:mounted && ORM_TEST_ROUTE=/api/ pnpm test:mounted",
+    "test:mounted": "node --import tsx/esm --import ./test/integration/mounted-route/setup.ts node_modules/qunit/bin/qunit.js 'test/integration/mounted-route/links-mounted.ts' 'test/zz-exit-test.ts'",
     "test:dynamodb": "pnpm build && node --import tsx/esm --import ./test/integration/dynamodb/setup.ts node_modules/qunit/bin/qunit.js 'test/integration/dynamodb/**/*-test.ts'",
     "prepublishOnly": "npm test"
   },
