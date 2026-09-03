@@ -263,11 +263,14 @@ module(`[Integration] Mounted-route JSON API links (ORM_TEST_ROUTE="${ROUTE}")`,
   // AC4 — default-route output is byte-identical
   // ==========================================================================
   module('AC4 — default-route byte identity', function() {
-    test('replaying the golden endpoint list at route "/" reproduces the fixture byte for byte', async function(assert) {
-      if (mount !== '') {
-        assert.ok(true, `AC4 applies only at route "/" — skipped for "${ROUTE}"`);
-        return;
-      }
+    // AC4 is meaningful on exactly one row of the matrix. The other four rows
+    // register it as a QUnit skip rather than short-circuiting into a padded
+    // `assert.ok(true)`, so each row's `# pass` / `# skip` counts report what
+    // actually ran instead of implying four extra byte-identity checks.
+    const ac4Test = ROUTE === '/' ? test : test.skip;
+
+    ac4Test('replaying the golden endpoint list at route "/" reproduces the fixture byte for byte', async function(assert) {
+      assert.strictEqual(mount, '', 'the default route mounts at the origin root, so the golden replay is at the right prefix');
 
       const captured = {};
 
@@ -282,6 +285,11 @@ module(`[Integration] Mounted-route JSON API links (ORM_TEST_ROUTE="${ROUTE}")`,
 
       const actual = `${JSON.stringify(captured, null, 2)}\n`;
 
+      // Regeneration hatch. This branch writes the artifact the assertions below
+      // guard, so it must never be reachable in CI: nothing in package.json,
+      // ci.yml or this harness sets GENERATE_LINKS_GOLDEN. Run it by hand only,
+      // and review the fixture diff — an exported value would let the
+      // byte-identity gate silently self-heal.
       if (process.env.GENERATE_LINKS_GOLDEN === '1') {
         await writeFile(GOLDEN_PATH, actual);
         assert.ok(true, `golden fixture regenerated: ${GOLDEN_PATH} (${Buffer.byteLength(actual)} bytes)`);
@@ -303,12 +311,11 @@ module(`[Integration] Mounted-route JSON API links (ORM_TEST_ROUTE="${ROUTE}")`,
   // AC5 — link builder and mount registrar cannot drift
   // ==========================================================================
   module('AC5 — builder and registrar cannot drift', function() {
-    test('route "/api/" — links match the probed mount, not a normalised guess', async function(assert) {
-      if (ROUTE !== '/api/') {
-        assert.ok(true, `AC5 applies only to ORM_TEST_ROUTE="/api/" — skipped for "${ROUTE}"`);
-        return;
-      }
+    // Same reasoning as AC4: registered for real only on the row it applies to,
+    // skipped rather than padded on the other four.
+    const ac5Test = ROUTE === '/api/' ? test : test.skip;
 
+    ac5Test('route "/api/" — links match the probed mount, not a normalised guess', async function(assert) {
       assert.ok(PROBE_CANDIDATES.includes(mount), `mount was discovered by probing, not declared: "${mount}"`);
 
       const response = await fetch(`${origin}${mount}/animals`);
