@@ -196,6 +196,36 @@ Auto-generated REST endpoints for each model with an access class:
 | GET | `/:models/:id/:relationship` | Related resource | Returns full related records (array for hasMany, single for belongsTo) |
 | GET | `/:models/:id/relationships/:relationship` | Relationship linkage | Returns JSON:API linkage objects with `links.self` and `links.related` |
 
+**Links.** Document, resource and relationship `links.self`/`links.related` are absolute URLs
+that carry the path the ORM's routes are actually mounted at, so they can be followed verbatim.
+
+The prefix is **not** a concatenation of the configured `ORM_REST_ROUTE` string. It is derived
+from the request. `@stonyx/rest-server` mounts each model at `<prefix>/<pluralizedModel>`;
+Express reports that matched mountpath back as `request.baseUrl`; `getBaseUrl`
+(`src/orm-request.ts`) strips the trailing `/<pluralizedModel>` segment to recover the prefix and
+prepends `{protocol}://{host}`. Reading the mount instead of re-normalising the config value is
+what keeps the link builder from drifting away from the route registrar (abofs/stonyx-orm#254).
+
+Because the prefix is the *mount* rather than the config string:
+
+- **The registrar's normalisation is included, and it is not a plain concatenation.**
+  `ORM_REST_ROUTE='api'` mounts at `/api` and advertises `http://host/api/animals` — the leading
+  slash is supplied by the registrar, so concatenating the raw config value would give you the
+  unfetchable `http://hostapi/animals`.
+- **At the default `ORM_REST_ROUTE='/'` the prefix is empty**, and links are
+  `{protocol}://{host}{path}` — e.g. `http://host/animals`.
+- **That normalisation is not total.** `ORM_REST_ROUTE='/api/'` mounts at `/api/` and advertises
+  `http://host/api//animals`; `ORM_REST_ROUTE=''` advertises `http://host//animals`. Both are
+  live URLs that return 200, because the link mirrors the real mount rather than guessing at a
+  tidier one — but whether a trailing-slash route should be accepted at all is open as
+  abofs/stonyx-orm#261.
+- **Do not prepend the mount yourself.** The published link already contains it; prepending
+  produces `/api/api/animals/1`.
+
+If `request.baseUrl` is absent (programmatic invocation) or does not end in the model segment,
+the prefix falls back to empty and links are origin-only. The second case is a silent fallback
+tracked as abofs/stonyx-orm#260.
+
 **Include parameter** supports comma-separated relationships and dot-notation nesting: `?include=owner.pets,traits`
 
 **Fields parameter** supports sparse fieldsets: `?fields[animals]=age,size`
@@ -272,7 +302,7 @@ Located in `config/environment.js`. All values overridable via environment varia
 | `ORM_TRANSFORM_PATH` | `'./transforms'` | Transforms directory |
 | `ORM_ACCESS_PATH` | `'./access'` | Access classes directory |
 | `ORM_USE_REST_SERVER` | `'true'` | Enable auto REST route generation |
-| `ORM_REST_ROUTE` | `'/'` | Base route for REST endpoints |
+| `ORM_REST_ROUTE` | `'/'` | Base route for REST endpoints. The resulting mount is included in every emitted `links.self`/`links.related` (see [API / Routes](#api--routes)) |
 | `MYSQL_HOST` | undefined | Enables MySQL mode when set |
 | `MYSQL_PORT` | `3306` | MySQL port |
 | `MYSQL_USER` | `'root'` | MySQL user |

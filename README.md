@@ -113,6 +113,12 @@ export default {
 };
 ```
 
+> **`route` and JSON:API `links`.** Generated endpoints are mounted under `route`, and every
+> `links.self` / `links.related` the ORM emits is an absolute URL that includes it. With
+> `ORM_REST_ROUTE='/api'` the animal collection is served at `/api/animals` and advertises
+> `http://host/api/animals`, so published links are followable as-is — do not prepend the
+> mount yourself.
+
 Then run the application via the Stonyx CLI, which auto-initializes all modules including the ORM:
 
 ```bash
@@ -321,6 +327,36 @@ export default class GlobalAccess {
   }
 }
 ```
+
+### Upgrading: behaviour changes
+
+**Advertised `links.self` / `links.related` now carry the REST mount route.**
+Consumer-visible for any deployment where `orm.restServer.route` is not the
+default `'/'`.
+
+Measured on this repo's mounted-route harness at `ORM_REST_ROUTE='/api'`, resource
+`links.self` in the response to `GET /api/animals/1`:
+
+| | published `links.self` | fetching that URL |
+|---|---|---|
+| before | `http://host/animals/1` | **404** |
+| after | `http://host/api/animals/1` | **200** |
+
+The ORM previously built links from the request origin alone, so at any non-default
+mount every URL it advertised pointed at a route that did not exist
+(abofs/stonyx-orm#254). Links are now built from the path the routes are actually
+mounted at, and are followable verbatim.
+
+**⚠️ Breaking if you carry a prepending workaround.** The usual workaround for #254
+was for the client to prepend the mount to every link the ORM published. That now
+double-prefixes: prepending `/api` to the new `http://host/api/animals/1` yields
+`http://host/api/api/animals/1`, measured **404**. Remove the prepending. There is no
+configuration flag that restores the old link shape.
+
+**Unaffected.** Deployments on the default `ORM_REST_ROUTE='/'` see byte-identical
+output — the prefix is empty, and this is pinned by a byte-identity test against a
+golden fixture captured *before* the fix. Response structure, field names and the
+public API are unchanged; only the URL value inside `links` changes.
 
 ### Include Parameter (Sideloading Relationships)
 

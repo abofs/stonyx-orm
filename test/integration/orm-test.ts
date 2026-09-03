@@ -1215,6 +1215,14 @@ module('[Integration] ORM', function(hooks) {
    * - Relationship `links.related` - URL to the related resource(s)
    */
   module('JSON API Links', function() {
+    // NOTE (#254): these assertions were `.includes(<path>)`, which passes
+    // identically whether the mount prefix is present, absent or wrong. They are
+    // now full-URL equality against `endpoint`, the origin the harness actually
+    // fetched. That is presence-and-shape coverage at the DEFAULT route only —
+    // this process always boots at route '/'. The coverage that bites, following
+    // the published URL at a NON-default mount, lives in
+    // test/integration/mounted-route/links-mounted.ts (`pnpm test:mounted`).
+
     // ==========================================
     // Top-level Links
     // ==========================================
@@ -1226,7 +1234,7 @@ module('[Integration] ORM', function(hooks) {
 
         assert.ok(json.links, 'response has links object');
         assert.ok(json.links.self, 'links has self property');
-        assert.ok(json.links.self.includes('/animals'), 'self link points to collection');
+        assert.strictEqual(json.links.self, `${endpoint}/animals`, 'self link is exactly the collection URL');
       });
 
       test('GET single resource response includes links.self', async function(assert) {
@@ -1235,7 +1243,7 @@ module('[Integration] ORM', function(hooks) {
 
         assert.ok(json.links, 'response has links object');
         assert.ok(json.links.self, 'links has self property');
-        assert.ok(json.links.self.includes('/animals/1'), 'self link points to resource');
+        assert.strictEqual(json.links.self, `${endpoint}/animals/1`, 'self link is exactly the resource URL');
       });
 
       test('GET related resource response includes links.self', async function(assert) {
@@ -1244,7 +1252,7 @@ module('[Integration] ORM', function(hooks) {
 
         assert.ok(json.links, 'response has links object');
         assert.ok(json.links.self, 'links has self property');
-        assert.ok(json.links.self.includes('/animals/1/owner'), 'self link points to related resource URL');
+        assert.strictEqual(json.links.self, `${endpoint}/animals/1/owner`, 'self link is exactly the related resource URL');
       });
 
       test('GET relationship linkage response includes links.self and links.related', async function(assert) {
@@ -1253,9 +1261,9 @@ module('[Integration] ORM', function(hooks) {
 
         assert.ok(json.links, 'response has links object');
         assert.ok(json.links.self, 'links has self property');
-        assert.ok(json.links.self.includes('/animals/1/relationships/owner'), 'self link points to relationship URL');
+        assert.strictEqual(json.links.self, `${endpoint}/animals/1/relationships/owner`, 'self link is exactly the relationship URL');
         assert.ok(json.links.related, 'links has related property');
-        assert.ok(json.links.related.includes('/animals/1/owner'), 'related link points to related resource URL');
+        assert.strictEqual(json.links.related, `${endpoint}/animals/1/owner`, 'related link is exactly the related resource URL');
       });
     });
 
@@ -1272,7 +1280,7 @@ module('[Integration] ORM', function(hooks) {
         const resource = data[0];
         assert.ok(resource.links, 'resource has links object');
         assert.ok(resource.links.self, 'resource has links.self');
-        assert.ok(resource.links.self.includes(`/animals/${resource.id}`), 'self link points to resource URL');
+        assert.strictEqual(resource.links.self, `${endpoint}/animals/${resource.id}`, 'self link is exactly the resource URL');
       });
 
       test('single resource response data includes links.self', async function(assert) {
@@ -1281,7 +1289,7 @@ module('[Integration] ORM', function(hooks) {
 
         assert.ok(data.links, 'resource has links object');
         assert.ok(data.links.self, 'resource has links.self');
-        assert.ok(data.links.self.includes('/animals/1'), 'self link points to resource URL');
+        assert.strictEqual(data.links.self, `${endpoint}/animals/1`, 'self link is exactly the resource URL');
       });
 
       test('included resources have links.self', async function(assert) {
@@ -1295,7 +1303,7 @@ module('[Integration] ORM', function(hooks) {
         assert.ok(owner, 'owner is included');
         assert.ok(owner.links, 'included resource has links object');
         assert.ok(owner.links.self, 'included resource has links.self');
-        assert.ok(owner.links.self.includes(`/owners/${owner.id}`), 'self link points to resource URL');
+        assert.strictEqual(owner.links.self, `${endpoint}/owners/${owner.id}`, 'self link is exactly the resource URL');
       });
     });
 
@@ -1314,9 +1322,9 @@ module('[Integration] ORM', function(hooks) {
         const ownerRel = data.relationships.owner;
         assert.ok(ownerRel.links, 'relationship has links object');
         assert.ok(ownerRel.links.self, 'relationship has links.self');
-        assert.ok(ownerRel.links.self.includes('/animals/1/relationships/owner'), 'self points to relationship URL');
+        assert.strictEqual(ownerRel.links.self, `${endpoint}/animals/1/relationships/owner`, 'self is exactly the relationship URL');
         assert.ok(ownerRel.links.related, 'relationship has links.related');
-        assert.ok(ownerRel.links.related.includes('/animals/1/owner'), 'related points to related resource URL');
+        assert.strictEqual(ownerRel.links.related, `${endpoint}/animals/1/owner`, 'related is exactly the related resource URL');
       });
 
       test('hasMany relationship includes links.self and links.related', async function(assert) {
@@ -1329,9 +1337,9 @@ module('[Integration] ORM', function(hooks) {
         const traitsRel = data.relationships.traits;
         assert.ok(traitsRel.links, 'relationship has links object');
         assert.ok(traitsRel.links.self, 'relationship has links.self');
-        assert.ok(traitsRel.links.self.includes('/animals/1/relationships/traits'), 'self points to relationship URL');
+        assert.strictEqual(traitsRel.links.self, `${endpoint}/animals/1/relationships/traits`, 'self is exactly the relationship URL');
         assert.ok(traitsRel.links.related, 'relationship has links.related');
-        assert.ok(traitsRel.links.related.includes('/animals/1/traits'), 'related points to related resource URL');
+        assert.strictEqual(traitsRel.links.related, `${endpoint}/animals/1/traits`, 'related is exactly the related resource URL');
       });
 
       test('owner hasMany pets relationship includes proper links', async function(assert) {
@@ -1344,9 +1352,9 @@ module('[Integration] ORM', function(hooks) {
         const petsRel = data.relationships.pets;
         assert.ok(petsRel.links, 'relationship has links object');
         assert.ok(petsRel.links.self, 'relationship has links.self');
-        assert.ok(petsRel.links.self.includes('/owners/bob/relationships/pets'), 'self points to relationship URL');
+        assert.strictEqual(petsRel.links.self, `${endpoint}/owners/bob/relationships/pets`, 'self is exactly the relationship URL');
         assert.ok(petsRel.links.related, 'relationship has links.related');
-        assert.ok(petsRel.links.related.includes('/owners/bob/pets'), 'related points to related resource URL');
+        assert.strictEqual(petsRel.links.related, `${endpoint}/owners/bob/pets`, 'related is exactly the related resource URL');
       });
 
       test('trait belongsTo category relationship includes proper links', async function(assert) {
@@ -1359,9 +1367,9 @@ module('[Integration] ORM', function(hooks) {
         const categoryRel = data.relationships.category;
         assert.ok(categoryRel.links, 'relationship has links object');
         assert.ok(categoryRel.links.self, 'relationship has links.self');
-        assert.ok(categoryRel.links.self.includes('/traits/1/relationships/category'), 'self points to relationship URL');
+        assert.strictEqual(categoryRel.links.self, `${endpoint}/traits/1/relationships/category`, 'self is exactly the relationship URL');
         assert.ok(categoryRel.links.related, 'relationship has links.related');
-        assert.ok(categoryRel.links.related.includes('/traits/1/category'), 'related points to related resource URL');
+        assert.strictEqual(categoryRel.links.related, `${endpoint}/traits/1/category`, 'related is exactly the related resource URL');
       });
     });
 
