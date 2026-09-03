@@ -115,13 +115,14 @@ module(`[Integration] Mounted-route JSON API links (ORM_TEST_ROUTE="${ROUTE}")`,
   // ==========================================================================
   module('AC1 — advertised links are followable', function() {
     test('all 10 link values from the 6 emission sites return 200 and identify the claimed resource', async function(assert) {
-      // --- collection response: sites 1 (orm-request:285), 5 (record:168), 6 (record:152-153)
+      // --- collection response: sites 1 (orm-request.ts getCollectionHandler),
+      //     5 (record.ts toJSON resource links), 6 (record.ts toJSON relationship links)
       const collectionUrl = `${origin}${mount}/animals`;
       const collectionResponse = await fetch(collectionUrl);
       assert.equal(collectionResponse.status, 200, `collection route reachable at ${collectionUrl}`);
       const collection = await collectionResponse.json();
 
-      // (1) document links.self (collection) — orm-request.ts:285
+      // (1) document links.self (collection) — orm-request.ts getCollectionHandler
       const doc1 = await follow(assert, collection.links.self, '(1) document links.self (collection)');
       assert.ok(Array.isArray(doc1?.data), '(1) followed URL returns a collection');
       assert.strictEqual(doc1?.links?.self, collection.links.self, '(1) fixed point: refetched document republishes the same self link');
@@ -131,37 +132,39 @@ module(`[Integration] Mounted-route JSON API links (ORM_TEST_ROUTE="${ROUTE}")`,
       const resource = collection.data.find(r => r?.relationships?.owner?.data?.id);
       assert.ok(resource, 'collection contains a resource with an owner linkage');
 
-      // (2) resource links.self inside a collection — record.ts:168
+      // (2) resource links.self inside a collection — record.ts toJSON, resource links
       const doc2 = await follow(assert, resource.links.self, '(2) resource links.self (in collection)');
       assert.strictEqual(doc2?.data?.type, resource.type, '(2) followed URL returns the claimed type');
       assert.strictEqual(String(doc2?.data?.id), String(resource.id), '(2) followed URL returns the claimed id');
 
       const relationship = resource.relationships.owner;
 
-      // (3) relationship links.self inside a collection — record.ts:152
+      // (3) relationship links.self inside a collection — record.ts toJSON, relationship links.self
       const doc3 = await follow(assert, relationship.links.self, '(3) relationship links.self (in collection)');
       assert.strictEqual(doc3?.links?.self, relationship.links.self, '(3) fixed point on the linkage route');
 
-      // (4) relationship links.related inside a collection — record.ts:153
+      // (4) relationship links.related inside a collection — record.ts toJSON, relationship links.related
       const doc4 = await follow(assert, relationship.links.related, '(4) relationship links.related (in collection)');
       assert.strictEqual(doc4?.links?.self, relationship.links.related, '(4) related route republishes the URL as its self link');
 
-      // --- single resource: sites 2 (orm-request:299) and 5 (record:168)
+      // --- single resource: sites 2 (orm-request.ts getSingleHandler) and
+      //     5 (record.ts toJSON resource links)
       const singleResponse = await fetch(`${origin}${mount}/animals/1`);
       assert.equal(singleResponse.status, 200, 'single resource route reachable');
       const single = await singleResponse.json();
 
-      // (5) document links.self (single) — orm-request.ts:299
+      // (5) document links.self (single) — orm-request.ts getSingleHandler
       const doc5 = await follow(assert, single.links.self, '(5) document links.self (single)');
       assert.strictEqual(doc5?.links?.self, single.links.self, '(5) fixed point');
       assert.strictEqual(String(doc5?.data?.id), '1', '(5) followed URL returns animal 1');
 
-      // (6) resource links.self (single) — record.ts:168
+      // (6) resource links.self (single) — record.ts toJSON, resource links
       const doc6 = await follow(assert, single.data.links.self, '(6) resource links.self (single)');
       assert.strictEqual(doc6?.data?.type, 'animal', '(6) followed URL returns the claimed type');
       assert.strictEqual(String(doc6?.data?.id), '1', '(6) followed URL returns the claimed id');
 
-      // (7) included resource links.self — orm-request.ts:116 -> record.ts:168
+      // (7) included resource links.self — orm-request.ts buildResponse (included mapping)
+      //     -> record.ts toJSON, resource links
       // Animal 2 (owner michael), not animal 1: test/sample/access/global-access.ts
       // denies /owners/angela, and animal 1's owner is angela.
       const includeResponse = await fetch(`${origin}${mount}/animals/2?include=owner`);
@@ -174,7 +177,8 @@ module(`[Integration] Mounted-route JSON API links (ORM_TEST_ROUTE="${ROUTE}")`,
       assert.strictEqual(doc7?.data?.type, 'owner', '(7) followed URL returns the claimed type');
       assert.strictEqual(String(doc7?.data?.id), String(includedOwner.id), '(7) followed URL returns the claimed id');
 
-      // (8) document links.self (related route) — orm-request.ts:518
+      // (8) document links.self (related route) — orm-request.ts _generateRelationshipRoutes,
+      //     related-resource route GET /:id/{relationship}
       const relatedResponse = await fetch(`${origin}${mount}/animals/1/owner`);
       assert.equal(relatedResponse.status, 200, 'related route reachable');
       const related = await relatedResponse.json();
@@ -182,7 +186,8 @@ module(`[Integration] Mounted-route JSON API links (ORM_TEST_ROUTE="${ROUTE}")`,
       const doc8 = await follow(assert, related.links.self, '(8) document links.self (related route)');
       assert.strictEqual(doc8?.links?.self, related.links.self, '(8) fixed point');
 
-      // (9)(10) linkage route — orm-request.ts:549-550
+      // (9)(10) linkage route — orm-request.ts _generateRelationshipRoutes,
+      //         linkage route GET /:id/relationships/{relationship}
       const linkageResponse = await fetch(`${origin}${mount}/animals/1/relationships/owner`);
       assert.equal(linkageResponse.status, 200, 'linkage route reachable');
       const linkage = await linkageResponse.json();
