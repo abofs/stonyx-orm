@@ -138,12 +138,20 @@ module('[Integration] README access() sample (#265)', function(hooks) {
       ['/owners/%61ngela', 'percent-encoded first character of the id'],
     ];
 
-    /** Collection-level spellings must answer, but must not carry the record. */
+    /**
+     * Collection-level spellings must answer, but must not carry the record.
+     * The expected id list is spelled out per case rather than asserted as
+     * "angela is absent": absence alone is satisfied by an empty or errored
+     * response, and `filter[age]=36` legitimately produces an empty collection
+     * because angela is the only 36-year-old. Naming the survivors makes the
+     * empty case a measurement instead of a loophole.
+     */
     const FILTERED = [
-      ['/owners?filter[age]=36', 'query string that selects the protected record'],
-      ['/owners?x=1', 'arbitrary query string'],
-      ['/owners/', 'trailing slash on the collection'],
-      ['/OWNERS', 'upper-case mount segment'],
+      ['/owners?filter[age]=36', 'query string that selects the protected record', []],
+      ['/owners?filter[age]=34', 'query string that selects an unprotected record', ['gina']],
+      ['/owners?x=1', 'arbitrary query string', ['bob', 'gina', 'michael']],
+      ['/owners/', 'trailing slash on the collection', ['bob', 'gina', 'michael']],
+      ['/OWNERS', 'upper-case mount segment', ['bob', 'gina', 'michael']],
     ];
 
     for (const [spelling, why] of DENIED) {
@@ -154,19 +162,19 @@ module('[Integration] README access() sample (#265)', function(hooks) {
       });
     }
 
-    for (const [spelling, why] of FILTERED) {
+    for (const [spelling, why, expected] of FILTERED) {
       test(`GET ${spelling} (${why}) does not carry the protected record`, async function(assert) {
         const response = await fetch(`${origin}${spelling}`);
 
         assert.equal(response.status, 200, `GET ${spelling} -> 200`);
 
         const { data } = await response.json();
-        const ids = data.map(record => record.id);
+        assert.ok(Array.isArray(data), `GET ${spelling} returns a JSON:API collection document`);
 
-        // Control: assert the collection is non-empty, so "absent" cannot be
-        // satisfied by an empty or errored response.
-        assert.ok(ids.length > 0, `GET ${spelling} returns a non-empty collection — got [${ids}]`);
-        assert.notOk(ids.includes(PROTECTED), `GET ${spelling} omits "${PROTECTED}" — got [${ids}]`);
+        const ids = data.map(record => record.id).sort();
+
+        assert.deepEqual(ids, expected, `GET ${spelling} returns exactly [${expected}] — got [${ids}]`);
+        assert.notOk(ids.includes(PROTECTED), `GET ${spelling} omits "${PROTECTED}"`);
       });
     }
   });

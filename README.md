@@ -318,15 +318,47 @@ await setupRestServer('/', './access');
 Access classes define models and provide custom filtering/authorization logic:
 
 ```js
-export default class GlobalAccess {
-  models = ['owner', 'animal'];
+export default class OwnerAccess {
+  models = ['owner'];
 
   access(request) {
-    if (request.url.endsWith('/owner/angela')) return false;
+    // `access` runs after route matching, so `request.params` is populated and
+    // `id` has already been URL-decoded. Authorize on it.
+    const { id } = request.params;
+
+    // Returning false explicitly denies access to this record
+    if (id === 'angela') return false;
+
+    // No `id` means the collection route. Returning a function plugs it in to
+    // the response object as a filter
+    if (id === undefined) return record => record.id !== 'angela';
+
+    // Returning a list of operations allows full access to everything else
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
+
+**Do not authorize on the request URL.** `request.url` is rewritten relative to
+the mount point, so inside the REST server it is `/angela`, not `/owners/angela`
+— a suffix comparison against it never matches and the request falls through to
+whatever the method returns next. `request.originalUrl` keeps the full path but
+is still the raw text the client sent, so it varies with query strings
+(`/owners?x=1`), trailing slashes (`/owners/angela/`), casing (`/OwNeRs/angela`,
+which Express routes to the same handler) and percent-encoding
+(`/owners/%61ngela`). Each of those is a plain address-bar request, and each one
+slips past a URL predicate. `request.params.id` is identical for all of them.
+
+**One access class per model when the rules are model-specific.** `access()`
+receives only the request, and the request does not carry the model name in any
+form that is safe to match on — `request.baseUrl` is the mount text as the
+client spelled it (`/OWNERS`), not the model. A class may still list several
+models in `models` when they share one rule.
+
+The sample above is executed verbatim against a live server by
+`test/integration/readme-access/`, which reads it out of this file: the request
+`DELETE /owners/angela` is asserted to return 403 with the record intact, along
+with each of the spellings named above.
 
 ### Upgrading: behaviour changes
 
