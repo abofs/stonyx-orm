@@ -16,6 +16,11 @@ function isAccessSample(code) {
   return /\bmodels\s*=/.test(code) && /\baccess\s*\(/.test(code);
 }
 
+/** Every access() sample in a markdown document, in document order. */
+export function findAccessSamples(markdown) {
+  return [...markdown.matchAll(FENCE)].map(m => m[1]).filter(isAccessSample);
+}
+
 /**
  * @returns {Promise<{ code: string, path: string }>} the single access() sample
  *   in README.md. Throws if there is not exactly one — a second one would be a
@@ -23,7 +28,7 @@ function isAccessSample(code) {
  */
 export async function extractReadmeAccessSample(path = './README.md') {
   const markdown = await readFile(path, 'utf8');
-  const matches = [...markdown.matchAll(FENCE)].map(m => m[1]).filter(isAccessSample);
+  const matches = findAccessSamples(markdown);
 
   if (matches.length !== 1) {
     throw new Error(

@@ -1,77 +1,100 @@
 // @ts-nocheck
 /**
- * abofs/stonyx-orm#265 — the shipped README access() sample fails open.
+ * Every access() sample that reaches a consumer — abofs/stonyx-orm#265.
  *
- * The README sample and the tested sample in test/sample/access/ are two
- * populations that diverged and that nothing asserted agreed. This file exists
- * to make them one population and to measure the result through the public REST
- * surface rather than by eyeballing an identifier.
+ * The behavioural measurement of the README sample lives in
+ * test/integration/readme-access/, which boots a server on those exact bytes.
+ * This file covers the two things that measurement cannot see:
  *
- * Filename note: this file DOES match the main suite glob (test/**\/*-test.ts)
- * on purpose. The access classes the live server loads are the ones under
- * test/sample/access, and byte-identity with the README fence is what makes a
- * fetch against this server a measurement of the documented sample.
+ *  1. The population. `test/sample/` is not in the tarball and `README.md` is,
+ *    so the file set is enumerated from `npm pack --dry-run` rather than from a
+ *    grep of the working tree — a sample added to a second packed document
+ *    would otherwise ship unmeasured, which is exactly how this shipped.
  *
- * Scaffold commit: stubs only. Every acceptance criterion has a stub below.
+ *  2. The contract. `access()` takes one argument on this line; the four-argument
+ *     form is abofs/stonyx-orm#202's and stays reverted. A sample documenting it
+ *     would not run.
  */
 import QUnit from 'qunit';
+import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
+import { findAccessSamples } from './readme-access/extract-sample.ts';
 
 const { module, test } = QUnit;
 
-module('[Integration] README access() sample (#265)', function() {
-  module('AC-1: the documented sample is what the server runs', function() {
-    test('TODO: the README access sample is byte-identical to the access class the test server loads', function(assert) {
-      assert.ok(true, 'TODO');
-    });
+const execFileAsync = promisify(execFile);
 
-    test('TODO: no packed file still documents a URL-string access predicate', function(assert) {
-      assert.ok(true, 'TODO');
-    });
+/** Properties that carry the client's raw URL text. None is safe to authorize on. */
+const URL_PROPERTIES = /\b(?:request|req)\.(?:url|originalUrl|baseUrl|path)\b/;
+
+/** Files npm would put in the tarball, straight from npm's own enumeration. */
+async function packedFiles() {
+  const { stdout } = await execFileAsync('npm', ['pack', '--dry-run', '--json'], {
+    cwd: process.cwd(),
+    maxBuffer: 32 * 1024 * 1024,
   });
 
-  module('AC-2: the protected record is protected (outcome, not identifier)', function() {
-    test('TODO: GET /owners/angela returns 403', function(assert) {
-      assert.ok(true, 'TODO');
-    });
+  return JSON.parse(stdout)[0].files.map(file => file.path);
+}
 
-    test('TODO: DELETE /owners/angela returns 403 and the record survives', function(assert) {
-      assert.ok(true, 'TODO');
-    });
+module('[Docs] packed access() samples (#265)', function(hooks) {
+  let packed;
+  let samples;
+
+  hooks.before(async function() {
+    packed = await packedFiles();
+
+    // Collect every access() sample from every packed markdown document.
+    samples = [];
+
+    for (const path of packed.filter(file => file.endsWith('.md'))) {
+      const markdown = await readFile(path, 'utf8');
+      for (const code of findAccessSamples(markdown)) samples.push({ path, code });
+    }
   });
 
-  module('AC-3: the seven measured bypass spellings', function() {
-    test('TODO: ?filter[age]=36 does not leak angela from the collection', function(assert) {
-      assert.ok(true, 'TODO');
-    });
-
-    test('TODO: ?x=1 does not leak angela from the collection', function(assert) {
-      assert.ok(true, 'TODO');
-    });
-
-    test('TODO: /owners/ (trailing slash) does not leak angela from the collection', function(assert) {
-      assert.ok(true, 'TODO');
-    });
-
-    test('TODO: /OWNERS (upper case mount) does not leak angela from the collection', function(assert) {
-      assert.ok(true, 'TODO');
-    });
-
-    test('TODO: /OwNeRs/angela (mixed case mount) returns 403', function(assert) {
-      assert.ok(true, 'TODO');
-    });
-
-    test('TODO: /owners/angela/ (trailing slash on the record) returns 403', function(assert) {
-      assert.ok(true, 'TODO');
-    });
-
-    test('TODO: /owners/%61ngela (percent-encoded id) returns 403', function(assert) {
-      assert.ok(true, 'TODO');
-    });
+  test('the packed file set is what it claims to be', function(assert) {
+    // Guards the checks below against passing vacuously on an empty enumeration.
+    assert.ok(packed.length > 0, `npm pack enumerated ${packed.length} files`);
+    assert.ok(packed.includes('README.md'), 'README.md is packed — consumers read it');
+    assert.notOk(
+      packed.some(file => file.startsWith('test/')),
+      'nothing under test/ is packed — test/sample/ cannot serve as consumer documentation'
+    );
   });
 
-  module('AC-4: scope — the one-argument access() contract is unchanged', function() {
-    test('TODO: the documented sample declares access(request) with exactly one parameter', function(assert) {
-      assert.ok(true, 'TODO');
-    });
+  test('at least one access() sample is packed', function(assert) {
+    // The two assertions below are satisfied by an empty sample list; this is
+    // the control that says there was something to check.
+    assert.ok(samples.length > 0, `found ${samples.length} packed access() sample(s)`);
+  });
+
+  test('no packed access() sample authorizes on a request URL', function(assert) {
+    for (const { path, code } of samples) {
+      const offending = code.split('\n').filter(line => URL_PROPERTIES.test(line));
+
+      assert.deepEqual(
+        offending,
+        [],
+        `${path}: sample must not read a URL property — request.url is mount-relative and originalUrl is raw client text`
+      );
+    }
+  });
+
+  test('every packed access() sample declares the one-argument contract', function(assert) {
+    for (const { path, code } of samples) {
+      const signature = code.match(/\baccess\s*\(([^)]*)\)/);
+
+      assert.ok(signature, `${path}: sample declares an access() method`);
+
+      const parameters = signature[1].split(',').map(part => part.trim()).filter(Boolean);
+
+      assert.deepEqual(
+        parameters.length,
+        1,
+        `${path}: access() takes exactly one argument — got (${signature[1]})`
+      );
+    }
   });
 });
