@@ -1,7 +1,7 @@
 // @ts-nocheck
 import QUnit from 'qunit';
 import { spawnSync } from 'child_process';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { LINK_MARKER, RESOLVE_MARKER } from '../helpers/link-marker-loader.mjs';
@@ -23,15 +23,18 @@ const PROBE = './test/helpers/probe-module-link.mjs';
 // so `code === SENTINEL_CODE` means the specifier is statically reachable from
 // `target`; anything else means linking completed and only evaluation failed.
 function linkUnderAbsentPeer(target: string) {
+  const url = pathToFileURL(path.join(repoRoot, target)).href;
   const result = spawnSync(
     process.execPath,
-    ['--import', REGISTER, PROBE, pathToFileURL(path.join(repoRoot, target)).href],
+    ['--import', REGISTER, '--import', MARKERS, PROBE, url],
     { cwd: repoRoot, encoding: 'utf8' }
   );
 
   const line = (result.stdout || '').trim().split('\n').filter(Boolean).pop();
   if (!line) throw new Error(`probe produced no output for ${target}: ${result.stderr}`);
-  return JSON.parse(line);
+  // The markers go to stderr (see test/helpers/link-marker-loader.mjs); the
+  // probe's JSON verdict goes to stdout. They never collide.
+  return { ...JSON.parse(line), url, markers: (result.stderr || '').split('\n') };
 }
 
 // Every runtime module a consumer can reach through the published `exports`
@@ -148,6 +151,15 @@ function collectBinTargets() {
 //     Red:
 //       "AC1 — every published `bin` entry point links with the optional peer
 //        absent", naming the command and its target.
+//  4. Publish an `exports` subpath whose target is a DIRECTORY, e.g.
+//     `"./probe-hole": { "default": "./dist/dynamodb/" }` or `"./dist/"`.
+//     Red:
+//       "AC1 — every published `exports` subpath links with the optional peer
+//        absent", on the is-a-file and LINK_MARKER assertions. Before those two
+//        assertions existed both shapes ran 7 pass / 0 fail at 956be7d2 — the
+//        subpath was declared, published and never linked by anything.
+//     (`"./dist"`, with no trailing slash, was already red before them, on
+//      "AC1 — the subpath enumeration is complete and non-vacuous".)
 module('[Unit] Lazy rest-server import (#280)', function() {
   test('AC1 — every published `exports` subpath links with the optional peer absent', function(assert) {
     const { targets } = collectExportTargets();
@@ -155,10 +167,41 @@ module('[Unit] Lazy rest-server import (#280)', function() {
     for (const { subpath, condition, target } of targets) {
       const where = `${subpath} (${condition}) -> ${target}`;
 
-      assert.ok(existsSync(path.join(repoRoot, target)), `${where} is built`);
+      // A FILE, not merely a path that exists — the same requirement the `bin`
+      // loop below makes, for the same measured reason: `existsSync` is true for
+      // a DIRECTORY, and this loop used to accept one.
+      assert.ok(
+        statSync(path.join(repoRoot, target), { throwIfNoEntry: false })?.isFile() === true,
+        `${where} is built (the target is an existing file)`
+      );
 
       const probe = linkUnderAbsentPeer(target);
 
+      // NON-VACUITY, ASSERTED POSITIVELY — the same closer the `bin` loop uses,
+      // reusing the same hook rather than duplicating it. The sentinel check
+      // below only says the child did not object; on its own it is satisfied by
+      // a child that linked NOTHING. Measured at 956be7d2, each of these shapes
+      // ran 7 pass / 0 fail with the declared target never linked:
+      //   - `{ "default": "./dist/dynamodb/" }` and `{ "default": "./dist/" }` —
+      //     `existsSync` passes on a directory, the child dies with
+      //     ERR_UNSUPPORTED_DIR_IMPORT, and that code !== SENTINEL_CODE, so the
+      //     assertion below passed by default.
+      // LINK_MARKER comes from the child and names the EXACT declared target, so
+      // no absence can satisfy it: it is emitted only after Node resolved that
+      // url to a real module and read its source, which is the phase
+      // immediately before Node resolves that module's own static imports — the
+      // phase in which an absent optional peer throws.
+      assert.ok(
+        probe.markers.includes(`${LINK_MARKER}${probe.url}`),
+        `${where} was loaded as a module by the child, so the check below is not vacuous`
+      );
+
+      // RESOLVE_MARKER is deliberately NOT required here, unlike in the `bin`
+      // loop. Measured: dist/hooks.js emits none, because it declares no static
+      // imports at all — and a module with no static imports cannot statically
+      // reach the peer, so the check below is trivially satisfied for it rather
+      // than vacuously. Requiring it would red the UNMODIFIED package on
+      // './hooks'; that was measured too, before this assertion was written.
       assert.notStrictEqual(
         probe.code,
         SENTINEL_CODE,
