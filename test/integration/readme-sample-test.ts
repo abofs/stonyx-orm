@@ -25,6 +25,29 @@ const { module, test } = QUnit;
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * The models README's access() samples declare, and which
+ * test/integration/readme-access probes byte-for-byte.
+ *
+ * This replaces the "throw unless there is exactly ONE sample" tripwire that
+ * `extractReadmeAccessSamples` used to carry. That tripwire was removed for a
+ * good reason — forbidding a second sample is not the same as covering one, and
+ * it blocked the numeric-id sample that closes half of #265 — but it did
+ * accidentally provide a property nothing replaced. Measured: appending a third
+ * README sample that grants everything unconditionally for a model no probe
+ * touches gives `test:readme` 33/33 and this guard 6/6, all green, with the
+ * sample extracted and BOOTED (generated/readme-access-2.js).
+ *
+ * Both static checks below are satisfied by such a sample: it names no URL
+ * property and it takes one argument. "Boot every sample" is only coverage for
+ * models something asserts on.
+ *
+ * So this pins the SET, not the count. A new sample is allowed — it just has to
+ * arrive with a probe, or with a deliberate edit to this line. Additive-safe,
+ * and it does not reinstate the ban.
+ */
+const PROBED_README_MODELS = ['animal', 'owner'];
+
 /** Properties that carry the client's raw URL text. None is safe to authorize on. */
 const URL_PROPERTIES = /\b(?:request|req)\.(?:url|originalUrl|baseUrl|path)\b/;
 
@@ -162,6 +185,49 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
 
     assert.ok(byPopulation.packed > 0, `found ${byPopulation.packed} packed access() sample(s)`);
     assert.ok(byPopulation.repo > 0, `found ${byPopulation.repo} repo-only access() sample(s)`);
+  });
+
+  test('the README samples declare exactly the models the harness probes', function(assert) {
+    const readmeSamples = samples.filter(sample => sample.path === 'README.md');
+
+    // Non-vacuity: an empty list satisfies the deepEqual below only if the
+    // manifest is empty too, but say it out loud rather than relying on that.
+    assert.ok(readmeSamples.length > 0, `found ${readmeSamples.length} README access() sample(s)`);
+
+    const declared = [];
+
+    for (const { code } of readmeSamples) {
+      const match = code.match(/\bmodels\s*=\s*\[([^\]]*)\]/);
+
+      assert.ok(match, 'every README sample declares a models array');
+
+      for (const entry of (match?.[1] ?? '').split(',')) {
+        const name = entry.trim().replace(/^['"`]|['"`]$/g, '');
+
+        if (name) declared.push(name);
+      }
+    }
+
+    assert.deepEqual(
+      [...declared].sort(),
+      [...PROBED_README_MODELS].sort(),
+      `README's samples declare [${[...declared].sort()}]; the harness probes [${[...PROBED_README_MODELS].sort()}]. ` +
+      'A sample for an unprobed model is booted and never measured — add a probe in ' +
+      'test/integration/readme-access/readme-sample.ts, then add the model to PROBED_README_MODELS.'
+    );
+
+    // Duplicate models are a distinct failure with the same symptom. Two samples
+    // claiming one model throw in src/setup-rest-server.ts:34 — but line 39
+    // catches it and downgrades it to log.error, so the second class is silently
+    // dropped and every class registered before the throw stays mounted. Ordered
+    // after the good one it is 33/33 green; ordered before it, 14 fail. The
+    // static layer has to own this, because the behavioural layer is
+    // order-dependent.
+    assert.equal(
+      new Set(declared).size,
+      declared.length,
+      `no two README samples declare the same model — got [${declared}]; a duplicate registration is swallowed into a log.error and the later sample never mounts`
+    );
   });
 
   test('no reachable access() sample authorizes on a request URL', function(assert) {
