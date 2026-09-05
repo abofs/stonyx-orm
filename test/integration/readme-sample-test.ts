@@ -20,6 +20,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { findAccessSamples } from '../helpers/readme-sample-helper.js';
+import { pluralize } from '@stonyx/utils/string';
 
 const { module, test } = QUnit;
 
@@ -45,8 +46,72 @@ const execFileAsync = promisify(execFile);
  * So this pins the SET, not the count. A new sample is allowed — it just has to
  * arrive with a probe, or with a deliberate edit to this line. Additive-safe,
  * and it does not reinstate the ban.
+ *
+ * ONE-DIRECTIONAL, AND NOW IT IS NOT. As first written this was a hardcoded
+ * literal and nothing verified the harness still probed it, so it caught
+ * "sample added without a probe" and was blind to "probe removed while the
+ * sample stays" — the direction that quietly re-opens #265's numeric-id half.
+ * Measured: emptying the ALIASES loop in the probe source deletes all eleven
+ * numeric-id probes, and `test:readme` goes 33 -> 22 while this guard stays 7/7,
+ * both green at exit 0. Coverage drops by a third in silence. That is #262's
+ * class one step over: not a silent skip, a silent deletion.
+ *
+ * The close is below — the probe source is read and the same set is DERIVED
+ * from the request targets it actually sends, so the manifest, the README and
+ * the harness must agree three ways rather than two.
  */
 const PROBED_README_MODELS = ['animal', 'owner'];
+
+/** The harness whose probes this file pins. Read as text; it runs in another process. */
+const PROBE_SOURCE = 'test/integration/readme-access/readme-sample.ts';
+
+/**
+ * How many request targets the harness sends per model.
+ *
+ * Set equality alone does not close the deletion direction: emptying the
+ * ALIASES loop removes eleven probes while `/animals/8`, `/animals/007` and the
+ * rest survive elsewhere in the file, so the derived SET is still
+ * [animal, owner] and nothing notices. The count is what notices.
+ *
+ * These are occurrence counts of `/<plural>` request targets in PROBE_SOURCE
+ * with comments stripped, so prose that merely mentions a route does not
+ * inflate them. They are a floor on coverage, not a description of it — a
+ * deliberate edit is the point. If you delete a probe on purpose, change the
+ * number in the same commit and the diff will say what you gave up.
+ */
+const PROBED_TARGET_COUNTS = { animal: 20, owner: 11 };
+
+/**
+ * Request targets the harness sends, per model, read out of PROBE_SOURCE.
+ *
+ * Comments are stripped first: `// GET /animals/7 used to 200` is documentation,
+ * not a probe, and counting it would let a real probe be deleted and replaced by
+ * a sentence about it. A route segment is attributed to a model only when
+ * `pluralize(model)` matches it — the same function src/plural-registry.ts uses
+ * to build the routes, rather than a naive `+ 's'` that would silently drop any
+ * model with an irregular plural.
+ */
+function probedTargetCounts(source, models) {
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map(line => line.replace(/(^|\s)\/\/.*$/, ''))
+    .join('\n');
+
+  const routeToModel = new Map(models.map(model => [`/${pluralize(model)}`, model]));
+  const counts = {};
+  const TARGET = /(?:['"`]|\$\{origin\})(\/[a-z][a-z0-9-]*)(?:\/[^'"`\s]*)?/g;
+
+  let match;
+
+  while ((match = TARGET.exec(code))) {
+    const model = routeToModel.get(match[1]);
+
+    if (model) counts[model] = (counts[model] ?? 0) + 1;
+  }
+
+  return counts;
+}
 
 /** Properties that carry the client's raw URL text. None is safe to authorize on. */
 const URL_PROPERTIES = /\b(?:request|req)\.(?:url|originalUrl|baseUrl|path)\b/;
@@ -138,10 +203,12 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
   let packed;
   let tracked;
   let samples;
+  let probeSource;
 
   hooks.before(async function() {
     packed = await packedFiles();
     tracked = await trackedMarkdown();
+    probeSource = await readFile(PROBE_SOURCE, 'utf8');
 
     // Collect every access() sample from every markdown document a reader can
     // reach — the tarball a consumer installs, and the repo they browse.
@@ -228,6 +295,41 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
       declared.length,
       `no two README samples declare the same model — got [${declared}]; a duplicate registration is swallowed into a log.error and the later sample never mounts`
     );
+  });
+
+  test('the harness still probes what the pin says it probes', function(assert) {
+    // The other direction. The assertion above pins README's samples to a
+    // manifest; this pins the manifest to the harness, so the two cannot drift
+    // apart in either direction. Without it the manifest is a restatement, and
+    // a restatement cannot notice the thing it restates being deleted.
+    const counts = probedTargetCounts(probeSource, PROBED_README_MODELS);
+
+    assert.deepEqual(
+      Object.keys(counts).sort(),
+      [...PROBED_README_MODELS].sort(),
+      `${PROBE_SOURCE} sends request targets for [${Object.keys(counts).sort()}]; ` +
+      `PROBED_README_MODELS names [${[...PROBED_README_MODELS].sort()}]. ` +
+      'A model in the pin with no probe left is a sample that boots and is never measured.'
+    );
+
+    // Set equality is not enough on its own — deleting the eleven numeric-id
+    // aliases leaves other /animals/ targets standing, so the set is unchanged
+    // and only the count moves. This is the assertion that fails when coverage
+    // is deleted rather than renamed.
+    for (const model of PROBED_README_MODELS) {
+      const expected = PROBED_TARGET_COUNTS[model];
+
+      assert.ok(
+        typeof expected === 'number',
+        `PROBED_TARGET_COUNTS has no entry for '${model}' — add one rather than letting the model go uncounted`
+      );
+
+      assert.ok(
+        (counts[model] ?? 0) >= expected,
+        `${PROBE_SOURCE} sends ${counts[model] ?? 0} '${pluralize(model)}' request target(s); the pin requires at least ${expected}. ` +
+        'Probes were deleted. If that was deliberate, lower PROBED_TARGET_COUNTS in the same commit so the diff says what coverage was given up.'
+      );
+    }
   });
 
   test('no reachable access() sample authorizes on a request URL', function(assert) {
