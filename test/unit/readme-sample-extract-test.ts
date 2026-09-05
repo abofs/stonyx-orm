@@ -3,11 +3,27 @@
  * Tamper tests for the anti-recurrence extractor — abofs/stonyx-orm#265.
  *
  * The extractor in test/helpers/readme-sample-helper.ts is the sole input to
- * three separate guards: "no packed access() sample authorizes on a request
- * URL", "every packed access() sample declares the one-argument contract", and
- * the "exactly one sample" tripwire that decides which bytes the behavioural
- * harness boots. A sample the extractor cannot see is a sample all three guards
- * silently approve.
+ * three separate guards. Quoted from the code, not from memory:
+ *
+ *  - "no reachable access() sample authorizes on a request URL"
+ *    (test/integration/readme-sample-test.ts)
+ *  - "every reachable access() sample declares the one-argument contract"
+ *    (same file)
+ *  - the per-sample file generation in test/integration/readme-access/setup.ts,
+ *    which decides which bytes the behavioural harness boots.
+ *
+ * The first two titles say REACHABLE, not "packed", and the difference is not
+ * wording: the population those two run over is the tarball's markdown UNION
+ * every tracked .md, which is how docs/usage-patterns.md got covered.
+ *
+ * There is no "exactly one sample" tripwire any more. extractReadmeAccessSamples
+ * returns every sample and throws only on zero — the case pinned by the last
+ * test in this file, 'a README with no access() sample throws instead of passing
+ * vacuously'. The count pin that replaced it lives in readme-sample-test.ts as
+ * PROBED_README_MODELS, not here.
+ *
+ * A sample the extractor cannot see is a sample all three guards silently
+ * approve.
  *
  * The tamper this file pins is the ADDITIVE one. Relabelling the existing
  * sample's fence fails closed (the extractor throws "found 0"), so the obvious

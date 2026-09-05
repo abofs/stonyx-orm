@@ -26,6 +26,24 @@
  * indented code block is scanned even though CommonMark would call it literal
  * text. The first is a hole; the second is deliberate over-scanning.
  *
+ * A SECOND hole is FENCE PAIRING, and it is the cost of the current indent
+ * rule rather than a leftover from an earlier one. Because FENCE_LINE accepts
+ * any leading whitespace, a bare fence indented four or more spaces — CommonMark
+ * would call that an indented code block, i.e. literal text — is read as a
+ * CLOSER, and the parity of every fence pairing after it flips. Measured with
+ * one document: a ```markdown block whose body shows a 4-space-indented bare
+ * fence, then a four-argument `request.url` sample in an UNLABELLED fence. The
+ * sample is SEEN at 1c0dade (` {0,3}`) — 1 sample — and INVISIBLE at 5ebc40a
+ * (`[ \t]*`) — 0 samples. Appended to README.md it takes
+ * test/integration/readme-sample-test.ts to 8 pass / 0 fail at exit 0 with
+ * README.md shipping it. The exposure is confined to UNLABELLED fences: the same
+ * sample under a ```js info string is seen at both heads, because an info string
+ * cannot be read as a closer.
+ *
+ * That is the argument against a fifth widening, not for one. The fourth
+ * widening closed the reported indentation columns and opened this on the
+ * neighbouring axis; a fifth would be the same trade. #279 is the terminus.
+ *
  * The axis this DOES close is indentation, and only after two corrections:
  * column 0 only, then ` {0,3}`, now any leading whitespace. See FENCE_LINE.
  * Each correction was a spelling; none of them was the class. The class is

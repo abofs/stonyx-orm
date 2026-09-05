@@ -1,6 +1,32 @@
 // @ts-nocheck
 /**
- * Every access() sample that reaches a consumer — abofs/stonyx-orm#265.
+ * Every access() sample the fence scanner can see, in every document that
+ * reaches a consumer — abofs/stonyx-orm#265.
+ *
+ * SCOPE, STATED HONESTLY, BECAUSE THE FIRST CLAUSE USED TO READ "every access()
+ * sample that reaches a consumer" AND THAT IS NOT WHAT THIS MEASURES. The
+ * population below is an APPROXIMATION of the code blocks a consumer copies. It
+ * is whatever test/helpers/readme-sample-helper.ts enumerates, and that helper
+ * matches FENCE_LINE against one line at a time with no block context — it is
+ * not a CommonMark parser. Two holes are measured and open at this commit:
+ *
+ *  - A blockquote-prefixed fence (`> ```js`) renders as highlighted JS on
+ *    GitHub — measured against POST /markdown — and is invisible here. A
+ *    fail-open sample written that way passes every assertion in this file.
+ *  - A bare fence indented four or more spaces is read as a CLOSER, which flips
+ *    fence pairing for the rest of the document. Reproduced at this head: a
+ *    ```markdown block whose body shows a 4-space-indented bare fence, followed
+ *    by a four-argument `request.url` sample in an UNLABELLED fence — 1 sample
+ *    seen at 1c0dade, 0 seen at 5ebc40a, and with that sample appended to
+ *    README.md this file is 8 pass / 0 fail at exit 0 while README.md ships it.
+ *    A LABELLED (```js) sample after the same flip is still seen at both heads,
+ *    so the exposure is confined to unlabelled fences.
+ *
+ * Both are latent — zero such constructs exist in the 18 tracked markdown files
+ * today — and both belong to abofs/stonyx-orm#279, whose terminus is reconciling
+ * this enumeration against a real CommonMark parser rather than widening the
+ * regex a fifth time. Until #279 lands, read every green result here as "no
+ * fail-open sample in the spellings this scanner reaches", not as "none".
  *
  * The behavioural measurement of the README sample lives in
  * test/integration/readme-access/, which boots a server on those exact bytes.
@@ -56,9 +82,14 @@ const execFileAsync = promisify(execFile);
  * both green at exit 0. Coverage drops by a third in silence. That is #262's
  * class one step over: not a silent skip, a silent deletion.
  *
- * The close is below — the probe source is read and the same set is DERIVED
- * from the request targets it actually sends, so the manifest, the README and
- * the harness must agree three ways rather than two.
+ * The close is below, and it reaches less far than "the request targets it
+ * actually sends". The probe source is read as TEXT, and the set is derived from
+ * the request-target LITERALS in that text. Against a mutation that removes the
+ * literals — emptying the ALIASES array — the manifest, the README and the
+ * harness must agree three ways rather than two, and this file reds. Against a
+ * mutation that detaches the probes while leaving the literals standing, it does
+ * not. See probedTargetCounts below for that measurement, and #279 for the
+ * follow-up.
  */
 const PROBED_README_MODELS = ['animal', 'owner'];
 
@@ -82,14 +113,38 @@ const PROBE_SOURCE = 'test/integration/readme-access/readme-sample.ts';
 const PROBED_TARGET_COUNTS = { animal: 20, owner: 11 };
 
 /**
- * Request targets the harness sends, per model, read out of PROBE_SOURCE.
+ * Request-target LITERALS present in PROBE_SOURCE, per model.
  *
- * Comments are stripped first: `// GET /animals/7 used to 200` is documentation,
- * not a probe, and counting it would let a real probe be deleted and replaced by
- * a sentence about it. A route segment is attributed to a model only when
- * `pluralize(model)` matches it — the same function src/plural-registry.ts uses
- * to build the routes, rather than a naive `+ 's'` that would silently drop any
- * model with an irregular plural.
+ * This counts SOURCE TEXT. It does not count requests the harness sends, and the
+ * two come apart. Comments are stripped first: `// GET /animals/7 used to 200`
+ * is documentation, not a probe, and counting it would let a real probe be
+ * deleted and replaced by a sentence about it.
+ *
+ * WHAT IT DOES NOT SEE. A literal that no longer reaches the network still
+ * counts. Measured at this head: replacing the alias loop's iterable with `[]`
+ * while keeping the array alive above it (`const RETIRED = ALIASES;`) deletes
+ * all eleven numeric-id probes — `test:readme` goes 33 -> 22 — and this file
+ * stays 8 pass / 0 fail at exit 0. The control says the check is not vacuous:
+ * emptying the ALIASES array itself, which takes the literals with it, reds it
+ * at 7 pass / 1 fail, rc=1, on `the harness still probes what the pin says it
+ * probes`. So the floor closes deletion-by-removal and leaves
+ * deletion-by-detachment open. Not fixed here — the cheap close is to stop
+ * measuring a proxy (assert the readme suite's own test count, or have the
+ * harness write its probe list out and read that); tracked on #279.
+ *
+ * WHICH pluralize THIS IS. `@stonyx/utils/string`'s, which is NOT the function
+ * that builds the routes. Routes come from `getPluralName()`
+ * (src/plural-registry.ts), which prefers a model's static `pluralName` and
+ * otherwise calls src/utils.ts's dasherize-aware wrapper. Measured divergence on
+ * `access-link`: the base function returns `access-link` unchanged, while
+ * src/utils.ts's wrapper and `getPluralName` both return `access-links`; with
+ * `pluralName = 'magic-links'` registered, `getPluralName` returns
+ * `magic-links` and the base function still returns `access-link`. Both models
+ * pinned here — `animal`, `owner` — are single-segment with no override, so the
+ * two agree today and these counts are correct. A dasherized or overridden model
+ * added to PROBED_README_MODELS would match no route segment and be counted
+ * zero. test/unit/model-plural-name-test.ts:3 imports the route-building pair;
+ * this file does not, and that is a latent gap rather than a current miscount.
  */
 function probedTargetCounts(source, models) {
   const code = source
@@ -299,23 +354,26 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
 
   test('the harness still probes what the pin says it probes', function(assert) {
     // The other direction. The assertion above pins README's samples to a
-    // manifest; this pins the manifest to the harness, so the two cannot drift
-    // apart in either direction. Without it the manifest is a restatement, and
-    // a restatement cannot notice the thing it restates being deleted.
+    // manifest; this pins the manifest to the harness's SOURCE TEXT, so the two
+    // cannot drift apart in either direction. Without it the manifest is a
+    // restatement, and a restatement cannot notice the thing it restates being
+    // deleted. Text, not traffic — see probedTargetCounts for what that misses.
     const counts = probedTargetCounts(probeSource, PROBED_README_MODELS);
 
     assert.deepEqual(
       Object.keys(counts).sort(),
       [...PROBED_README_MODELS].sort(),
-      `${PROBE_SOURCE} sends request targets for [${Object.keys(counts).sort()}]; ` +
+      `${PROBE_SOURCE} carries request-target literals for [${Object.keys(counts).sort()}]; ` +
       `PROBED_README_MODELS names [${[...PROBED_README_MODELS].sort()}]. ` +
       'A model in the pin with no probe left is a sample that boots and is never measured.'
     );
 
     // Set equality is not enough on its own — deleting the eleven numeric-id
     // aliases leaves other /animals/ targets standing, so the set is unchanged
-    // and only the count moves. This is the assertion that fails when coverage
-    // is deleted rather than renamed.
+    // and only the count moves. This is the assertion that fails when the alias
+    // LITERALS are deleted rather than renamed. It does not fire when the
+    // literals stay and the loop that sends them is detached; that gap is
+    // measured in probedTargetCounts's docblock and tracked on #279.
     for (const model of PROBED_README_MODELS) {
       const expected = PROBED_TARGET_COUNTS[model];
 
@@ -326,8 +384,8 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
 
       assert.ok(
         (counts[model] ?? 0) >= expected,
-        `${PROBE_SOURCE} sends ${counts[model] ?? 0} '${pluralize(model)}' request target(s); the pin requires at least ${expected}. ` +
-        'Probes were deleted. If that was deliberate, lower PROBED_TARGET_COUNTS in the same commit so the diff says what coverage was given up.'
+        `${PROBE_SOURCE} carries ${counts[model] ?? 0} '${pluralize(model)}' request-target literal(s); the pin requires at least ${expected}. ` +
+        'Probe literals were deleted. If that was deliberate, lower PROBED_TARGET_COUNTS in the same commit so the diff says what coverage was given up.'
       );
     }
   });
