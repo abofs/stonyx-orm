@@ -38,7 +38,7 @@ A lightweight ORM for the Stonyx framework that provides structured data modelin
 | Test Mocking | Sinon | ^21.0.0 | Stubs and spies |
 | Package Manager | pnpm | N/A | Local `file:` references for sibling packages |
 
-### Optional peers must never be reachable from the entry graph
+### Optional peers must never be reachable from a published entry graph
 
 `@stonyx/rest-server`, `mysql2`, `pg` and the `@aws-sdk/*` DynamoDB clients are
 declared `optional` in `peerDependenciesMeta`. A plain default `pnpm install`
@@ -46,16 +46,51 @@ therefore does **not** install them, and an ORM-only consumer legitimately has
 none of them on disk.
 
 Node links an ES module's entire *static* import graph before evaluating any of
-it. So a single `import x from '<optional-peer>'` anywhere reachable from
-`dist/index.js` makes `import('@stonyx/orm')` throw `ERR_MODULE_NOT_FOUND`
-before one line of ORM code runs -- `optional: true` and an unconditional static
-import cannot both be true. Every optional dependency is loaded instead with
-`const { default: X } = await import(...)` inside the runtime guard that decides
-whether it is needed (see `Orm.init()` in `src/main.ts`).
+it. So a single `import x from '<optional-peer>'` anywhere reachable from a
+published entry point makes importing that entry point throw
+`ERR_MODULE_NOT_FOUND` before one line of ORM code runs — `optional: true` and
+an unconditional static import cannot both be true.
+
+**Where each peer is actually isolated.** There is no single house form; these
+are the four in the tree, each read off `dist/`:
+
+| Peer | Isolated in | Form |
+|---|---|---|
+| `pg` | `src/postgres/connection.ts:22` | `const { default: pg } = await import('pg')` |
+| `mysql2` | `src/mysql/connection.ts:20` | `const mysql = await import('mysql2/promise')` |
+| `@aws-sdk/*` | `src/dynamodb/connection.ts:29,32` | `const { DynamoDBClient } = await import('@aws-sdk/client-dynamodb' as string)` |
+| `@aws-sdk/*` | `src/dynamodb/dynamodb-db.ts:87,103` | `return import('@aws-sdk/lib-dynamodb' as string)` |
+| `@stonyx/rest-server` | `src/main.ts`, in `Orm.init()` | `const { default: setupRestServer } = await import('./setup-rest-server.js')` |
+
+`Orm.init()` itself names **no optional-peer specifier at all**. Every
+`await import()` in it is relative — `./timescale/timescale-db.js`,
+`./postgres/postgres-db.js`, `./mysql/mysql-db.js`, `./dynamodb/dynamodb-db.js`,
+`./setup-rest-server.js` — and only the last is load-bearing for peer
+resolution, because `setup-rest-server.js` is the only module reachable from it
+that names an optional peer through a *static* import. The SQL/DynamoDB driver
+modules name their peers only inside `await import()` (or not at all), so making
+those four driver imports lazy is not what keeps `pg`/`mysql2`/`@aws-sdk` off
+the entry graph; the rows above are.
+
+**The inverse is not a rule to apply blindly.** `src/orm-request.ts:1` and
+`src/meta-request.ts:1` import `{ Request }` from `@stonyx/rest-server` at
+module scope, and that is correct — they `extend Request`, and an `extends`
+base class cannot come out of an `await`. Those two are allowed to name the
+peer statically precisely because nothing on a published entry graph reaches
+them except through the guarded dynamic import in `Orm.init()`. Do not
+"fix" them.
 
 This is enforced by `test/unit/lazy-rest-server-import-test.ts`, which links
-`dist/index.js` in a child process with the peer made to resolve as absent. See
-stonyx-orm#200 and #280.
+**every** runtime target in the `package.json` `exports` map, plus `bin`, in a
+child process with the peer made to resolve as absent. The subpath list is
+derived from the manifest rather than written out in the test, so a subpath
+added later is covered by default. See stonyx-orm#200 and #280.
+
+The consumer-facing half of this — how to configure an ORM-only app so it never
+tries to load `@stonyx/rest-server` — lives in
+[README.md](../README.md#optional-peer-dependencies), because `files` is
+`["dist","src","config","README.md"]` and this file does not ship in the
+tarball.
 
 ## Architecture
 

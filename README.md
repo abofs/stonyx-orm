@@ -40,6 +40,12 @@ All properties prefixed with `__` (`__data`, `__relationships`, `__model`, `__se
 npm install @stonyx/orm
 ````
 
+That is the whole install for an ORM-only app. The database drivers and
+`@stonyx/rest-server` are **optional peer dependencies**: a default install does
+not put them on disk, and none of them is loaded unless your configuration asks
+for it. Add only the ones you actually use — see
+[Optional peer dependencies](#optional-peer-dependencies).
+
 ## Usage example
 
 This module is part of the **Stonyx framework**. To use it, first configure the `restServer` key in your `environment.js` file:
@@ -106,7 +112,9 @@ export default {
       tablePrefix: DYNAMODB_TABLE_PREFIX,   // optional table name prefix
     } : undefined,
     restServer: {
-      enabled: ORM_USE_REST_SERVER ?? 'true',
+      // 'true' requires @stonyx/rest-server to be installed — see
+      // "Optional peer dependencies" below.
+      enabled: ORM_USE_REST_SERVER ?? 'false',
       route: ORM_REST_ROUTE ?? '/'
     }
   }
@@ -126,6 +134,46 @@ stonyx serve
 ```
 
 For further framework instructions, see the [Stonyx repository](https://github.com/abofs/stonyx).
+
+## Optional peer dependencies
+
+`@stonyx/orm` boots with **none** of its optional peers installed. Each one is
+imported lazily, and only when your configuration selects it:
+
+| Configuration | Package you must install |
+|---|---|
+| `orm.restServer.enabled: 'true'` | `@stonyx/rest-server` |
+| `orm.postgres` or `orm.timescale` | `pg` |
+| `orm.mysql` | `mysql2` |
+| `orm.dynamodb` | `@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb` |
+
+If a configuration key selects one that is not on disk, the failure surfaces
+from `Orm.init()` while the framework boots:
+
+```
+Cannot find package '@stonyx/rest-server' imported from .../@stonyx/orm/dist/orm-request.js
+```
+
+**ORM-only, no REST server.** This is the shape the `environment.js` above is
+written for: keep `orm.restServer.enabled` at `'false'` and install nothing
+beyond `@stonyx/orm`. Models, relationships, serializers, transforms and hooks
+work unchanged; only the generated REST routes are absent.
+
+> **The module's own default is the other way round.** The `config/environment.js`
+> that ships inside `@stonyx/orm` defaults `restServer.enabled` to `'true'`, so
+> an app that omits the `restServer` key *entirely* gets REST switched on and
+> needs `@stonyx/rest-server` installed. Set the key explicitly, whichever way
+> you want it.
+
+**Turning REST on.**
+
+```bash
+npm install @stonyx/rest-server
+ORM_USE_REST_SERVER=true stonyx serve
+```
+
+See [REST Server Integration](#rest-server-integration) for access classes and
+route configuration.
 
 ## Models
 
@@ -916,7 +964,9 @@ test('validation hook rejects negative age', async () => {
 
 ## Project Structure
 
-For a full architectural reference, see [project-structure.md](project-structure.md).
+For a full architectural reference, see
+[docs/project-structure.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/project-structure.md).
+That file is repo-only — it is not in the published tarball, so the link is absolute.
 
 ## License
 
