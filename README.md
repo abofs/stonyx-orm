@@ -322,19 +322,17 @@ export default class OwnerAccess {
   models = ['owner'];
 
   access(request) {
-    // `access` runs after route matching, so `request.params` is populated and
-    // `id` has already been URL-decoded. Authorize on it, never on a URL.
-    const { id } = request.params;
-
-    // `id` is still raw client text. Normalise it the way the record lookup
-    // does, or your predicate and the lookup disagree — see "Numeric ids" below.
-    // No radix on parseInt: that is deliberate, and it must stay that way.
-    const recordId = id === undefined ? undefined : (isNaN(id) ? id : parseInt(id));
+    // `request.recordId` is the id the ORM resolves the record by. The ORM
+    // computes it before `access()` runs, from `request.params.id`, using the
+    // same function the record lookup uses — so your predicate and the lookup
+    // cannot disagree. Authorize on it, never on a URL and never on raw
+    // `params.id`.
+    const { recordId } = request;
 
     // Returning false explicitly denies access to this record
     if (recordId === 'angela') return false;
 
-    // No `id` means the collection route. Returning a function plugs it in to
+    // No `recordId` means the collection route. Returning a function plugs it in to
     // the response object as a filter. NOTE: a function return authorizes the
     // request outright — the operations list below is not consulted — so this
     // branch permits POST /owners as well as reads.
@@ -367,31 +365,43 @@ unrecognised spelling falls through to whatever your method returns next, so
 prefer one class per model. A class may still list several models in `models`
 when they share one rule.
 
-**Numeric ids: normalise before you compare.** `request.params.id` is raw text
-from the client. When it looks numeric the ORM coerces it — `isNaN(id) ? id :
-parseInt(id)` — *before* it resolves the record, so `7`, `007`, `7.0`, `7.9`,
-`7e0`, `0x7`, `+7`, `%207` (a leading space), `%097` (a tab) and `7%0A` (a
-trailing newline) all address record `7`, while a `===` against the raw text
-matches only the one spelling you wrote down. Every other spelling falls through
-to whatever your method returns next — which, in the shape above, is a full CRUD
-grant. All of them are plain address-bar requests.
+**Numeric ids: authorize on `request.recordId`, not on `request.params.id`.**
+`params.id` is raw text from the client. When it looks numeric the ORM coerces
+it *before* it resolves the record, so `7`, `007`, `7.0`, `7.9`, `7e0`, `0x7`,
+`+7`, `%207` (a leading space), `%097` (a tab) and `7%0A` (a trailing newline)
+all address record `7`, while a `===` against the raw text matches only the one
+spelling you wrote down. Every other spelling would fall through to whatever
+your method returns next — which, in the shape above, is a full CRUD grant. All
+of them are plain address-bar requests.
 
-Two details are load-bearing. `parseInt` is called with **no radix**, so `0x7`
-is `7` and not `0`; writing `parseInt(id, 10)` in your predicate re-opens the
-hex spelling. And the coercion applies only when the id looks numeric, so a
-model with string ids (like `owner` above) is unaffected — which is exactly why
-this is easy to miss. Normalise the same way the lookup does:
+**The ORM does that normalisation for you and hands you the result.** `access()`
+is called with `request.recordId` already set to the value the record will be
+resolved by, so there is no arithmetic to copy into your predicate and nothing
+to keep in sync — abofs/stonyx-orm#270. It is `undefined` on collection routes,
+which is how you tell a collection request from a record request. `params.id` is
+left untouched, so anything that needs the raw client text still has it.
+
+The same function is exported for the places `access()` does not reach — hooks,
+custom handlers, your own lookups:
+
+```javascript
+import { normalizeRecordId } from '@stonyx/orm';
+
+normalizeRecordId('0x7'); // 7 — the same value the ORM resolves by
+```
+
+Do not re-implement it. A hand-written copy is correct only for as long as it
+happens to match, and nothing holds the two together.
 
 ```javascript
 export default class AnimalAccess {
   models = ['animal'];
 
   access(request) {
-    const { id } = request.params;
-
-    // Agrees with the lookup for every spelling of 7 above. Compare the
-    // coerced value, which for a numeric-id model is a number, not a string.
-    const recordId = id === undefined ? undefined : (isNaN(id) ? id : parseInt(id));
+    // Already normalised by the ORM, and it agrees with the lookup for every
+    // spelling of 7 above. For a numeric-id model it is a NUMBER, not a
+    // string, so compare it against a number.
+    const { recordId } = request;
 
     if (recordId === 7) return false;
 

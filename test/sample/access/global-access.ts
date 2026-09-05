@@ -6,11 +6,16 @@ export default class GlobalAccess {
 
   // Custom logic here
   access(request) {
-    // `access` runs after route matching, so `params` is populated and `id` has
-    // already been URL-decoded. Never match on request.url (mount-relative) or
-    // request.originalUrl (raw client text: query strings, trailing slashes,
-    // casing and percent-encoding all move it) — see abofs/stonyx-orm#265.
-    const { id } = request.params;
+    // `request.recordId` is the id the ORM resolves the record by. The ORM
+    // computes it before access() runs, from the URL-decoded `params.id`, using
+    // the same function the lookup uses — so this predicate cannot disagree
+    // with the record it is authorizing (abofs/stonyx-orm#270). There is no id
+    // arithmetic to hand-copy here, which is the point.
+    //
+    // Never match on request.url (mount-relative) or request.originalUrl (raw
+    // client text: query strings, trailing slashes, casing and percent-encoding
+    // all move it) — see abofs/stonyx-orm#265.
+    const { recordId } = request;
 
     // The matched route pattern, not the URL the client typed
     const route = request.route?.path;
@@ -23,7 +28,7 @@ export default class GlobalAccess {
 
     if (model === 'owners') {
       // Returning false explicitly denies access
-      if (isRecord && id === 'angela') return false;
+      if (isRecord && recordId === 'angela') return false;
 
       // Intentional Gap: This logic does not block access to angela's animals if called individually by id
 

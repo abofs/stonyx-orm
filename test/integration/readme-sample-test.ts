@@ -172,6 +172,55 @@ function probedTargetCounts(source, models) {
 const URL_PROPERTIES = /\b(?:request|req)\.(?:url|originalUrl|baseUrl|path)\b/;
 
 /**
+ * An id-coercion expression — abofs/stonyx-orm#270.
+ *
+ * A documented `access()` sample must contain NO id arithmetic. Before #270 the
+ * samples hand-copied `isNaN(id) ? id : parseInt(id)` out of the framework's
+ * module-private `getId()`, and were correct only for as long as they happened
+ * to match it character for character. Nothing held them together: changing the
+ * README's arithmetic reddened a test, while changing the framework's left 961
+ * assertions green with a protected record disclosed and destroyed.
+ *
+ * The remedy is that there is nothing to copy — `access()` is handed
+ * `request.recordId`, already normalised — so the rule is that the arithmetic
+ * must not reappear, in either direction.
+ *
+ * Paired with MENTIONS_ID so that arithmetic on something OTHER than an id
+ * (a page size, an age filter) is not swept up. Both must match on one line.
+ */
+const ID_COERCION = /\b(?:parseInt|parseFloat|Number|isNaN)\s*\(/;
+const MENTIONS_ID = /\bid\b|Id\b/i;
+
+/**
+ * Every remaining id-coercion site in the repo, with the reason it is still
+ * there. AC-5 of #270: one implementation, and any site not on this list is a
+ * new hand-copy.
+ *
+ * The three persistence-path entries are NOT approved duplicates — they are the
+ * same divergence one layer over, and they already differ from the normaliser
+ * by omitting its `if (!id) return ''` guard. They were split out of #270
+ * deliberately: they sit on the persistence path rather than the authorization
+ * path, and two of them cannot be verified without a live MySQL/Postgres, so
+ * folding them into a priority-critical security fix would have put unverifiable
+ * adapter edits inside it. Tracked as #282; delete the entry when #282 lands.
+ */
+const KNOWN_COERCION_SITES = {
+  // The one implementation. Everything else delegates to it.
+  'src/normalize-record-id.ts': 'the canonical normaliser (#270)',
+
+  // Split out of #270 — the create-response and SQL-persist paths.
+  'src/orm-request.ts': 'create-response path duplicate — split out of #270, tracked as #282',
+  'src/postgres/postgres-db.ts': 'persist path duplicate — split out of #270, tracked as #282',
+  'src/mysql/mysql-db.ts': 'persist path duplicate — split out of #270, tracked as #282',
+
+  // Not a copy of the normaliser and not on any request path: the standalone
+  // JSON db matches a row by EITHER spelling (`r.id === id || r.id ===
+  // Number(id)`) rather than resolving one canonical key, and it is reached
+  // through the `./standalone-db` export with no request involved.
+  'src/standalone-db.ts': 'standalone JSON db dual-match, not a resolution normaliser',
+};
+
+/**
  * Strip comments before applying URL_PROPERTIES.
  *
  * The rule is about what a sample AUTHORIZES on, not about which words appear
@@ -433,6 +482,131 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
       1,
       'an actual request.url predicate is still caught'
     );
+  });
+
+  test('AC-4 (#270) — no reachable access() sample contains id arithmetic', function(assert) {
+    for (const { path, code, population } of samples) {
+      const offending = stripComments(code)
+        .split('\n')
+        .filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line));
+
+      assert.deepEqual(
+        offending,
+        [],
+        `${path} (${population}): sample must not normalise an id itself — access() is handed request.recordId, already resolved (#270)`
+      );
+    }
+  });
+
+  test('AC-4 (#270) — control: the id-arithmetic rule fires on a real hand-copy and not on prose about one', function(assert) {
+    // Same two-sided shape the URL rule carries. Without the first half the
+    // guard would ban the sentence explaining the fix; without the second it
+    // could be silently satisfied by a sample that still coerces.
+    const withCaution = [
+      "export default class OwnerAccess {",
+      "  models = ['owner'];",
+      "  access(request) {",
+      "    // Do NOT write isNaN(id) ? id : parseInt(id) here — the ORM already did it.",
+      "    const { recordId } = request;",
+      "    return recordId === 'angela' ? false : ['read'];",
+      "  }",
+      "}",
+    ].join('\n');
+
+    assert.deepEqual(
+      stripComments(withCaution).split('\n').filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line)),
+      [],
+      'a commented caution naming parseInt does not trip the guard'
+    );
+
+    const coercing = withCaution.replace(
+      "const { recordId } = request;",
+      "const recordId = isNaN(request.params.id) ? request.params.id : parseInt(request.params.id);"
+    );
+
+    assert.equal(
+      stripComments(coercing).split('\n').filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line)).length,
+      1,
+      'an actual hand-copied normalisation IS caught'
+    );
+
+    // And the shape that would slip past a parseInt-only rule.
+    const numberForm = withCaution.replace(
+      "const { recordId } = request;",
+      "const recordId = Number(request.params.id);"
+    );
+
+    assert.equal(
+      stripComments(numberForm).split('\n').filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line)).length,
+      1,
+      'a Number()-spelled normalisation is caught too'
+    );
+
+    // Non-vacuity in the other direction: arithmetic that is NOT about an id
+    // must not be swept up, or the rule becomes a ban on arithmetic.
+    const unrelated = withCaution.replace(
+      "const { recordId } = request;",
+      "const pageSize = parseInt(request.query.limit);"
+    );
+
+    assert.deepEqual(
+      stripComments(unrelated).split('\n').filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line)),
+      [],
+      'coercion of something that is not an id does not trip the guard'
+    );
+  });
+
+  test('AC-5 (#270) — one normaliser: no id-coercion expression outside the known sites', async function(assert) {
+    // Run as an assertion rather than by hand, because a grep somebody
+    // remembers to run is not a guard. Enumerated from git's index for the same
+    // reason the packed set comes from npm's: a directory walk sees files git
+    // does not, and misses the question being asked.
+    const { stdout } = await execFileAsync('git', ['ls-files', '-z', '--', 'src', 'README.md', 'docs', 'test/sample'], {
+      cwd: process.cwd(),
+      maxBuffer: 32 * 1024 * 1024,
+    });
+
+    const files = stdout.split('\0').filter(Boolean);
+
+    // Non-vacuity: an empty or failed enumeration satisfies every assertion below.
+    assert.ok(files.length > 10, `git enumerated ${files.length} file(s) in the scanned set`);
+    assert.ok(files.includes('src/normalize-record-id.ts'), 'the canonical normaliser is in the scanned set');
+    assert.ok(files.includes('README.md'), 'README.md is in the scanned set');
+    assert.ok(files.includes('test/sample/access/global-access.ts'), 'the reference access sample is in the scanned set');
+
+    const found = [];
+
+    for (const path of files) {
+      const contents = await readFile(path, 'utf8');
+      const lines = stripComments(contents).split('\n');
+
+      lines.forEach((line, index) => {
+        if (ID_COERCION.test(line) && MENTIONS_ID.test(line)) found.push({ path, line: index + 1, text: line.trim() });
+      });
+    }
+
+    // Control: the scanner must be able to SEE the one site we know exists,
+    // or a zero result means nothing.
+    assert.ok(
+      found.some(hit => hit.path === 'src/normalize-record-id.ts'),
+      `the scanner found the canonical normaliser itself — ${found.length} site(s) total`
+    );
+
+    const unexpected = found
+      .filter(hit => !(hit.path in KNOWN_COERCION_SITES))
+      .map(hit => `${hit.path}:${hit.line}  ${hit.text}`);
+
+    assert.deepEqual(
+      unexpected,
+      [],
+      'every id-coercion expression is either the canonical normaliser or a site explicitly split out of #270 (see #282) — a new one here is a new hand-copy'
+    );
+
+    // And the list does not rot: an entry whose file no longer coerces should
+    // be deleted in the same commit that stops it coercing.
+    const stale = Object.keys(KNOWN_COERCION_SITES).filter(path => !found.some(hit => hit.path === path));
+
+    assert.deepEqual(stale, [], 'no stale entries in KNOWN_COERCION_SITES — delete an entry when its site is fixed');
   });
 
   test('every reachable access() sample declares the one-argument contract', function(assert) {
