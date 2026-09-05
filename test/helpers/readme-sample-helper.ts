@@ -7,15 +7,30 @@
  * asserts anything about the documented sample reads it through here, so the
  * bytes under test are the bytes a consumer copies.
  *
- * The scanner is deliberately tag-INDEPENDENT. The first version matched only
- * ```js, which is README.md's minority tag (12 opening fences, against 19
- * ```javascript — counted block-wise; a line-wise count of fence lines double-
- * counts every block's closer as an unlabelled opener), and a fail-open sample
- * added under any other tag was invisible to all three guards that read through
- * this file. A guard that can only see the defect
- * spelled one way is not a guard, so this recognises every fence and decides
- * what is a sample by the code's SHAPE (see isAccessSample) rather than by the
- * label an author happened to type.
+ * The scanner is tag-INDEPENDENT. The first version matched only ```js, which
+ * is README.md's minority tag (12 opening fences, against 19 ```javascript —
+ * counted block-wise; a line-wise count of fence lines double-counts every
+ * block's closer as an unlabelled opener), and a fail-open sample added under
+ * any other tag was invisible to all three guards that read through this file.
+ * A guard that can only see the defect spelled one way is not a guard, so the
+ * info string is discarded and what counts as a sample is decided from the
+ * code's SHAPE (see isAccessSample) rather than from the label an author typed.
+ *
+ * WHAT THIS DOES NOT DO. Tag-independent is not parser-equivalent. This
+ * recognises a fence by matching FENCE_LINE against one line at a time, so what
+ * it enumerates is "lines that look like fences", not "the fenced code blocks a
+ * CommonMark parser finds". It has no block context: it does not know it is
+ * inside a list, a blockquote, or an HTML block. Concretely, at this commit a
+ * blockquote-prefixed fence (`> ```js`) renders as highlighted JS on GitHub —
+ * measured against POST /markdown — and is invisible here, and a fence inside an
+ * indented code block is scanned even though CommonMark would call it literal
+ * text. The first is a hole; the second is deliberate over-scanning.
+ *
+ * The axis this DOES close is indentation, and only after two corrections:
+ * column 0 only, then ` {0,3}`, now any leading whitespace. See FENCE_LINE.
+ * Each correction was a spelling; none of them was the class. The class is
+ * closed by reconciling this enumeration against a real CommonMark parser and
+ * failing loudly on any divergence — abofs/stonyx-orm#279.
  *
  * Scanned line-by-line rather than by regex: a permissive one-regex form
  * mis-pairs the closing fence of a non-sample block with the opening fence of
@@ -24,7 +39,7 @@
 import { readFile } from 'node:fs/promises';
 
 /**
- * Opens or closes a fenced block: up to three spaces of indentation,
+ * Opens or closes a fenced block: ANY amount of leading whitespace,
  * three-or-more backticks/tildes, then an arbitrary info string.
  *
  * The info string is `(.*?)`, not `(\S*)`. A fence like ```js title="x" carries
@@ -34,26 +49,58 @@ import { readFile } from 'node:fs/promises';
  * guard's view. That is the same class of hole as the ```js-only regex this
  * scanner replaced, one spelling over.
  *
- * The leading ` {0,3}` is the same class again, one axis over. CommonMark
- * permits a fence opener to be indented up to three spaces and GitHub renders
- * it — confirmed against GitHub's own POST /markdown, which returns
- * `<div class="highlight highlight-source-js">` for a 3-space-indented ```js
- * fence inside a numbered list step. A code sample written as step 2 of a
- * procedure is indented by CONVENTION, so a column-0 anchor was defeated by
- * ordinary authoring rather than by intent. This repo already contains two such
- * fences (test/spike/RESULTS-166.md:83 and :90).
+ * The leading `[ \t]*` is the same class again, one axis over, and it has now
+ * moved twice. CommonMark permits a fence opener to be indented up to three
+ * spaces, so this was first anchored at column 0 (missed every indented fence),
+ * then widened to ` {0,3}` (missed columns 4-6). Both were wrong for the same
+ * reason: CommonMark's three-space allowance is measured from the CONTAINING
+ * BLOCK, not from the document, and inside a list item the content column
+ * shifts right. This scanner has no list context, so any document-level cap it
+ * applies is a cap on the wrong quantity.
+ *
+ * Measured against GitHub's own POST /markdown (mode: gfm), a ```js fence
+ * written as a step of a numbered list comes back as
+ * `<div class="highlight highlight-source-js">` at 3, 4 and 6 spaces AND at one
+ * leading tab. A code sample written as step 2 of a procedure is indented by
+ * CONVENTION, so every one of those columns is reachable by ordinary authoring
+ * rather than by intent. This repo already contains two such fences
+ * (test/spike/RESULTS-166.md:83 and :90, both at three spaces).
+ *
+ * So the cap is gone: match any indent, and let isAccessSample decide. Over-
+ * scanning is the safe direction. The cost is that a deeply-indented literal
+ * code block — which CommonMark would call an indented code block, not a fence —
+ * is also scanned; a literal block containing an access class is still code a
+ * reader copies, so there is no false positive that costs anything. The cost of
+ * under-scanning is a fail-open sample shipping in the tarball with every layer
+ * green, which is what happened three rounds running.
+ *
+ * This closes the indentation axis. It does NOT close the class: a
+ * blockquote-prefixed fence (`> ```js`) also renders as highlighted JS on
+ * GitHub and is still invisible here. See abofs/stonyx-orm#279 — the terminus
+ * for this class is reconciling block enumeration against a real CommonMark
+ * parser, not another spelling added to this regex.
  *
  * Per CommonMark a CLOSING fence may not carry an info string, which is what
  * distinguishes the two below. A closer may carry its own indentation, which
  * need not match the opener's — so indentation is not compared, only stripped.
  */
-const FENCE_LINE = /^( {0,3})(`{3,}|~{3,})[ \t]*(.*?)[ \t]*$/;
+const FENCE_LINE = /^([ \t]*)(`{3,}|~{3,})[ \t]*(.*?)[ \t]*$/;
 
-/** Removes up to `width` leading spaces, the way CommonMark strips a fence's indent. */
+/**
+ * Removes up to `width` leading whitespace characters, the way CommonMark strips
+ * a fence's indent.
+ *
+ * Counts characters rather than columns, and accepts a tab as one unit, because
+ * FENCE_LINE captures tabs too: a fence indented with a tab inside a list step
+ * renders as highlighted JS on GitHub. A body line written in the same style as
+ * its opener — which is how a list item is actually typed — loses exactly its
+ * structural indent. A line indented less than the opener loses only what it
+ * has.
+ */
 function stripIndent(line, width) {
   let removed = 0;
 
-  while (removed < width && line[removed] === ' ') removed += 1;
+  while (removed < width && (line[removed] === ' ' || line[removed] === '\t')) removed += 1;
 
   return line.slice(removed);
 }
