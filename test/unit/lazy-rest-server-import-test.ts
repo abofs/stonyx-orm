@@ -81,9 +81,13 @@ function collectBinTargets() {
   const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
   const bin = pkg.bin;
 
-  // npm allows the string shorthand `"bin": "./dist/cli.js"`, which means
-  // { [pkg.name]: value }. Normalise it rather than silently probing nothing.
-  if (typeof bin === 'string') return [{ command: pkg.name, target: bin }];
+  // npm allows the string shorthand `"bin": "./dist/cli.js"`, which publishes ONE
+  // command named after the package WITH ANY SCOPE STRIPPED. Measured: a package
+  // named @scopetest/orm with `"bin": "./cli.js"` installs node_modules/.bin/orm,
+  // not node_modules/.bin/@scopetest/orm. `{ [pkg.name]: value }` therefore
+  // mis-derives the command name for a scoped package, and this package is
+  // scoped. Normalise it rather than silently probing nothing.
+  if (typeof bin === 'string') return [{ command: pkg.name.replace(/^@[^/]+\//, ''), target: bin }];
   if (!bin || typeof bin !== 'object') return [];
 
   return Object.entries(bin).map(([command, target]) => ({ command, target: target as string }));
