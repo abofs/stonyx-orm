@@ -60,27 +60,39 @@ const ALLOWED_OWNER = 'michael';
  *
  * The decoded column is written out rather than computed: the wire spelling and
  * `params.id` differ (percent-decoding), and deriving one from the other in the
- * test would hide a decoding change instead of measuring one. The expected
- * column is a literal for the same reason the unit corpus uses literals.
+ * test would hide a decoding change instead of measuring one.
+ *
+ * WHAT THIS FILE DOES NOT ASSERT, AND WHY. It pins EQUIVALENCE — "the key the
+ * lookup used is the value the exported function returns" — and it pins
+ * OUTCOMES. It deliberately does NOT pin the normaliser's meaning to literal
+ * values; test/unit/normalize-record-id-test.ts owns that.
+ *
+ * The split is load-bearing, not tidiness. The property #270 buys is that a
+ * PERMISSIVE change to the shared normaliser is harmless: both sides move
+ * together, the predicate still refuses, the record survives, and these suites
+ * stay green. A literal pin here would red on exactly that change and would
+ * therefore vote against the property the issue exists to establish. A change
+ * of MEANING must still be caught — it is, in the unit tier, where it is a
+ * deliberate reviewed edit rather than a security regression.
  */
 const NUMERIC_CORPUS = [
-  [`/animals/${ALLOWED_ANIMAL}`, '8', 8, 'the exact spelling'],
-  ['/animals/008', '008', 8, 'leading zeroes'],
-  ['/animals/8.0', '8.0', 8, 'trailing decimal'],
-  ['/animals/8.9', '8.9', 8, 'fractional — parseInt truncates'],
-  ['/animals/8e0', '8e0', 8, 'exponent notation'],
-  ['/animals/0x8', '0x8', 8, 'hex — parseInt has NO radix, so 0x8 is 8 and not 0'],
-  ['/animals/%208', ' 8', 8, 'percent-encoded leading space'],
-  ['/animals/%2B8', '+8', 8, 'percent-encoded plus sign'],
-  ['/animals/%098', '\t8', 8, 'percent-encoded tab'],
-  ['/animals/8%0A', '8\n', 8, 'percent-encoded trailing newline'],
-  ['/animals/+8', '+8', 8, 'a bare, unencoded + in the request target'],
+  [`/animals/${ALLOWED_ANIMAL}`, '8', 'the exact spelling'],
+  ['/animals/008', '008', 'leading zeroes'],
+  ['/animals/8.0', '8.0', 'trailing decimal'],
+  ['/animals/8.9', '8.9', 'fractional — parseInt truncates'],
+  ['/animals/8e0', '8e0', 'exponent notation'],
+  ['/animals/0x8', '0x8', 'hex — parseInt has NO radix, so 0x8 is 8 and not 0'],
+  ['/animals/%208', ' 8', 'percent-encoded leading space'],
+  ['/animals/%2B8', '+8', 'percent-encoded plus sign'],
+  ['/animals/%098', '\t8', 'percent-encoded tab'],
+  ['/animals/8%0A', '8\n', 'percent-encoded trailing newline'],
+  ['/animals/+8', '+8', 'a bare, unencoded + in the request target'],
 ];
 
 const STRING_CORPUS = [
-  [`/owners/${ALLOWED_OWNER}`, 'michael', 'michael', 'the exact spelling'],
-  ['/owners/MICHAEL', 'MICHAEL', 'MICHAEL', 'upper case — the normaliser does NOT case-fold, so this must resolve a DIFFERENT key'],
-  ['/owners/8michael', '8michael', '8michael', 'a numeric prefix does not make it numeric'],
+  [`/owners/${ALLOWED_OWNER}`, 'michael', 'the exact spelling'],
+  ['/owners/MICHAEL', 'MICHAEL', 'upper case — whatever the shared normaliser returns, the lookup must have used it'],
+  ['/owners/8michael', '8michael', 'a numeric prefix does not make it numeric'],
 ];
 
 let port;
@@ -157,7 +169,7 @@ module('[Integration] record id resolution (#270)', function(hooks) {
       );
     });
 
-    for (const [target, decoded, expected, why] of NUMERIC_CORPUS) {
+    for (const [target, decoded, why] of NUMERIC_CORPUS) {
       test(`GET ${target} (${why}) resolves with normalizeRecordId(${JSON.stringify(decoded)})`, async function(assert) {
         const response = await rawRequest({ port, target });
 
@@ -177,13 +189,11 @@ module('[Integration] record id resolution (#270)', function(hooks) {
           );
         }
 
-        // And the literal, so a divergence that moved BOTH sides is still named.
-        assert.strictEqual(observed[0], expected, `resolved by ${expected}, as a number`);
         assert.equal(jsonBody(response)?.data?.id, ALLOWED_ANIMAL, `and the record served is ${ALLOWED_ANIMAL}`);
       });
     }
 
-    for (const [target, decoded, expected, why] of STRING_CORPUS) {
+    for (const [target, decoded, why] of STRING_CORPUS) {
       test(`GET ${target} (${why}) resolves with normalizeRecordId(${JSON.stringify(decoded)})`, async function(assert) {
         const response = await rawRequest({ port, target });
         const observed = resolvedIds(spies, 'owner');
@@ -198,7 +208,6 @@ module('[Integration] record id resolution (#270)', function(hooks) {
           );
         }
 
-        assert.strictEqual(observed[0], expected, `resolved by ${JSON.stringify(expected)}, character for character`);
       });
     }
 
