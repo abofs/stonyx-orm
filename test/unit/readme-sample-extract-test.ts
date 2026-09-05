@@ -51,6 +51,13 @@ function fenced(tag, code) {
   return '```' + tag + '\n' + code + '\n```\n';
 }
 
+/** Indents every non-blank line, the way a fence inside a list item is written. */
+function indent(width, text) {
+  const pad = ' '.repeat(width);
+
+  return text.split('\n').map(line => (line === '' ? line : pad + line)).join('\n');
+}
+
 module('[Docs] access() sample extraction (#265)', function() {
   // Every tag a contributor could plausibly type on a JS/TS sample in a
   // TypeScript-first framework whose own scaffolder emits .ts.
@@ -83,6 +90,94 @@ module('[Docs] access() sample extraction (#265)', function() {
       );
     });
   }
+
+  // CommonMark permits a fence opener to carry up to three spaces of
+  // indentation, and GitHub renders it as a code block — measured against
+  // GitHub's own renderer (POST /markdown, mode: gfm), a 3-space-indented
+  // ```js fence comes back as <div class="highlight highlight-source-js">.
+  // A fence inside a numbered list step is indented by CONVENTION, so this
+  // bypass is reachable by ordinary authoring rather than only by intent,
+  // which makes it worse than a deliberate one: nothing signals it happened.
+  // The repo already contains two of them — test/spike/RESULTS-166.md:83 and
+  // :90, ```typescript blocks written as continuation lines of a numbered
+  // list — which is why a column-0 anchor was measurably, not theoretically,
+  // short of the documents the guard scans.
+  for (const width of [1, 2, 3]) {
+    test(`an ADDITIVE fail-open sample behind a ${width}-space-indented fence is not invisible`, function(assert) {
+      const markdown = [
+        '# Doc',
+        '',
+        fenced('js', GOOD_SAMPLE),
+        '',
+        indent(width, '```js\n' + FAIL_OPEN_SAMPLE + '\n```'),
+        '',
+      ].join('\n');
+
+      const found = findAccessSamples(markdown);
+
+      assert.equal(found.length, 2, `${width}-space indent: expected both samples, found ${found.length}`);
+      assert.ok(
+        found.some(code => code.includes('request.url')),
+        'the indented fail-open URL predicate is among the samples the guard will iterate'
+      );
+      assert.ok(
+        found.some(code => /access\s*\([^)]*,/.test(code)),
+        'the four-argument form behind an indented fence is caught too'
+      );
+    });
+  }
+
+  test('a fence inside a numbered list step is scanned, and its indent is stripped', function(assert) {
+    // The most ordinary way an indented fence occurs in real documentation.
+    const markdown = [
+      '# Doc',
+      '',
+      '1. Install it.',
+      '',
+      '2. Create the access class:',
+      '',
+      indent(3, '```js\n' + FAIL_OPEN_SAMPLE + '\n```'),
+      '',
+      '3. Boot.',
+      '',
+    ].join('\n');
+
+    const found = findAccessSamples(markdown);
+
+    assert.equal(found.length, 1, `the list-item sample is found — got ${found.length}`);
+    assert.ok(found[0].includes('request.url'), 'and it is the fail-open one, so the guard will fail on it');
+
+    // The harness writes these bytes to disk and boots them. The opener's
+    // indent is markdown structure, not source, so it must not survive into
+    // the generated class — CommonMark strips it and so does the scanner.
+    assert.equal(found[0], FAIL_OPEN_SAMPLE, 'the captured code is the sample verbatim, with the fence indent removed');
+  });
+
+  test('an indented NON-sample fence does not mis-pair the fences after it', function(assert) {
+    // The mis-pairing half. An unrecognised opener makes the block's CLOSING
+    // fence read as an opener, after which a later sample's opening fence is
+    // read as a closer and the sample is never seen. Same defect class as the
+    // spaced info string below, one axis over.
+    const markdown = [
+      '# Doc',
+      '',
+      // Opener indented, closer at column 0 — legal CommonMark, and the
+      // shape that reproduces the mis-pairing: a column-0 anchor skips the
+      // opener, then reads the CLOSER as an opener.
+      '   ```bash',
+      '   pnpm add @stonyx/orm',
+      '```',
+      '',
+      'Prose between.',
+      '',
+      fenced('js', FAIL_OPEN_SAMPLE),
+    ].join('\n');
+
+    const found = findAccessSamples(markdown);
+
+    assert.equal(found.length, 1, `the column-0 sample after an indented fence is still found — got ${found.length}`);
+    assert.notOk(found.some(code => code.includes('Prose between.')), 'prose between blocks is not captured as code');
+  });
 
   test('an info string with a space does not hide the sample, or mis-pair the fences', function(assert) {
     // ```js title="global-access.js" is a normal docs-tooling spelling. A
