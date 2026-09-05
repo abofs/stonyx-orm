@@ -20,11 +20,11 @@ importers:
         specifier: ^3.0.0
         version: 3.1046.0(@aws-sdk/client-dynamodb@3.1046.0)
       '@stonyx/cron':
-        specifier: 0.2.1-beta.105
-        version: 0.2.1-beta.105
+        specifier: 0.2.1-beta.107
+        version: 0.2.1-beta.107
       '@stonyx/events':
-        specifier: 0.1.1-beta.57
-        version: 0.1.1-beta.57
+        specifier: 0.1.1-beta.58
+        version: 0.1.1-beta.58
       '@stonyx/utils':
         specifier: 0.2.3-beta.25
         version: 0.2.3-beta.25
@@ -33,8 +33,8 @@ importers:
         version: 0.2.3-beta.61
     devDependencies:
       '@stonyx/rest-server':
-        specifier: 0.2.1-beta.107
-        version: 0.2.1-beta.107
+        specifier: 0.2.1-beta.109
+        version: 0.2.1-beta.109
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
@@ -408,17 +408,17 @@ packages:
     resolution: {integrity: sha512-R8Rdn8Hy72KKcebgLiv8jQcQkXoLMOGGv5uI1/k0l+snqkOzQ1R0ChUBCxWMlBsFMekWjq0wRudIweFs7sKT5A==}
     engines: {node: '>=14.0.0'}
 
-  '@stonyx/cron@0.2.1-beta.105':
-    resolution: {integrity: sha512-jJPH/Bpqd/rCkKn3b29YQRGEtav+/dS4tIEX9K1lA8x6hMhF/QL8JpCvWZU3SbqvxxrdYfF/CkbSU/OGAVV+gw==}
+  '@stonyx/cron@0.2.1-beta.107':
+    resolution: {integrity: sha512-QZ1t1tvt+fFLEsKBtfKh8mWNy6GM/ihStU+LGJcNsBPDjz0e7nx3ugqnJ/wg23JSh6WgzYjI6HBR1jN7k3Gyvw==}
 
-  '@stonyx/events@0.1.1-beta.57':
-    resolution: {integrity: sha512-/zbDMqCoealQ1pnK48DUQqTMwgM7kRSXyGnKj8850g7oKR28kTUd226liFP6P69EGULm0hBnudLo5XI8lSZp5w==}
+  '@stonyx/events@0.1.1-beta.58':
+    resolution: {integrity: sha512-UuS0NUE8D/94/gtX/2vTYd2/YYJqtvY9Lgew+WTNPUqZ+ffm+m5HgRSuPXi9ghtGafPZv5SnBR0594Si7byERg==}
 
   '@stonyx/logs@1.0.1-beta.16':
     resolution: {integrity: sha512-6UccOlU3hnVDKSruFZ/uGXBjK/i8USNjjc7me3ooUxSVbSn+tWhdgkWH/CWDymmvOz+A/FBdDD3dPr1nchbZqQ==}
 
-  '@stonyx/rest-server@0.2.1-beta.107':
-    resolution: {integrity: sha512-4MQ3OAe2IjnNT7PpQIMPv9LGonFxU/ws7+9lAM2YDBLHHAngh7y323rMzWa1hTld/FHwy5r2r+4w4u5vGh8MKg==}
+  '@stonyx/rest-server@0.2.1-beta.109':
+    resolution: {integrity: sha512-94z1DMNItIf8uM07T8LEkwy0Wrh2bfq+Zo2I0LQdR07ayehPixFQl4CZA3esc9M+vq3okiaGgZhh8FE3GvvMTg==}
 
   '@stonyx/utils@0.2.3-beta.25':
     resolution: {integrity: sha512-g2TvjJIfCfBRbpKWOZDwotAwpkXQ2c4xkRMEao4DZttgt1wYP9nfOEp0V/MkEwjRfq/hSZTQFncG5I36nr6Eng==}
@@ -1349,17 +1349,17 @@ snapshots:
       '@smithy/util-buffer-from': 2.2.0
       tslib: 2.8.1
 
-  '@stonyx/cron@0.2.1-beta.105':
+  '@stonyx/cron@0.2.1-beta.107':
     dependencies:
       stonyx: 0.2.3-beta.61
 
-  '@stonyx/events@0.1.1-beta.57': {}
+  '@stonyx/events@0.1.1-beta.58': {}
 
   '@stonyx/logs@1.0.1-beta.16':
     dependencies:
       chalk: 5.6.2
 
-  '@stonyx/rest-server@0.2.1-beta.107':
+  '@stonyx/rest-server@0.2.1-beta.109':
     dependencies:
       cors: 2.8.6
       express: 5.2.1
