@@ -19,7 +19,7 @@ import QUnit from 'qunit';
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
-import { findAccessSamples } from './readme-access/extract-sample.ts';
+import { findAccessSamples } from '../helpers/readme-sample-helper.js';
 
 const { module, test } = QUnit;
 

@@ -16,7 +16,7 @@
  * test/config/environment.ts clobbers the paths.
  */
 import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { extractReadmeAccessSample } from './extract-sample.ts';
+import { extractReadmeAccessSample } from '../../helpers/readme-sample-helper.js';
 
 const cwd = process.cwd();
 
