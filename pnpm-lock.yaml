@@ -20,8 +20,8 @@ importers:
         specifier: ^3.0.0
         version: 3.1046.0(@aws-sdk/client-dynamodb@3.1046.0)
       '@stonyx/cron':
-        specifier: 0.2.1-beta.136
-        version: 0.2.1-beta.136
+        specifier: 0.2.1-beta.137
+        version: 0.2.1-beta.137
       '@stonyx/events':
         specifier: 0.1.1-beta.64
         version: 0.1.1-beta.64
@@ -33,8 +33,8 @@ importers:
         version: 0.2.3-beta.61
     devDependencies:
       '@stonyx/rest-server':
-        specifier: 0.2.1-beta.137
-        version: 0.2.1-beta.137
+        specifier: 0.2.1-beta.138
+        version: 0.2.1-beta.138
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
@@ -408,8 +408,8 @@ packages:
     resolution: {integrity: sha512-R8Rdn8Hy72KKcebgLiv8jQcQkXoLMOGGv5uI1/k0l+snqkOzQ1R0ChUBCxWMlBsFMekWjq0wRudIweFs7sKT5A==}
     engines: {node: '>=14.0.0'}
 
-  '@stonyx/cron@0.2.1-beta.136':
-    resolution: {integrity: sha512-OdB8pufDe9hgzW+VGFTFESdKl1v1JAzBn73EpvnCGWAXgJRpnNAdNVClfbe4HKDXNFKLD6F97udCtcrCaR625w==}
+  '@stonyx/cron@0.2.1-beta.137':
+    resolution: {integrity: sha512-LhDLJTaO9drcS+jMiRz45nTo2ZNrGByO2OOqiB0PaEo9IdO/WdrHfwLdMvKsjjmv74mpqNFABvvn4dKQDXuXcQ==}
 
   '@stonyx/events@0.1.1-beta.64':
     resolution: {integrity: sha512-tElM9CEGhR4aG4ttJD1a9OJz2hryTBYvu4BadVVm0rujv7UdlFCoFpQSWptnJALT8mV9RhzQ2Skvv7iRFljkiA==}
@@ -417,8 +417,8 @@ packages:
   '@stonyx/logs@1.0.1-beta.16':
     resolution: {integrity: sha512-6UccOlU3hnVDKSruFZ/uGXBjK/i8USNjjc7me3ooUxSVbSn+tWhdgkWH/CWDymmvOz+A/FBdDD3dPr1nchbZqQ==}
 
-  '@stonyx/rest-server@0.2.1-beta.137':
-    resolution: {integrity: sha512-xlj05L9WeqnI3F47awi+b2rxJ/qmz8xF+FK+xcfqr+qiMJNAkVVdOMyCH53qCLUFivSpoYKJ13FdJPkp3gwpcw==}
+  '@stonyx/rest-server@0.2.1-beta.138':
+    resolution: {integrity: sha512-wCA30JJNDknCZB6CwvAbKR06DI+Ablcqd9pT6qZ/PHB8zqjbtg88dyihwpvjRYp7clMHQWuFyoeCHvcxGq7MdQ==}
 
   '@stonyx/utils@0.2.3-beta.25':
     resolution: {integrity: sha512-g2TvjJIfCfBRbpKWOZDwotAwpkXQ2c4xkRMEao4DZttgt1wYP9nfOEp0V/MkEwjRfq/hSZTQFncG5I36nr6Eng==}
@@ -1349,7 +1349,7 @@ snapshots:
       '@smithy/util-buffer-from': 2.2.0
       tslib: 2.8.1
 
-  '@stonyx/cron@0.2.1-beta.136':
+  '@stonyx/cron@0.2.1-beta.137':
     dependencies:
       stonyx: 0.2.3-beta.61
 
@@ -1359,7 +1359,7 @@ snapshots:
     dependencies:
       chalk: 5.6.2
 
-  '@stonyx/rest-server@0.2.1-beta.137':
+  '@stonyx/rest-server@0.2.1-beta.138':
     dependencies:
       cors: 2.8.6
       express: 5.2.1
