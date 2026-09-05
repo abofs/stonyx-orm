@@ -90,7 +90,7 @@ Each hook receives a context object:
   model: 'animal',           // Model name
   operation: 'create',       // Operation type
   request,                   // Express request object
-  params,                    // URL params (e.g., { id: 5 })
+  params,                    // URL params, raw client text (e.g., { id: '5' })
   body,                      // Request body (POST/PATCH)
   query,                     // Query parameters
   state,                     // Request state (includes filter for access control)
@@ -110,6 +110,7 @@ Each hook receives a context object:
 - `oldState` is captured via `JSON.parse(JSON.stringify())` before operation executes
 - For delete operations, `recordId` is available since the record may no longer exist
 - `oldState` enables precise field-level change detection
+- `params.id` is the raw client text as a STRING (`/animals/05` gives `{ id: '05' }`). The id the ORM resolved the record by is `request.recordId`, and for a numeric-id model it is a NUMBER (`5` for both `/animals/5` and `/animals/05`) — abofs/stonyx-orm#270. Key lookups on `request.recordId`, never on `params.id`.
 
 ## Implementation Details
 

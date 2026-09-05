@@ -605,7 +605,7 @@ Each hook receives a context object with comprehensive information:
   model: 'animal',           // Model name
   operation: 'create',       // Operation type
   request,                   // Express request object
-  params,                    // URL params (e.g., { id: 5 })
+  params,                    // URL params, raw client text (e.g., { id: '5' })
   body,                      // Request body (POST/PATCH)
   query,                     // Query parameters
   state,                     // Request state object
@@ -623,6 +623,7 @@ Each hook receives a context object with comprehensive information:
 - The deep copy is created via JSON serialization (`JSON.parse(JSON.stringify())`) to ensure complete isolation
 - For `delete` operations, `recordId` is provided in after hooks since the record may no longer exist in the store
 - `oldState` is captured as a deep copy of the record's data before the operation, providing access to the previous field values
+- `params.id` is the raw client text as a STRING (`/animals/05` gives `{ id: '05' }`). The id the ORM resolved the record by is `request.recordId`, and for a numeric-id model it is a NUMBER (`5` for both `/animals/5` and `/animals/05`) — abofs/stonyx-orm#270. Key lookups on `request.recordId`, never on `params.id`.
 
 ### Usage Examples
 
