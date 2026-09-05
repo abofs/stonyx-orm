@@ -95,6 +95,28 @@ const STRING_CORPUS = [
   ['/owners/8michael', '8michael', 'a numeric prefix does not make it numeric'],
 ];
 
+/**
+ * A coverage FLOOR on the two corpora above, in the same shape as
+ * PROBED_TARGET_COUNTS in test/integration/readme-sample-test.ts.
+ *
+ * Both corpora drive their assertions from a `for ... of` loop, so a deleted row
+ * deletes its own test. Nothing counted the rows, so the loss was invisible.
+ * Measured at this head, deleting five NUMERIC_CORPUS rows and one
+ * STRING_CORPUS row: this process went from 30 pass / 0 fail to 24 pass / 0
+ * fail, rc=0 — six alias spellings stopped being measured and no assertion
+ * moved.
+ *
+ * STRING_CORPUS is pinned too, not just the corpus the review named. Pinning
+ * one of two harnesses with the same gap is the defect this pin exists to fix,
+ * one harness over.
+ *
+ * A floor, not an equality: adding a spelling should never need this line
+ * touched. Deleting one should. If a row goes on purpose, lower the number in
+ * the same commit and the diff says what coverage was given up.
+ */
+const NUMERIC_CORPUS_FLOOR = 11;
+const STRING_CORPUS_FLOOR = 3;
+
 let port;
 
 /** Every id the store was asked to resolve for `model` since the last reset. */
@@ -152,6 +174,23 @@ module('[Integration] record id resolution (#270)', function(hooks) {
   });
 
   module('AC-2 — the resolved id equals the exported normaliser', function() {
+    test('control — neither corpus has been silently shrunk', function(assert) {
+      // Every other assertion in this module is GENERATED from a corpus row, so
+      // deleting rows deletes assertions and the suite stays green with less
+      // coverage. This is the only assertion here that does not come from a row.
+      assert.ok(
+        NUMERIC_CORPUS.length >= NUMERIC_CORPUS_FLOOR,
+        `NUMERIC_CORPUS carries ${NUMERIC_CORPUS.length} numeric alias spelling(s); the floor requires at least ${NUMERIC_CORPUS_FLOOR}. ` +
+        'Rows were deleted. If that was deliberate, lower NUMERIC_CORPUS_FLOOR in the same commit so the diff says what coverage was given up.'
+      );
+
+      assert.ok(
+        STRING_CORPUS.length >= STRING_CORPUS_FLOOR,
+        `STRING_CORPUS carries ${STRING_CORPUS.length} string-id spelling(s); the floor requires at least ${STRING_CORPUS_FLOOR}. ` +
+        'Rows were deleted. If that was deliberate, lower STRING_CORPUS_FLOOR in the same commit so the diff says what coverage was given up.'
+      );
+    });
+
     test('control — the spy observes a resolution key on an ordinary request, and the request succeeds', async function(assert) {
       // Without this every assertion below could pass against a spy that never
       // fires, or against a request the router refused before any lookup.

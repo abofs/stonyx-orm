@@ -237,6 +237,36 @@ const MENTIONS_ID = /\bid\b|Id\b/i;
  * folding them into a priority-critical security fix would have put unverifiable
  * adapter edits inside it. Tracked as #282; delete the entry when #282 lands.
  *
+ * WHAT "EVERY SITE" MEANS HERE, AND THE TWO ESCAPES BEHIND THE WORDING. This
+ * guard reads SOURCE TEXT, one line at a time, and it is keyed by `path:line`.
+ * Both facts are holes, and both were measured at this head rather than
+ * reasoned about:
+ *
+ *   1. IT ONLY SEES A COERCION THAT NAMES AN ID. `ID_COERCION` is paired with
+ *      `MENTIONS_ID`, so renaming one local defeats it. An exact copy of the
+ *      canonical normaliser with `id` renamed to `raw`, appended to
+ *      `test/sample/access/global-access.ts` — a scanned, non-allowlisted file —
+ *      left this file at 11 pass / 0 fail, rc=0, with AC-5 reading `ok`. The
+ *      byte-identical copy with the local still named `id` reds and names both
+ *      lines. The pairing is deliberate (see MENTIONS_ID: it keeps arithmetic on
+ *      a page size or an age filter out), so this is a cost, not an oversight.
+ *
+ *   2. AN ALLOWLISTED LINE HAS WHOLE-LINE AMNESTY. The key is `path:line`, and
+ *      the filter drops the whole line, so a second coercion appended to an
+ *      already-listed line inherits its entry. Measured: appending
+ *      `const handCopyId = isNaN(id as unknown as number) ? id : parseInt(id as string);`
+ *      onto `src/normalize-record-id.ts:85` built clean and left this file at
+ *      11 pass / 0 fail, rc=0, AC-5 `ok`. Line keys were already the SECOND
+ *      narrowing of this key (path -> path:line); a third would be column keys,
+ *      and that is the same trade one axis over.
+ *
+ * So the claim this assertion carries is scoped to what it measures: no
+ * id-NAMING coercion expression on an UNLISTED LINE. It is not an exhaustive
+ * enumeration of id coercion, and it is not a proof that only one normaliser
+ * exists. Neither escape is closed here — closing either means a different
+ * mechanism (an AST pass over the module, or per-expression rather than
+ * per-line keys), which is the #279 terminus, not another regex.
+ *
  * NOT AN EXHAUSTIVE ENUMERATION OF ID MATCHING. `ID_COERCION` matches coercion
  * FUNCTION CALLS. `src/view-resolver.ts:208` (`r.id === id || r.id == id`) is
  * the same permissive dual-match family, sits on the request resolution path
@@ -675,7 +705,8 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
     assert.deepEqual(
       unexpected,
       [],
-      'every id-coercion expression is either the canonical normaliser or a site explicitly split out of #270 (see #282) — a new one here is a new hand-copy. ' +
+      'every id-coercion expression that NAMES AN ID, on a line not already allowlisted, is either the canonical normaliser ' +
+      'or a site explicitly split out of #270 (see #282) — a new one here is a new hand-copy. ' +
       'If a listed site simply MOVED, update its line in KNOWN_COERCION_SITES in the same commit that moved it.'
     );
 
