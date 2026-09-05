@@ -182,6 +182,58 @@ function findFencedBlocks(markdown) {
   return blocks;
 }
 
+/**
+ * The block is a HOOK sample. Same principle as isAccessSample: decided from the
+ * code's SHAPE, not from the info string an author typed, and not from a line
+ * number that drifts.
+ *
+ * `beforeHook(` / `afterHook(` followed by a quote is the registration call —
+ * the quote keeps the prose sentence "call beforeHook (see below)" out. The
+ * `context` requirement keeps a bare registration with no body out.
+ */
+function isHookSample(code) {
+  return /\b(?:beforeHook|afterHook)\s*\(\s*['"`]/.test(code) && /\bcontext\b/.test(code);
+}
+
+/** Every hook sample in a markdown document, in document order. */
+export function findHookSamples(markdown) {
+  return findFencedBlocks(markdown).filter(isHookSample);
+}
+
+/**
+ * Every hook sample in `path` that keys something on the id of the record the
+ * request addresses — abofs/stonyx-orm#270.
+ *
+ * The predicate is deliberately NEUTRAL between the correct spelling and the
+ * defective one: it matches `context.request.recordId`, `context.params.id` and
+ * `context.recordId` alike. A selector that only recognised the corrected
+ * spelling would stop selecting a sample at the moment it regressed, and the
+ * guard would go quiet exactly when it was needed — which is the same
+ * fail-open shape #270 is about, one layer up.
+ *
+ * Throws on zero, for the reason extractReadmeAccessSamples throws on zero: an
+ * empty corpus satisfies every assertion downstream.
+ *
+ * @param {string} path
+ * @returns {Promise<Array<{ code: string, path: string, index: number }>>}
+ */
+export async function extractResolvingHookSamples(path) {
+  const markdown = await readFile(path, 'utf8');
+  const matches = findHookSamples(markdown).filter(code => RESOLVES_A_RECORD_ID.test(code));
+
+  if (matches.length === 0) {
+    throw new Error(
+      `Expected at least 1 hook sample keyed on the request's record id in ${path}, found 0. ` +
+      'Either the samples stopped keying on it, or the extractor stopped seeing them; both are defects.'
+    );
+  }
+
+  return matches.map((code, index) => ({ code, path, index }));
+}
+
+/** Neutral between the corrected spelling and the one #270 replaced. See above. */
+const RESOLVES_A_RECORD_ID = /\bcontext\.(?:request\.recordId|params\.id|recordId)\b/;
+
 /** Every access() sample in a markdown document, in document order. */
 export function findAccessSamples(markdown) {
   return findFencedBlocks(markdown).filter(isAccessSample);
