@@ -8,9 +8,11 @@
  * bytes under test are the bytes a consumer copies.
  *
  * The scanner is deliberately tag-INDEPENDENT. The first version matched only
- * ```js, which is README.md's minority tag (12, against 18 ```javascript), and
- * a fail-open sample added under any other tag was invisible to all three
- * guards that read through this file. A guard that can only see the defect
+ * ```js, which is README.md's minority tag (12 opening fences, against 19
+ * ```javascript — counted block-wise; a line-wise count of fence lines double-
+ * counts every block's closer as an unlabelled opener), and a fail-open sample
+ * added under any other tag was invisible to all three guards that read through
+ * this file. A guard that can only see the defect
  * spelled one way is not a guard, so this recognises every fence and decides
  * what is a sample by the code's SHAPE (see isAccessSample) rather than by the
  * label an author happened to type.
@@ -127,9 +129,17 @@ export function findAccessSamples(markdown) {
  * second, unmeasured sample is the defect #265 closes — but the remedy was to
  * forbid coverage rather than provide it, and it was load-bearing in the wrong
  * direction: an additive sample the extractor could not see left the count at 1
- * and the tripwire silent. Returning all of them, and having the harness boot
- * all of them, makes the guard additive-safe by construction instead of by the
- * breadth of a regex.
+ * and the tripwire silent. Returning all of them lets a second DOCUMENTED
+ * sample be measured instead of rejected.
+ *
+ * Additive safety is held by the STATIC guard, not by booting. Precisely: the
+ * `PROBED_README_MODELS` pin and the two shape checks in
+ * test/integration/readme-sample-test.ts fire on an added sample regardless of
+ * where in README.md it appears. Booting every sample is order-DEPENDENT and
+ * cannot carry the property on its own — measured: a duplicate-model sample
+ * appended after the good one is 33/33 green, because src/setup-rest-server.ts
+ * catches the "already been defined" throw into a log.error and the later class
+ * is silently dropped; the same sample inserted before it fails 14.
  *
  * Throws on zero: a README with no access() sample means the extractor stopped
  * matching, and every assertion downstream would pass vacuously.

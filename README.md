@@ -370,7 +370,7 @@ when they share one rule.
 **Numeric ids: normalise before you compare.** `request.params.id` is raw text
 from the client. When it looks numeric the ORM coerces it — `isNaN(id) ? id :
 parseInt(id)` — *before* it resolves the record, so `7`, `007`, `7.0`, `7.9`,
-`7e0`, `0x7`, `+7`, `%207` (a leading space), `%09 7` (a tab) and `7%0A` (a
+`7e0`, `0x7`, `+7`, `%207` (a leading space), `%097` (a tab) and `7%0A` (a
 trailing newline) all address record `7`, while a `===` against the raw text
 matches only the one spelling you wrote down. Every other spelling falls through
 to whatever your method returns next — which, in the shape above, is a full CRUD

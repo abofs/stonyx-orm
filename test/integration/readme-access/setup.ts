@@ -29,6 +29,14 @@ const GENERATED_DIR = './test/integration/readme-access/generated';
 // All of them, not just the first: a documented sample that nothing boots is
 // the exact defect #265 closes, and until this PR a second sample was silently
 // unmeasured. Each sample declares its own `models`, so they mount side by side.
+//
+// Booting all of them is NOT what makes the suite additive-safe. Registration
+// is order-dependent — src/setup-rest-server.ts swallows a duplicate-model
+// throw into a log.error, so a second sample claiming an already-registered
+// model is dropped without failing anything — and a sample for a model nothing
+// probes is booted and never measured. The static guard in
+// test/integration/readme-sample-test.ts owns that property: it pins the set of
+// models README declares against the set this suite probes.
 const samples = await extractReadmeAccessSamples(`${cwd}/README.md`);
 
 await rm(GENERATED_DIR, { recursive: true, force: true });

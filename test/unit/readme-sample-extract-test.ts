@@ -14,7 +14,12 @@
  * tamper was already caught and the guard looked trustworthy. Adding a second,
  * fail-open sample under a fence tag the extractor did not recognise shipped it
  * in the tarball with every assertion green — README.md's dominant tag is
- * ```javascript (18 occurrences) against ```js (12).
+ * ```javascript (19 opening fences) against ```js (12).
+ *
+ * Fence figures here are counted BLOCK-wise: 72 fence lines in README.md are 36
+ * openers plus 36 closers, and a closing fence carries no info string by
+ * CommonMark. A line-wise count reports one "unlabelled" fence per block and is
+ * wrong by exactly the number of blocks.
  */
 import QUnit from 'qunit';
 import { findAccessSamples, extractReadmeAccessSamples } from '../helpers/readme-sample-helper.js';
@@ -204,7 +209,14 @@ module('[Docs] access() sample extraction (#265)', function() {
   });
 
   test('a bare (unlabelled) fence carrying an access() sample is visible', function(assert) {
-    // README.md has 35 unlabelled fences; a sample in one of them ships too.
+    // Not justified by a count in README.md: measured block-wise it has ZERO
+    // unlabelled openers (36 openers: javascript 19, js 12, bash 5). An earlier
+    // version of this comment claimed 35, which was the closing fences of the
+    // 36 labelled blocks counted as openers — a line-wise census of `^```` `.
+    //
+    // The justification is that a bare fence is legal CommonMark, renders as a
+    // code block on GitHub, and cannot be covered by any list of tags. Two of
+    // them do exist in the scanned set, in docs/project-structure.md.
     const markdown = '# Doc\n\n```\n' + GOOD_SAMPLE + '\n```\n';
 
     assert.equal(findAccessSamples(markdown).length, 1, 'bare fence yielded a sample');
