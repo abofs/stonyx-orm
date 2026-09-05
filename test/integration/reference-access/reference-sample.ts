@@ -24,6 +24,29 @@ const PROTECTED = 'angela';
 
 let origin;
 
+/**
+ * The ids a response actually served, as a JSON:API document.
+ *
+ * Not a substring search over the body: Express's default 404 page is
+ * `Cannot GET /OwNeRs/angela`, which contains the protected id and would fail a
+ * naive "the body does not mention angela" check on a response that disclosed
+ * nothing. Parse the document and look at `data`.
+ */
+function disclosedIds(body) {
+  let document;
+
+  try {
+    document = JSON.parse(body);
+  } catch {
+    return [];
+  }
+
+  if (Array.isArray(document?.data)) return document.data.map(record => record.id);
+  if (document?.data) return [document.data.id];
+
+  return [];
+}
+
 module('[Integration] reference access sample (#265)', function(hooks) {
   setupIntegrationTests(hooks);
 
@@ -56,22 +79,52 @@ module('[Integration] reference access sample (#265)', function(hooks) {
   });
 
   test('the record-level bypass spellings are refused', async function(assert) {
+    // Asserted as an effect, not as 403. abofs/stonyx-rest-server#47 / #50 (PR
+    // #64 open) make the mount match case-sensitively and strictly, at which
+    // point the first two spellings 404 — the record becomes MORE protected.
     for (const spelling of ['/OwNeRs/angela', '/owners/angela/', '/owners/%61ngela']) {
       const response = await fetch(`${origin}${spelling}`);
-      assert.equal(response.status, 403, `GET ${spelling} -> 403`);
+
+      assert.ok(response.status >= 400, `GET ${spelling} -> ${response.status} (refused; 403 lenient | 404 strict)`);
+
+      const served = disclosedIds(await response.text());
+      assert.notOk(served.includes(PROTECTED), `GET ${spelling} serves no record for "${PROTECTED}" — served [${served}]`);
     }
+
+    assert.ok(await store.find('owner', PROTECTED), `"${PROTECTED}" is reachable-but-denied, not merely absent`);
   });
 
   test('the collection-level bypass spellings do not carry the protected record', async function(assert) {
-    for (const spelling of ['/owners?filter[age]=36', '/owners?x=1', '/owners/', '/OWNERS']) {
+    // Exact survivor lists rather than "angela is absent": absence alone is
+    // satisfied by an empty or errored response. filter[age]=36 legitimately
+    // yields [] because angela is the only 36-year-old.
+    const EXPECTED = {
+      '/owners?filter[age]=36': [],
+      '/owners?x=1': ['bob', 'gina', 'michael'],
+      '/owners/': ['bob', 'gina', 'michael'],
+      '/OWNERS': ['bob', 'gina', 'michael'],
+    };
+
+    for (const [spelling, expected] of Object.entries(EXPECTED)) {
       const response = await fetch(`${origin}${spelling}`);
-      assert.equal(response.status, 200, `GET ${spelling} -> 200`);
+
+      assert.ok(
+        [200, 404].includes(response.status),
+        `GET ${spelling} -> ${response.status} (200 lenient | 404 strict)`
+      );
+
+      if (response.status === 404) {
+        const served = disclosedIds(await response.text());
+        assert.notOk(served.includes(PROTECTED), `GET ${spelling} 404s without serving "${PROTECTED}" — served [${served}]`);
+
+        continue;
+      }
 
       const { data } = await response.json();
       assert.ok(Array.isArray(data), `GET ${spelling} returns a JSON:API collection document`);
 
-      const ids = data.map(record => record.id);
-      assert.notOk(ids.includes(PROTECTED), `GET ${spelling} omits "${PROTECTED}" — got [${ids}]`);
+      const ids = data.map(record => record.id).sort();
+      assert.deepEqual(ids, expected, `GET ${spelling} returns exactly [${expected}] — got [${ids}]`);
     }
   });
 

@@ -48,6 +48,29 @@ let origin;
 let port;
 
 /**
+ * The ids a response actually served, as a JSON:API document.
+ *
+ * Not a substring search over the body: Express's default 404 page is
+ * `Cannot GET /OwNeRs/angela`, which contains the protected id and would fail a
+ * naive "the body does not mention angela" check on a response that disclosed
+ * nothing. Parse the document and look at `data`.
+ */
+function disclosedIds(body) {
+  let document;
+
+  try {
+    document = JSON.parse(body);
+  } catch {
+    return [];
+  }
+
+  if (Array.isArray(document?.data)) return document.data.map(record => record.id);
+  if (document?.data) return [document.data.id];
+
+  return [];
+}
+
+/**
  * Re-seed the protected record if a probe destroyed it, so one failing
  * assertion cannot cascade into false failures in every later test. The
  * assertion still fails; only the blast radius is contained.
@@ -183,7 +206,18 @@ module('[Integration] README access() sample (#265)', function(hooks) {
       test(`GET ${spelling} (${why}) is denied`, async function(assert) {
         const response = await fetch(`${origin}${spelling}`);
 
-        assert.equal(response.status, 403, `GET ${spelling} -> 403`);
+        // The effect, not one implementation of it. 403 is what today's
+        // @stonyx/rest-server returns; under abofs/stonyx-rest-server#47 / #50
+        // (PR #64 is open) the mount stops matching these spellings and they
+        // become 404 — the record is MORE protected, not less. Pinning 403
+        // would make this suite vote against a sibling repo's security fix.
+        assert.ok(response.status >= 400, `GET ${spelling} -> ${response.status} (refused; 403 lenient | 404 strict)`);
+
+        const served = disclosedIds(await response.text());
+        assert.notOk(served.includes(PROTECTED), `GET ${spelling} serves no record for "${PROTECTED}" — served [${served}]`);
+
+        const survived = Boolean(await store.find('owner', PROTECTED));
+        assert.ok(survived, `record "${PROTECTED}" is reachable-but-denied, not merely absent`);
       });
     }
 
@@ -191,15 +225,30 @@ module('[Integration] README access() sample (#265)', function(hooks) {
       test(`GET ${spelling} (${why}) does not carry the protected record`, async function(assert) {
         const response = await fetch(`${origin}${spelling}`);
 
-        assert.equal(response.status, 200, `GET ${spelling} -> 200`);
+        // Same reasoning as DENIED above: the mount-spelling cases legitimately
+        // become 404 once route matching tightens. Both regimes are named, so
+        // neither is silently accepted.
+        assert.ok(
+          [200, 404].includes(response.status),
+          `GET ${spelling} -> ${response.status} (200 lenient | 404 strict)`
+        );
+
+        if (response.status === 404) {
+          // Nothing was served at all — the strongest form of "does not carry it".
+          const served = disclosedIds(await response.text());
+          assert.notOk(served.includes(PROTECTED), `GET ${spelling} 404s without serving "${PROTECTED}" — served [${served}]`);
+
+          return;
+        }
 
         const { data } = await response.json();
         assert.ok(Array.isArray(data), `GET ${spelling} returns a JSON:API collection document`);
 
         const ids = data.map(record => record.id).sort();
 
+        // Exact list, not "angela is absent": absence alone is satisfied by an
+        // empty or errored response.
         assert.deepEqual(ids, expected, `GET ${spelling} returns exactly [${expected}] — got [${ids}]`);
-        assert.notOk(ids.includes(PROTECTED), `GET ${spelling} omits "${PROTECTED}"`);
       });
     }
   });

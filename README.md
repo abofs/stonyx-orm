@@ -351,16 +351,21 @@ the mount point, so inside the REST server it is `/angela`, not `/owners/angela`
 — a suffix comparison against it never matches and the request falls through to
 whatever the method returns next. `request.originalUrl` keeps the full path but
 is still the raw text the client sent, so it varies with query strings
-(`/owners?x=1`), trailing slashes (`/owners/angela/`), casing (`/OwNeRs/angela`,
-which Express routes to the same handler) and percent-encoding
-(`/owners/%61ngela`). Each of those is a plain address-bar request, and each one
-slips past a URL predicate. `request.params.id` is identical for all of them.
+(`/owners?x=1`), trailing slashes (`/owners/angela/`), casing (`/OwNeRs/angela`)
+and percent-encoding (`/owners/%61ngela`). Each of those is a plain address-bar
+request. Which of them reach your handler at all depends on how the REST server
+configures Express route matching — that is a deployment detail you should not
+be building an authorization decision on top of. `request.params.id` is
+identical for every spelling that does reach you.
 
 **One access class per model when the rules are model-specific.** `access()`
-receives only the request, and the request does not carry the model name in any
-form that is safe to match on — `request.baseUrl` is the mount text as the
-client spelled it (`/OWNERS`), not the model. A class may still list several
-models in `models` when they share one rule.
+receives only the request, and the request does not carry the model name
+directly — `request.baseUrl` is the *mount text as the client spelled it*
+(`/OWNERS`), so it must be case-normalised before it is compared, and it is
+still the mount rather than the model. Deriving a model from it means every
+unrecognised spelling falls through to whatever your method returns next, so
+prefer one class per model. A class may still list several models in `models`
+when they share one rule.
 
 **Numeric ids: normalise before you compare.** `request.params.id` is raw text
 from the client. When it looks numeric the ORM coerces it — `isNaN(id) ? id :
