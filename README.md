@@ -381,8 +381,33 @@ to keep in sync — abofs/stonyx-orm#270. It is `undefined` on collection routes
 which is how you tell a collection request from a record request. `params.id` is
 left untouched, so anything that needs the raw client text still has it.
 
-The same function is exported for the places `access()` does not reach — hooks,
-custom handlers, your own lookups:
+**Version floor: `request.recordId` requires the release that carries
+abofs/stonyx-orm#270.** Measured on the published tarballs: `0.3.2-alpha.106`
+(this change's alpha) has `request.recordId` and exports `normalizeRecordId`;
+`0.3.2-beta.231`, the newest build on the `beta` tag at the time of writing, has
+neither, and `latest` is `0.3.1`. **On any earlier build the samples above fail
+open, completely** — measured against `origin/dev`: `recordId` is `undefined` on
+every route, so `if (recordId === undefined) return record => …` fires on the
+*record* route, and a function return authorizes the request outright.
+`GET /owners/angela` and `GET /animals/7` both returned 200 and served the
+protected record, and `DELETE` on both returned 204 and destroyed it.
+
+If you cannot pin the version, make the samples fail *closed* instead — one line,
+a no-op on a new build and a refusal on an old one:
+
+```javascript
+access(request) {
+  // Old builds do not attach recordId. Refuse rather than fall through to the
+  // collection branch, which would authorize the record route outright.
+  if (!('recordId' in request)) return false;
+
+  const { recordId } = request;
+  // …
+}
+```
+
+The same normalisation is exported for the places `access()` does not reach —
+hooks, custom handlers, your own lookups:
 
 ```javascript
 import { normalizeRecordId } from '@stonyx/orm';
@@ -392,6 +417,15 @@ normalizeRecordId('0x7'); // 7 — the same value the ORM resolves by
 
 Do not re-implement it. A hand-written copy is correct only for as long as it
 happens to match, and nothing holds the two together.
+
+**`normalizeRecordId(undefined)` is `''`, not `undefined`.** The two values this
+section documents side by side do not agree, and the difference is load-bearing:
+`request.recordId` is `undefined` on a collection route, while
+`normalizeRecordId` returns `''` for any falsy id — including `undefined` — because
+`store.get(key, undefined)` returns the whole model Map rather than a record
+(abofs/stonyx-orm#167). So `normalizeRecordId(context.params.id) === undefined`
+is **never** true and a collection branch written that way never runs. Branch on
+`request.recordId === undefined`, or compare against `''`.
 
 ```javascript
 export default class AnimalAccess {
@@ -633,9 +667,13 @@ beforeHook('create', 'animal', (context) => {
   }
 });
 
-// Return an object to send a custom response
+// Return an object to send a custom response.
+// Look the record up by `context.request.recordId` — the value the ORM
+// resolved the record by. `context.params.id` is the raw client text and is a
+// different value for every alias of the same id, so a lookup keyed on it
+// finds nothing on a numeric-id model (abofs/stonyx-orm#270).
 beforeHook('delete', 'animal', (context) => {
-  const animal = store.get('animal', context.params.id);
+  const animal = store.get('animal', context.request.recordId);
   if (animal.protected) {
     return { errors: [{ detail: 'Cannot delete protected animals' }] };
   }
@@ -676,9 +714,12 @@ afterHook('update', 'animal', async (context) => {
   }
 });
 
-// Cache invalidation
+// Cache invalidation.
+// Keyed on `recordId`, not `params.id`: `/animals/7` and `/animals/007` are
+// one record but two strings, so a raw-text key invalidates two entries and
+// misses the one the write used.
 afterHook('delete', 'animal', async (context) => {
-  await cache.invalidate(`owner:${context.params.id}:pets`);
+  await cache.invalidate(`owner:${context.request.recordId}:pets`);
 });
 ```
 
@@ -719,10 +760,16 @@ afterHook('delete', 'animal', async (context) => {
 #### Authorization
 
 ```javascript
-// Additional access control - halt with 403 if unauthorized
+// Additional access control - halt with 403 if unauthorized.
+//
+// `context.request.recordId` is the id the ORM resolved the record by — the
+// same value `access()` is handed. Authorizing on `context.params.id` instead
+// looks up the raw client text: on a numeric-id model that lookup returns
+// `undefined` for EVERY spelling, `animal.owner` throws, and the check never
+// runs. Measured; abofs/stonyx-orm#270.
 beforeHook('delete', 'animal', (context) => {
   const user = context.state.currentUser;
-  const animal = store.get('animal', context.params.id);
+  const animal = store.get('animal', context.request.recordId);
 
   if (animal.owner !== user.id && !user.isAdmin) {
     return 403; // Forbidden
@@ -923,6 +970,48 @@ test('validation hook rejects negative age', async () => {
 | `afterHook`     | Register an after hook for post-operation logic.                        |
 | `clearHook`     | Clear hooks for a specific operation:model.                             |
 | `clearAllHooks` | Clear all registered hooks (useful for testing).                        |
+| `normalizeRecordId` | Turn a raw URL id into the value the ORM resolves the record by. |
+
+### `normalizeRecordId(id)`
+
+```ts
+normalizeRecordId(id?: string | null): string | number
+```
+
+The **one** implementation of URL-id normalisation in the package
+(abofs/stonyx-orm#270). `access()` is already handed its result as
+`request.recordId`; import it for the places `access()` does not reach — hooks,
+custom handlers, your own lookups. Synchronous, and it must stay synchronous:
+`auth()` is invoked without `await`.
+
+| Input | Returns | Note |
+| --- | --- | --- |
+| `'7'`, `'007'`, `'7.0'`, `'7.9'`, `'7e0'`, `'0x7'`, `'+7'`, `' 7'` | `7` (number) | `parseInt` with **no radix**; passing a radix of 10 would make this `0` |
+| `'angela'`, `'ANGELA'` | the same string, case included | a non-numeric id is passed through untouched |
+| `'0'`, `'00'`, `'-0'`, `'0x0'` | `0` (number) | falsy, and a legitimate record id |
+| `' '`, `'\t'`, `'\n'`, `'\u00a0'` | `NaN` | whitespace-only ids are numeric to `isNaN` but parse to nothing |
+| `''`, `null`, `undefined` | `''` (empty string) | **not** `undefined` — see the trap below |
+
+**The trap.** `request.recordId` is `undefined` on a collection route;
+`normalizeRecordId(undefined)` is `''`. They are different values and a
+collection check written against the wrong one silently never fires:
+
+```javascript
+// WRONG — never true, so this branch never runs
+if (normalizeRecordId(context.params.id) === undefined) { /* … */ }
+
+// Right — the ORM attaches undefined for "this route carries no :id"
+if (context.request.recordId === undefined) { /* collection route */ }
+```
+
+The `''` is deliberate: `store.get(key, undefined)` returns the whole model Map
+rather than a record (abofs/stonyx-orm#167), so the resolution path depends on
+the empty string this function returns today.
+
+**A normalised id is not a promise that a record exists.** `0` and `NaN` are both
+possible returns and neither addresses a record you can rely on — `NaN` is not
+even `===` itself, so `recordId === NaN` can never be written as a guard. Treat
+`recordId` as "the key the lookup will use", not as "a record is there".
 
 ## Project Structure
 

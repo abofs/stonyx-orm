@@ -9,7 +9,21 @@ import type { OrmRecord } from './types/orm-types.js';
 import { isOrmRecord } from './utils.js';
 import normalizeRecordId from './normalize-record-id.js';
 
-interface OrmRequest$ extends Request {
+/**
+ * The request object a consumer's `access()` predicate receives.
+ *
+ * Exported because `recordId` is public API — README's `access()` samples
+ * destructure it — and a public runtime field with an unreachable type asks the
+ * consumer to re-declare something the framework already knows, which is
+ * abofs/stonyx-orm#270's own defect shape one layer over into the type surface.
+ * `HookContext` (src/hooks.ts) is this repo's precedent for exporting the
+ * interface a consumer is handed. Re-exported from the root barrel as
+ * `OrmAccessRequest` (src/index.ts) — NOT as `OrmRequest`, which is already the
+ * default-exported CLASS in this file and means something else. The
+ * `./orm-request` subpath is not in the `exports` map, so the barrel is the
+ * only reachable spelling.
+ */
+export interface OrmRequest$ extends Request {
   protocol?: string;
   // Express sets this to the path the router was mounted at, e.g. '/api/animals'
   // when orm.restServer.route is '/api'. Optional because non-Express callers
@@ -20,7 +34,11 @@ interface OrmRequest$ extends Request {
   // Attached by auth() before access() runs — abofs/stonyx-orm#270. This is the
   // value the ORM resolves the record by; `params.id` remains the raw client
   // text it was parsed from.
-  recordId?: string | number;
+  //
+  // `undefined` is part of the contract, not an absence: it is how a collection
+  // route is told from a record route, and both documented samples branch on
+  // it. Spelled out rather than left to `?:` for that reason.
+  recordId?: string | number | undefined;
   body?: { [key: string]: unknown };
   query?: { [key: string]: string };
   get(header: string): string;
@@ -112,11 +130,21 @@ function getBaseUrl(request: OrmRequest$, pluralizedModel: string): string {
   return `${protocol}://${host}${prefix}`;
 }
 
-// Kept as a name because twelve call sites read `getId(request.params)`, and
-// docs/hooks.md documents that spelling. It is now a thin delegate: there is
-// exactly ONE normalisation in the repo, and it is the exported one a consumer
-// can import. A second implementation here is the defect abofs/stonyx-orm#270
-// exists to remove — see src/normalize-record-id.ts.
+// Kept as a name because twelve `getId(...)` call sites read it. It is now a
+// thin delegate: there is exactly ONE normalisation of a URL id in the repo,
+// and it is the exported one a consumer can import.
+//
+// "of a URL id" is the load-bearing qualifier, and it is the same one
+// src/normalize-record-id.ts:18 carries. Three copies of the coercion survive
+// at this head — src/orm-request.ts (the create-response path),
+// src/postgres/postgres-db.ts and src/mysql/mysql-db.ts — but each normalises a
+// RESPONSE id (`response?.data?.id`), not a URL id, and each omits this
+// function's `if (!id) return ''` guard. They are tracked as
+// abofs/stonyx-orm#282 and enumerated by name in AC-5's allowlist
+// (test/integration/readme-sample-test.ts).
+//
+// A second implementation of the URL-id normalisation here is the defect
+// abofs/stonyx-orm#270 exists to remove — see src/normalize-record-id.ts.
 function getId(params: { id?: string; [key: string]: unknown }): string | number {
   return normalizeRecordId(params.id);
 }
@@ -615,10 +643,10 @@ export default class OrmRequest extends Request {
     // handlers; this line is the contract.
     //
     // `request.params` is deliberately NOT mutated. Twelve `getId(...)` call
-    // sites, the serializer, and consumer hooks (docs/hooks.md documents
-    // `getId(request.params)`) all read it, and changing `params.id` from
-    // string to number underneath them is a silent behaviour change on paths
-    // this issue is not about.
+    // sites read it, and `_withHooks` assigns `params: request.params` onto the
+    // hook context, so every consumer hook reads the same object. Changing
+    // `params.id` from string to number underneath them is a silent behaviour
+    // change on paths this issue is not about.
     //
     // Synchronous by necessity: @stonyx/rest-server calls auth() without
     // awaiting it.

@@ -18,9 +18,12 @@
  * The ONE place a URL id is turned into the value a record is resolved by —
  * abofs/stonyx-orm#270.
  *
- * Before this existed the same expression was written out seven times: twice in
+ * Before this existed this coercion was written out seven times: twice in
  * README.md, once in docs/usage-patterns.md, and four times inside the
- * framework. The framework's copy — `getId()`, module-private in
+ * framework. Seven copies, not seven identical copies — the three persistence
+ * ones (abofs/stonyx-orm#282) omit the `if (!id) return ''` guard below, which
+ * is the point: nothing held them together, so they had already drifted.
+ * The framework's copy — `getId()`, module-private in
  * orm-request.ts, unreachable through the package `exports` map — was the one
  * that decided which record a request addressed, and a consumer's `access()`
  * predicate had no way to obtain it. So the framework resolved the record by
@@ -62,6 +65,17 @@
  * Must stay synchronous: `auth()` is invoked without `await` by
  * @stonyx/rest-server, so a promise here would be handed to `access()` as the
  * record id.
+ *
+ * FALSY AND `NaN` RETURNS ARE LOAD-BEARING ELSEWHERE — abofs/stonyx-orm#287.
+ * `''` is returned for any falsy id because `store.get(key, undefined)` returns
+ * the whole model Map rather than a record (abofs/stonyx-orm#167). But `''` is
+ * not the only falsy return: `'0'`, `'00'`, `'-0'` and `'0x0'` all normalise to
+ * `0`, and `' '`, `'\t'`, `'\n'`, `'\u00a0'` all normalise to `NaN` (their
+ * `Number()` is `0`, so the `isNaN` guard does not fire and `parseInt` runs).
+ * `store.remove(key, id)` branches on truthiness, so those spellings reach a
+ * fall-through this function does not own. Tracked as #287; every row is pinned
+ * in test/unit/normalize-record-id-test.ts so a cleanup here cannot move the
+ * boundary #287 is measured against.
  *
  * @param id the raw, already-URL-decoded id text from `request.params.id`
  * @returns the value the ORM resolves the record by

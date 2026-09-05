@@ -23,10 +23,12 @@
  *         than a silent one.
  *
  * AC-2 and AC-3 are behavioural and live in
- * test/integration/record-id-resolution-test.ts; AC-4 and AC-5 extend the
- * static guard in test/integration/readme-sample-test.ts. Behavioural
- * assertions are kept out of that file so abofs/stonyx-orm#271 (which
- * relocates it) cannot orphan them.
+ * test/integration/reference-access/record-id-resolution.ts (NOT `-test.ts` —
+ * the filename deliberately falls outside the main glob, which boots a
+ * different access directory); AC-4 and AC-5 extend the static guard in
+ * test/integration/readme-sample-test.ts. Behavioural assertions are kept out
+ * of that file so abofs/stonyx-orm#271 (which relocates it) cannot orphan
+ * them.
  */
 import QUnit from 'qunit';
 import { execFile } from 'node:child_process';
@@ -72,6 +74,51 @@ const CORPUS = [
   // The falsy boundary. '' rather than undefined, because store.get(key,
   // undefined) returns the whole model Map instead of a record (#167).
   ['', '', 'an empty id normalises to the empty string, never to undefined'],
+];
+
+/**
+ * The FALSY numeric returns — abofs/stonyx-orm#287.
+ *
+ * `normalizeRecordId` returns a falsy value for more inputs than `''`, and the
+ * set is not obvious from reading it: `parseInt` folds four distinct URL
+ * spellings onto `0`. `0` is a legitimate record id AND it is falsy, and
+ * `store.remove(key, id)` branches on truthiness (`src/store.ts`), so which
+ * inputs land here decides which URLs reach a `store.remove` fall-through.
+ *
+ * THIS FILE DOES NOT FIX THAT, AND MUST NOT. The destruction is #287's subject
+ * and is byte-identical on `origin/dev`; changing `store.remove` inside a
+ * priority-critical authorization fix would put an unreviewed behaviour change
+ * on the persistence path. What is pinned here is only the CONTRACT — the value
+ * each spelling normalises to — so that a future "cleanup" of this function
+ * cannot silently move the boundary #287 is measured against.
+ *
+ * Separated from CORPUS because the assertion is different: `0` and `-0` are
+ * `===` each other, so the sign has to be asserted with Object.is.
+ */
+const FALSY_CORPUS = [
+  ['0', 0, false, 'a bare zero — a legitimate record id that is ALSO falsy'],
+  ['00', 0, false, 'leading zeroes fold onto 0'],
+  ['-0', 0, true, 'negative zero — Object.is distinguishes it, Map key lookup does not (SameValueZero)'],
+  ['0x0', 0, false, 'hex zero — parseInt has no radix, so 0x0 is read as hex and folds onto 0'],
+];
+
+/**
+ * The `NaN` producers — abofs/stonyx-orm#287.
+ *
+ * A whitespace-only id is NOT caught by `isNaN`: `Number(' ')` is `0`, so
+ * `isNaN(' ')` is FALSE and the value falls through to `parseInt(' ')`, which
+ * is `NaN`. Every one of these is a plain percent-encoded address-bar request.
+ *
+ * `NaN` is the value a consumer cannot guard against with the documented
+ * pattern — `recordId === NaN` is false by definition — which is why it is
+ * pinned by name rather than left to the reader to derive. Again: the contract
+ * only; #287 owns the consequence.
+ */
+const NAN_CORPUS = [
+  [' ', 'a single space, the decoded form of /%20'],
+  ['\t', 'a tab, the decoded form of /%09'],
+  ['\n', 'a newline, the decoded form of /%0A'],
+  ['\u00a0', 'a non-breaking space, the decoded form of /%C2%A0'],
 ];
 
 module('[Unit] normalizeRecordId (#270)', function() {
@@ -171,6 +218,22 @@ module('[Unit] normalizeRecordId (#270)', function() {
 
       const types = readFileSync(path.join(repoRoot, 'dist/index.d.ts'), 'utf8');
       assert.ok(/normalizeRecordId/.test(types), 'dist/index.d.ts declares normalizeRecordId, so TypeScript consumers see it too');
+
+      // `request.recordId` is public API in JS; without this it is public API
+      // in JS ONLY, and a TypeScript consumer following README's
+      // `const { recordId } = request;` has to re-declare a field the
+      // framework already knows — #270's own defect shape, one layer over into
+      // the type surface. `./orm-request` is not in the exports map, so the
+      // root barrel is the only spelling that can carry it.
+      assert.ok(
+        /export type \{ OrmRequest\$ as OrmAccessRequest \}/.test(types),
+        'dist/index.d.ts re-exports the access() request type as OrmAccessRequest'
+      );
+
+      const requestTypes = readFileSync(path.join(repoRoot, 'dist/orm-request.d.ts'), 'utf8');
+
+      assert.ok(/export interface OrmRequest\$/.test(requestTypes), 'dist/orm-request.d.ts EXPORTS the interface, so the re-export above resolves');
+      assert.ok(/recordId\?: string \| number \| undefined/.test(requestTypes), 'and the interface declares recordId, including the undefined the collection branch depends on');
     });
   });
 
@@ -191,6 +254,43 @@ module('[Unit] normalizeRecordId (#270)', function() {
         );
       });
     }
+
+    for (const [raw, expected, isNegativeZero, why] of FALSY_CORPUS) {
+      test(`normalizeRecordId(${JSON.stringify(raw)}) === ${expected} — ${why}`, function(assert) {
+        const actual = normalizeRecordId(raw);
+
+        assert.strictEqual(actual, expected, `${JSON.stringify(raw)} -> ${String(actual)} (expected ${expected}: ${why})`);
+        assert.strictEqual(typeof actual, 'number', `${JSON.stringify(raw)} -> ${typeof actual}; it is a NUMBER, so a predicate comparing === against 0 matches it`);
+        assert.strictEqual(Object.is(actual, -0), isNegativeZero, `${JSON.stringify(raw)} -> ${Object.is(actual, -0) ? '-0' : '+0'}`);
+
+        // The property that makes this row load-bearing rather than trivia.
+        assert.notOk(actual, `${JSON.stringify(raw)} normalises to a FALSY id — see abofs/stonyx-orm#287; not fixed here`);
+      });
+    }
+
+    for (const [raw, why] of NAN_CORPUS) {
+      test(`normalizeRecordId(${JSON.stringify(raw)}) is NaN — ${why}`, function(assert) {
+        const actual = normalizeRecordId(raw);
+
+        // Not strictEqual: NaN !== NaN, which is the whole point.
+        assert.ok(Number.isNaN(actual), `${JSON.stringify(raw)} -> ${String(actual)} (expected NaN: ${why})`);
+        assert.strictEqual(typeof actual, 'number', `${JSON.stringify(raw)} -> ${typeof actual}`);
+
+        // Non-vacuity for the row above: this input is NOT caught by the
+        // isNaN() guard inside the normaliser, which is why it reaches parseInt.
+        assert.notOk(isNaN(raw), `isNaN(${JSON.stringify(raw)}) is FALSE — Number(${JSON.stringify(raw)}) is 0, so the guard does not fire and parseInt runs`);
+
+        // Unguardable by the documented predicate — abofs/stonyx-orm#287.
+        assert.notOk(actual === actual, `recordId === recordId is false for ${JSON.stringify(raw)}, so no === guard a consumer writes can ever match it`);
+      });
+    }
+
+    test('control — a NaN row could have failed: an ordinary numeric id is not NaN', function(assert) {
+      // Without this, `Number.isNaN(actual)` above would also pass against a
+      // normaliser that returned NaN for everything.
+      assert.notOk(Number.isNaN(normalizeRecordId('7')), "normalizeRecordId('7') is 7, not NaN");
+      assert.notOk(Number.isNaN(normalizeRecordId('angela')), "normalizeRecordId('angela') is 'angela', not NaN");
+    });
 
     test('an absent id normalises to the empty string, not undefined', function(assert) {
       // store.get(key, undefined) returns the whole model Map rather than a

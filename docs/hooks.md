@@ -122,7 +122,7 @@ _withHooks(operation, handler) {
 
     // Capture old state for update/delete
     if (operation === 'update' || operation === 'delete') {
-      const existingRecord = store.get(this.model, getId(request.params));
+      const existingRecord = await store.find(this.model, normalizeRecordId(request.params.id));
       if (existingRecord) {
         context.oldState = JSON.parse(JSON.stringify(existingRecord));
       }
@@ -172,7 +172,12 @@ beforeHook('create', 'animal', (context) => {
 
 ```javascript
 beforeHook('delete', 'animal', (context) => {
-  const animal = store.get('animal', context.params.id);
+  // `context.request.recordId` is the id the ORM resolved this record by.
+  // `context.params.id` is the raw client text — on a numeric-id model
+  // `store.get('animal', context.params.id)` returns `undefined` for every
+  // spelling, and `animal.protected` then throws. Measured;
+  // abofs/stonyx-orm#270.
+  const animal = store.get('animal', context.request.recordId);
   if (animal.protected) {
     return { errors: [{ detail: 'Cannot delete protected animals' }] };
   }
