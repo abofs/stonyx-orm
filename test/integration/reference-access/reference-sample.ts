@@ -64,6 +64,28 @@ module('[Integration] reference access sample (#265)', function(hooks) {
     try { RestServer.close(); } catch { /* force-exit hook handles the rest */ }
   });
 
+  test('authorization runs AFTER route matching — request.params is populated', async function(assert) {
+    // Named explicitly (Phase 2 WARNING 5) so a regression in this guarantee
+    // diagnoses itself instead of looking like an ORM access defect. The
+    // ordering is @stonyx/rest-server's contract — `ef7e6a3 Fix: populate
+    // request.params before auth runs (#11)`, asserted upstream at
+    // test/integration/rest-server-test.ts:120 — and every sample in this repo
+    // authorizes on request.params, so if params were empty at auth() time the
+    // documented sample would fail OPEN, not closed.
+    //
+    // This is the whole PR's load-bearing assumption stated once, in one place.
+    const response = await fetch(`${origin}/owners/${PROTECTED}`);
+
+    assert.ok(
+      response.status >= 400,
+      `GET /owners/${PROTECTED} -> ${response.status}: access() saw a populated request.params.id. ` +
+      'If this is 200, params were empty when auth() ran and every access class in this repo fails open.'
+    );
+
+    const survived = Boolean(await store.find('owner', PROTECTED));
+    assert.ok(survived, `"${PROTECTED}" exists, so the refusal above is a denial and not a 404`);
+  });
+
   test('the protected record is refused on read and on delete', async function(assert) {
     const read = await fetch(`${origin}/owners/${PROTECTED}`);
     assert.equal(read.status, 403, `GET /owners/${PROTECTED} -> 403`);
@@ -151,9 +173,44 @@ module('[Integration] reference access sample (#265)', function(hooks) {
     createRecord('owner', raw.owners.find(o => o.name === 'bob'));
   });
 
+  test('KNOWN #256 — the animal collection filter removes nothing, and that is pinned', async function(assert) {
+    // global-access.ts:34 returns `record => record.owner !== 'angela'`, but
+    // record.owner is the related Record instance, not the id string, so the
+    // predicate is never false. Phase 3 and Phase 4 measured this independently
+    // and got the same numbers; this pins it so the reference sample cannot
+    // silently endorse the shape, and so #256 landing is a visible event here
+    // rather than a quiet change.
+    //
+    // WHEN #256 IS FIXED THIS TEST GOES RED. That is the point: flip the
+    // expectation to `leaked.length === 0` in the same commit that fixes it.
+    const response = await fetch(`${origin}/animals`);
+    assert.equal(response.status, 200, 'GET /animals -> 200');
+
+    const { data } = await response.json();
+    const leaked = data.filter(record => record.relationships?.owner?.data?.id === PROTECTED);
+
+    assert.ok(data.length > 0, `the collection is non-empty — got ${data.length} animals`);
+    assert.ok(
+      leaked.length > 0,
+      `#256 is still live: ${leaked.length} of ${data.length} animals belong to "${PROTECTED}" and the filter did not remove them (ids [${leaked.map(r => r.id)}])`
+    );
+
+    // The widened surface, also inert only because the predicate never fires.
+    for (const spelling of ['/animals/', '/ANIMALS', '/animals?x=1']) {
+      const wide = await fetch(`${origin}${spelling}`);
+
+      assert.ok([200, 404].includes(wide.status), `GET ${spelling} -> ${wide.status} (200 lenient | 404 strict)`);
+    }
+  });
+
   test('the documented Intentional Gap is still intentional', async function(assert) {
-    // global-access.ts states it does not block angela's related routes. Pinned
-    // so the gap stays a decision rather than quietly becoming an accident.
+    // global-access.ts:28 states it does not block angela's related routes.
+    // Pinned so the gap stays a decision rather than quietly becoming an
+    // accident. The gap is a DISCLOSURE of the protected record's related data;
+    // it is tracked as part of abofs/stonyx-orm#202 (access() cannot see the
+    // model, so a per-model rule cannot reach the related routes). If #202 or a
+    // successor closes it, this test is the one that will read as a regression
+    // — flip it there rather than deleting it.
     const related = await fetch(`${origin}/owners/${PROTECTED}/pets`);
     assert.equal(related.status, 200, `GET /owners/${PROTECTED}/pets -> 200 (documented gap)`);
   });

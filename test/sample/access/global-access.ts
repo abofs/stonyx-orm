@@ -27,10 +27,23 @@ export default class GlobalAccess {
 
       // Intentional Gap: This logic does not block access to angela's animals if called individually by id
 
-      // Returning a function will will plug it in to response object as a filter
+      // Returning a function will plug it in to response object as a filter
       if (isCollection) return record => record.id !== 'angela';
     }
 
+    // KNOWN DEFECT — abofs/stonyx-orm#256. `record.owner` is the related Record
+    // instance, not the id string, so `!== 'angela'` is ALWAYS true: this filter
+    // removes nothing and GET /animals serves all of angela's animals. Measured,
+    // and pinned by reference-sample.ts so it stays a tracked decision rather
+    // than an unnoticed leak. Not fixed here — #256 owns it, and #265 is scoped
+    // to the URL-vs-params axis.
+    //
+    // Note this line also WIDENS #256's surface relative to the pre-#265 code:
+    // `url.endsWith('/animals')` was false for /animals/, /ANIMALS and
+    // /animals?x=1, whereas `model === 'animals' && isCollection` is true for
+    // all of them. That is inert only because the predicate never fires, and it
+    // is the correct direction — once #256 lands, the filter applies to every
+    // spelling instead of one.
     if (model === 'animals' && isCollection) return record => record.owner !== 'angela';
 
     // Allows full access to all calls that don't match any of the above conditions
