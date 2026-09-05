@@ -104,16 +104,50 @@ function collectBinTargets() {
 // `import('@stonyx/orm')` after a plain default install — an ORM-only consumer
 // could not boot.
 //
-// MUTATIONS THESE TESTS DIE UNDER:
-//  1. restore the static `import setupRestServer from './setup-rest-server.js';`
-//     at the top of src/main.ts (and drop the `await import()` in the guard) —
-//     test 1 reports the sentinel for the '.' subpath, and tests 4/5/6 fail on
-//     the source shape;
-//  2. add `import '@stonyx/rest-server';` to the top of ANY module reachable
-//     from ANY published subpath — e.g. src/exports/db.ts or src/hooks.ts —
-//     test 1 reports the sentinel for that subpath. Measured; see PR #283.
-//  3. publish a SECOND `bin` command whose module statically reaches the peer —
-//     test 4 reports the sentinel for that command. Measured; see PR #283.
+// MUTATIONS THESE TESTS DIE UNDER.
+//
+// Each mutation names the tests that go red BY TEST NAME, never by position. An
+// ordinal list rots the next time a test is inserted above one of its entries,
+// and this block did, twice — the history is in `git log -p` on this file:
+//   - 69b7fd23 wrote "tests 3/4/5" for mutation 1, correct for the five tests
+//     that existed then;
+//   - febf76a3 inserted two tests above them (the subpath-enumeration test at
+//     position 2 and the `bin` test at position 4) and shifted the note by one,
+//     to "tests 4/5/6", where the correct set had become 5/6/7;
+//   - 366c0e9a appended mutation 3 below it and left mutation 1 as it was.
+// Re-measured: mutation 1 reds the four tests named below, and the `bin` test —
+// position 4, the one the stale note accused — PASSES.
+//
+// A name cannot rot that way. Inserting a test cannot invalidate one, and
+// renaming a test is a deliberate edit to a string that appears verbatim both
+// here and in its own test() call, so a grep for the old name finds this block.
+//
+// All three failure sets below were measured at the head that introduced this
+// comment, with `pnpm build` asserted rc=0 before each TAP read.
+//
+//  1. Restore the static `import setupRestServer from './setup-rest-server.js';`
+//     at the top of src/main.ts and drop the `await import()` from the guard.
+//     Red:
+//       "AC1 — every published `exports` subpath links with the optional peer
+//        absent", reporting the sentinel for '.', './db', './migrate' and
+//        './commands' (measured),
+//       "AC1 — src/main.ts has no static import of setup-rest-server",
+//       "AC2 — the REST path is still wired, behind the restServer.enabled
+//        guard",
+//       "AC3 — setup-rest-server.js is the only dist module whose laziness is
+//        load-bearing".
+//  2. Add `import '@stonyx/rest-server';` to the top of ANY module reachable
+//     from ANY published subpath — e.g. src/exports/db.ts or src/hooks.ts.
+//     Red:
+//       "AC1 — every published `exports` subpath links with the optional peer
+//        absent", reporting the sentinel once per subpath that reaches the
+//        mutated module. Measured with src/hooks.ts: '.', './db', './migrate',
+//        './commands' and './hooks' red; './standalone-db' does not reach it
+//        and stays green.
+//  3. Publish a SECOND `bin` command whose module statically reaches the peer.
+//     Red:
+//       "AC1 — every published `bin` entry point links with the optional peer
+//        absent", naming the command and its target.
 module('[Unit] Lazy rest-server import (#280)', function() {
   test('AC1 — every published `exports` subpath links with the optional peer absent', function(assert) {
     const { targets } = collectExportTargets();
@@ -157,7 +191,8 @@ module('[Unit] Lazy rest-server import (#280)', function() {
   test('AC1 control — the probe DOES catch a static reach, so test 1 can fail', function(assert) {
     // Sanity-control the harness: setup-rest-server.js legitimately imports the
     // peer at module scope. If this ever stops reporting the sentinel, the
-    // absent-peer hook has stopped working and test 1 is vacuous.
+    // absent-peer hook has stopped working and the `exports` subpath test is
+    // vacuous.
     const probe = linkUnderAbsentPeer('dist/setup-rest-server.js');
 
     assert.strictEqual(
@@ -175,9 +210,10 @@ module('[Unit] Lazy rest-server import (#280)', function() {
     // before any of that, so a static reach dies with the sentinel on stderr.
     const bins = collectBinTargets();
 
-    // Non-vacuity, same reason as test 2: if `bin` is ever emptied or
-    // restructured into a shape collectBinTargets() does not understand, the
-    // loop below goes silently empty and stops guarding anything.
+    // Non-vacuity, same reason as the subpath-enumeration test: if `bin` is ever
+    // emptied or restructured into a shape collectBinTargets() does not
+    // understand, the loop below goes silently empty and stops guarding
+    // anything.
     assert.ok(
       bins.length > 0,
       `package.json declares ${bins.length} bin command(s): ${bins.map(b => b.command).join(', ')}`

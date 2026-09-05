@@ -187,9 +187,11 @@ export default class Orm {
       // optional peer.
       //
       // NOT the same reason the SQL/DynamoDB drivers above are lazy: those
-      // modules carry no static peer specifier at all, so the `await import()`
-      // there is not what isolates pg / mysql2 / @aws-sdk — that happens one
-      // layer down, in src/*/connection.ts (and src/dynamodb/dynamodb-db.ts).
+      // modules carry no static peer specifier that survives to `dist/`
+      // (postgres-db.ts:15 and mysql-db.ts:17 are `import type`, erased by
+      // tsc), so the `await import()` there is not what isolates pg / mysql2 /
+      // @aws-sdk — that happens one layer down, in src/*/connection.ts (and
+      // src/dynamodb/dynamodb-db.ts).
       // setup-rest-server.js is the only dist module whose laziness is
       // load-bearing for peer resolution. (#280)
       const { default: setupRestServer } = await import('./setup-rest-server.js');
