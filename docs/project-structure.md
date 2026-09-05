@@ -51,8 +51,8 @@ published entry point makes importing that entry point throw
 `ERR_MODULE_NOT_FOUND` before one line of ORM code runs — `optional: true` and
 an unconditional static import cannot both be true.
 
-**Where each peer is actually isolated.** There is no single house form; these
-are the four in the tree, each read off `dist/`:
+**Where each peer is actually isolated.** There is no single house form — four
+distinct ones are in use. Every row below is read off `dist/`:
 
 | Peer | Isolated in | Form |
 |---|---|---|
