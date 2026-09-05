@@ -44,6 +44,12 @@ const PROTECTED = 'angela';
  */
 const PROTECTED_ANIMAL = 7;
 
+/** An animal the documented sample grants full CRUD on — the calibration target. */
+const UNPROTECTED_ANIMAL = 8;
+
+/** Written by the authorized-PATCH control, so the write is observable. */
+const PATCHED_SIZE = 'control-patched';
+
 let origin;
 let port;
 
@@ -322,6 +328,32 @@ module('[Integration] README access() sample (#265)', function(hooks) {
       assert.notOk(restored, 'record did not have to be re-seeded — nothing destroyed it');
     });
 
+    test('control — a PATCH that IS authorized reaches the record and changes it', async function(assert) {
+      // Calibrates the denial below. Without this, a PATCH rejected by the body
+      // parser is indistinguishable from a PATCH rejected by access(): both are
+      // >= 400 and both leave the record alone. Measured, that is not
+      // hypothetical — the denial test used to send
+      // `Content-Type: application/vnd.api+json`, which this REST server's body
+      // parser rejects with 400 BEFORE authorization runs, so it stayed green
+      // under both fail-open mutations of the documented sample.
+      const before = await store.find('animal', UNPROTECTED_ANIMAL);
+
+      assert.ok(before, `animal ${UNPROTECTED_ANIMAL} is present before the PATCH`);
+
+      const response = await rawRequest({
+        port,
+        method: 'PATCH',
+        target: `/animals/${UNPROTECTED_ANIMAL}`,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { id: String(UNPROTECTED_ANIMAL), type: 'animal', attributes: { size: PATCHED_SIZE } } }),
+      });
+
+      assert.equal(response.status, 200, `PATCH /animals/${UNPROTECTED_ANIMAL} -> ${response.status} (${response.statusLine})`);
+
+      const after = await store.find('animal', UNPROTECTED_ANIMAL);
+      assert.equal(after?.size, PATCHED_SIZE, `animal ${UNPROTECTED_ANIMAL}.size was actually written — now "${after?.size}"`);
+    });
+
     test('PATCH /animals/7.9 is denied and the record is unmodified', async function(assert) {
       const before = await store.find('animal', PROTECTED_ANIMAL);
 
@@ -331,15 +363,24 @@ module('[Integration] README access() sample (#265)', function(hooks) {
 
       const size = before?.size;
 
+      // application/json, not application/vnd.api+json. The JSON:API media type
+      // is rejected by the body parser with a 400 before authorization is
+      // consulted, which satisfied BOTH of this test's assertions without the
+      // request ever reaching access(). Measured: under a blanket-allow sample
+      // the vnd.api+json form stayed 400 while the application/json form
+      // returned 200 with size=PWNED. This test could not go red; the control
+      // above proves the media type it now sends does reach the record.
       const response = await rawRequest({
         port,
         method: 'PATCH',
         target: '/animals/7.9',
-        headers: { 'Content-Type': 'application/vnd.api+json' },
-        body: JSON.stringify({ data: { id: '7', type: 'animals', attributes: { size: 'PWNED' } } }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: { id: String(PROTECTED_ANIMAL), type: 'animal', attributes: { size: 'PWNED' } } }),
       });
 
-      assert.ok(response.status >= 400, `PATCH /animals/7.9 -> ${response.status} (denied)`);
+      // equal, not >= 400: a 400 here would mean the request died before
+      // authorization, which is exactly the vacuity this test carried.
+      assert.equal(response.status, 403, `PATCH /animals/7.9 -> ${response.status} (${response.statusLine}) — 403 means access() refused it, not that the parser did`);
 
       const after = await store.find('animal', PROTECTED_ANIMAL);
       assert.equal(after?.size, size, `animal ${PROTECTED_ANIMAL}.size is unchanged — was "${size}", now "${after?.size}"`);
