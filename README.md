@@ -402,10 +402,12 @@ export default class AnimalAccess {
 }
 ```
 
-The sample above is executed verbatim against a live server by
-`test/integration/readme-access/`, which reads it out of this file: the request
-`DELETE /owners/angela` is asserted to return 403 with the record intact, along
-with each of the spellings named above.
+Both samples above are extracted from this file and executed verbatim against a
+live server on every CI run — see
+[`test/integration/readme-access/`](https://github.com/abofs/stonyx-orm/tree/dev/test/integration/readme-access).
+`DELETE /owners/angela` is asserted to be refused with the record intact, and
+every spelling named above is measured individually, the numeric ones over a raw
+socket. Nothing in this section is prose that was never run.
 
 ### Upgrading: behaviour changes
 
