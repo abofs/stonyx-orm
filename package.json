@@ -4,7 +4,7 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.3.2-beta.213",
+  "version": "0.3.2-beta.214",
   "description": "",
   "main": "dist/index.js",
   "type": "module",
@@ -72,7 +72,7 @@
     "@stonyx/cron": "0.2.1-beta.116",
     "@stonyx/events": "0.1.1-beta.62",
     "@stonyx/utils": "0.2.3-beta.26",
-    "stonyx": "0.2.3-beta.91"
+    "stonyx": "0.2.3-beta.92"
   },
   "peerDependencies": {
     "@aws-sdk/client-dynamodb": "^3.0.0",
