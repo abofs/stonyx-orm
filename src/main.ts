@@ -20,7 +20,6 @@ import log from 'stonyx/log';
 import { forEachFileImport } from '@stonyx/utils/file';
 import { kebabCaseToPascalCase, pluralize } from '@stonyx/utils/string';
 import { registerPluralName } from './plural-registry.js';
-import setupRestServer from './setup-rest-server.js';
 import baseTransforms from './transforms.js';
 import Store from './store.js';
 import Serializer from './serializer.js';
@@ -177,6 +176,25 @@ export default class Orm {
     }
 
     if (restServer.enabled === 'true') {
+      // MUST stay dynamic. setup-rest-server.js names the optional
+      // '@stonyx/rest-server' peer in its own static graph — directly, and
+      // through orm-request.ts / meta-request.ts, which import `Request` at
+      // module scope because they extend it (correctly: an `extends` base
+      // class cannot be awaited). Node links a module's entire static graph
+      // before evaluating any of it, so a static import here puts that
+      // specifier on the entry graph and `import('@stonyx/orm')` throws
+      // ERR_MODULE_NOT_FOUND for an ORM-only consumer that never installed the
+      // optional peer.
+      //
+      // NOT the same reason the SQL/DynamoDB drivers above are lazy: those
+      // modules carry no static peer specifier that survives to `dist/`
+      // (postgres-db.ts:15 and mysql-db.ts:17 are `import type`, erased by
+      // tsc), so the `await import()` there is not what isolates pg / mysql2 /
+      // @aws-sdk — that happens one layer down, in src/*/connection.ts (and
+      // src/dynamodb/dynamodb-db.ts).
+      // setup-rest-server.js is the only dist module whose laziness is
+      // load-bearing for peer resolution. (#280)
+      const { default: setupRestServer } = await import('./setup-rest-server.js');
       promises.push(setupRestServer(restServer.route, paths.access, restServer.metaRoute));
     }
 
