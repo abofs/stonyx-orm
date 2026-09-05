@@ -107,7 +107,19 @@ module('[Docs] access() sample extraction (#265)', function() {
   // :90, ```typescript blocks written as continuation lines of a numbered
   // list — which is why a column-0 anchor was measurably, not theoretically,
   // short of the documents the guard scans.
-  for (const width of [1, 2, 3]) {
+  //
+  // The widths past 3 are NOT theoretical either, and the reason they are here
+  // is that ` {0,3}` — the first correction, which cited CommonMark's
+  // three-space allowance — was wrong about what that allowance measures. It is
+  // relative to the CONTAINING BLOCK, not to the document. Inside a list item
+  // the content column shifts right, so 4, 5 and 6 spaces are all still a fence
+  // there. Measured against POST /markdown, a ```js fence written as a step of
+  // a numbered list returns highlight-source-js at 3, 4 and 6 spaces and at one
+  // leading TAB. A fail-open four-argument sample was demonstrated shipping in
+  // the npm tarball at 4 spaces with the static guard, this extractor and the
+  // behavioural harness all green at exit 0 — the third instance of that
+  // signature on this PR. Hence: no cap at all, and these widths pin it.
+  for (const width of [1, 2, 3, 4, 5, 6, 7, 8, 12, 20]) {
     test(`an ADDITIVE fail-open sample behind a ${width}-space-indented fence is not invisible`, function(assert) {
       const markdown = [
         '# Doc',
@@ -156,6 +168,64 @@ module('[Docs] access() sample extraction (#265)', function() {
     // indent is markdown structure, not source, so it must not survive into
     // the generated class — CommonMark strips it and so does the scanner.
     assert.equal(found[0], FAIL_OPEN_SAMPLE, 'the captured code is the sample verbatim, with the fence indent removed');
+  });
+
+  test('a TAB-indented fence inside a list step is scanned, and its indent is stripped', function(assert) {
+    // A tab is not a space run, so ` *` — the correction that closed columns
+    // 4-6 — did not close this. It is the same axis and the same signature:
+    // measured against GitHub's POST /markdown (mode: gfm), a ```js fence
+    // indented by ONE TAB inside a numbered list step comes back as
+    // <div class="highlight highlight-source-js">, while two tabs do not and a
+    // tab at top level does not. So a single tab is the reachable spelling, and
+    // it was invisible until FENCE_LINE's indent capture became [ \t]*.
+    const body = FAIL_OPEN_SAMPLE.split('\n').map(line => '\t' + line).join('\n');
+    const markdown = [
+      '# Doc',
+      '',
+      '1. Create the access class:',
+      '',
+      '\t```js',
+      body,
+      '\t```',
+      '',
+      '2. Boot.',
+      '',
+    ].join('\n');
+
+    const found = findAccessSamples(markdown);
+
+    assert.equal(found.length, 1, `the tab-indented sample is found — got ${found.length}`);
+    assert.equal(found[0], FAIL_OPEN_SAMPLE, 'the captured code is the sample verbatim, with the tab indent removed');
+  });
+
+  test('no indentation column hides a sample — the whole axis, not the columns that were reported', function(assert) {
+    // The defect has moved column-wise three times (0 -> {0,3} -> any). Pinning
+    // only the widths that were reported would invite a fourth. This asserts
+    // the property the fix actually claims: there is NO indentation width at
+    // which a fail-open sample in a list step becomes invisible, and the
+    // captured bytes are the sample verbatim at every one of them, because the
+    // harness boots exactly these bytes.
+    const invisible = [];
+    const notVerbatim = [];
+
+    for (let width = 0; width <= 40; width += 1) {
+      const markdown = [
+        '# Doc',
+        '',
+        '1. Create the access class:',
+        '',
+        indent(width, '```js\n' + FAIL_OPEN_SAMPLE + '\n```'),
+        '',
+      ].join('\n');
+
+      const found = findAccessSamples(markdown);
+
+      if (found.length !== 1) invisible.push(width);
+      else if (found[0] !== FAIL_OPEN_SAMPLE) notVerbatim.push(width);
+    }
+
+    assert.deepEqual(invisible, [], `every indentation width 0-40 yields the sample — invisible at [${invisible}]`);
+    assert.deepEqual(notVerbatim, [], `every width strips its own indent exactly — not verbatim at [${notVerbatim}]`);
   });
 
   test('an indented NON-sample fence does not mis-pair the fences after it', function(assert) {
