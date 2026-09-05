@@ -203,6 +203,52 @@ module('[Integration] reference access sample (#265)', function(hooks) {
     }
   });
 
+
+  // ==========================================================================
+  // AC-3, as an OUTCOME. The string-id model was never "safe by design" — it
+  // was safe by the coincidence that getId() did not touch string ids, and one
+  // permissive token turned `GET /owners/ANGELA` into 200-with-the-record and
+  // `DELETE /owners/ANGELA` into a real destroy, with 961 assertions green.
+  //
+  // Bound to what was SERVED and to the record's POST-STATE, never to the
+  // status code: #274 means a DELETE that resolved nothing also returns 204,
+  // so status alone cannot tell "refused" from "never found".
+  //
+  // Deliberately NOT bound to a particular status either, because both regimes
+  // are correct outcomes of #270: today the normaliser does not case-fold and
+  // `ANGELA` resolves nothing (404), and if it ever did case-fold, the
+  // predicate would see the same folded value and refuse (403). Both are
+  // "the record is not disclosed and not destroyed", which is the property.
+  // ==========================================================================
+  module('AC-3 (#270) — a case-variant spelling of the protected id discloses nothing', function() {
+    test('GET /owners/ANGELA does not serve the protected record', async function(assert) {
+      assert.ok(await store.find('owner', PROTECTED), `"${PROTECTED}" is present, so this is reachable-but-refused rather than merely absent`);
+
+      const response = await fetch(`${origin}/owners/ANGELA`);
+      const served = disclosedIds(await response.text());
+
+      assert.notOk(
+        served.includes(PROTECTED),
+        `GET /owners/ANGELA -> ${response.status} and serves no record for "${PROTECTED}" — served [${served}]`
+      );
+      assert.notEqual(response.status, 200, `GET /owners/ANGELA -> ${response.status} — not a successful record read`);
+    });
+
+    test('DELETE /owners/ANGELA leaves the protected record intact', async function(assert) {
+      const before = Boolean(await store.find('owner', PROTECTED));
+
+      assert.ok(before, `"${PROTECTED}" is present before the DELETE`);
+
+      const response = await fetch(`${origin}/owners/ANGELA`, { method: 'DELETE' });
+      const after = Boolean(await store.find('owner', PROTECTED));
+
+      // The post-state IS the assertion. 204 here is #274 and is not the point.
+      assert.ok(after, `record "${PROTECTED}" still exists after DELETE /owners/ANGELA (response was ${response.status})`);
+
+      if (!after) createRecord('owner', raw.owners.find(owner => owner.name === PROTECTED));
+    });
+  });
+
   test('the documented Intentional Gap is still intentional', async function(assert) {
     // global-access.ts:28 states it does not block angela's related routes.
     // Pinned so the gap stays a decision rather than quietly becoming an

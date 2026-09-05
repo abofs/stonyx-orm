@@ -260,6 +260,64 @@ module('[Integration] README access() sample (#265)', function(hooks) {
   });
 
   // ==========================================================================
+  // AC-3 (abofs/stonyx-orm#270) — a case-variant spelling of the protected id.
+  //
+  // The string-id model was never "safe by design". It was safe by the
+  // coincidence that getId() did not touch string ids, and one permissive token
+  // (`return id` -> `return id.toLowerCase()`) turned `GET /owners/ANGELA` into
+  // 200 serving the record and `DELETE /owners/ANGELA` into a real destroy,
+  // with 961 assertions green and exit 0 in every layer this repo runs.
+  //
+  // Bound to what was SERVED and to the record's POST-STATE, never to the
+  // status code: #274 means a DELETE that resolved nothing also returns 204,
+  // so status alone cannot tell "refused" from "never found".
+  //
+  // Deliberately NOT pinned to one status, because both regimes are correct
+  // outcomes of #270. Today the normaliser does not case-fold, so `ANGELA`
+  // resolves nothing (404). If it ever did case-fold, the predicate would be
+  // handed the same folded value and would refuse (403). Either way the record
+  // is neither disclosed nor destroyed — which is the property #270 buys, and
+  // pinning 403 or 404 here would make this suite vote against it.
+  // ==========================================================================
+  module('case-variant spellings of the protected string id (#270)', function() {
+    test('GET /owners/ANGELA does not serve the protected record', async function(assert) {
+      assert.ok(await store.find('owner', PROTECTED), `"${PROTECTED}" is present, so this is reachable-but-refused rather than merely absent`);
+
+      const response = await fetch(`${origin}/owners/ANGELA`);
+      const served = disclosedIds(await response.text());
+
+      assert.notOk(
+        served.includes(PROTECTED),
+        `GET /owners/ANGELA -> ${response.status} and serves no record for "${PROTECTED}" — served [${served}]`
+      );
+      assert.notEqual(response.status, 200, `GET /owners/ANGELA -> ${response.status} — not a successful record read`);
+    });
+
+    test('DELETE /owners/ANGELA leaves the protected record intact', async function(assert) {
+      const before = Boolean(await store.find('owner', PROTECTED));
+
+      assert.ok(before, `"${PROTECTED}" is present before the DELETE`);
+
+      const response = await fetch(`${origin}/owners/ANGELA`, { method: 'DELETE' });
+      const survived = Boolean(await store.find('owner', PROTECTED));
+
+      // The post-state IS the assertion. A 204 here is #274, not the point.
+      assert.ok(survived, `record "${PROTECTED}" still exists after DELETE /owners/ANGELA (response was ${response.status})`);
+
+      const restored = await restoreProtectedRecord();
+      assert.notOk(restored, 'record did not have to be re-seeded — nothing destroyed it');
+    });
+
+    test('GET /animals/0X7 (upper-case hex) does not serve the protected record', async function(assert) {
+      // The numeric twin of the case question: parseInt reads 0X7 as hex too.
+      const response = await rawRequest({ port, target: '/animals/0X7' });
+
+      assert.notEqual(jsonBody(response)?.data?.id, PROTECTED_ANIMAL, `GET /animals/0X7 must not disclose animal ${PROTECTED_ANIMAL}`);
+      assert.ok(await store.find('animal', PROTECTED_ANIMAL), `animal ${PROTECTED_ANIMAL} is still in the store`);
+    });
+  });
+
+  // ==========================================================================
   // The numeric-id class. src/orm-request.ts getId() coerces a numeric-looking
   // id through parseInt() BEFORE it resolves the record; the documented
   // predicate compares the raw text. Those are different values, and parseInt

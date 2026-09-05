@@ -158,22 +158,28 @@ export default class OwnerAccess {
   models = ['owner'];
 
   access(request) {
-    // Authorize on request.params, never on a URL property. Inside the mounted
-    // sub-app the request's own URL is rewritten relative to the mount point,
-    // and every other URL spelling is raw client text that varies with query
-    // strings, trailing slashes, casing and percent-encoding — abofs/stonyx-orm#265.
-    const { id } = request.params;
+    // Fail closed on a build that predates abofs/stonyx-orm#270: such a build
+    // never attaches `recordId`, so the collection branch below would fire on
+    // the record route and authorize it outright. Exact no-op on a build that
+    // has the change — `recordId` is always assigned, `undefined` included.
+    if (!('recordId' in request)) return false;
 
-    // Normalise the id the way the record lookup does. No radix on parseInt:
-    // that is deliberate, and matches src/orm-request.ts getId().
-    const recordId = id === undefined ? undefined : (isNaN(id) ? id : parseInt(id));
+    // `request.recordId` is the id the ORM resolves the record by, computed
+    // before access() runs by the same function the lookup uses — so the
+    // predicate and the lookup cannot disagree (abofs/stonyx-orm#270). Never
+    // authorize on a URL property: inside the mounted sub-app the request's own
+    // URL is rewritten relative to the mount point, and every other URL
+    // spelling is raw client text that varies with query strings, trailing
+    // slashes, casing and percent-encoding — abofs/stonyx-orm#265.
+    const { recordId } = request;
 
     // Deny specific access
     if (recordId === 'angela') return false;
 
-    // Filter collections. NOTE: a function return authorizes the request
-    // outright — the operations list below is not consulted — so this branch
-    // permits POST /owners as well as reads.
+    // Filter collections — recordId is undefined on the collection route.
+    // NOTE: a function return authorizes the request outright — the operations
+    // list below is not consulted — so this branch permits POST /owners as
+    // well as reads.
     if (recordId === undefined) return record => record.id !== 'angela';
 
     // Grant CRUD permissions

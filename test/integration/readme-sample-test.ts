@@ -110,7 +110,13 @@ const PROBE_SOURCE = 'test/integration/readme-access/readme-sample.ts';
  * deliberate edit is the point. If you delete a probe on purpose, change the
  * number in the same commit and the diff will say what you gave up.
  */
-const PROBED_TARGET_COUNTS = { animal: 20, owner: 11 };
+// Raised from { animal: 20, owner: 11 } in the #270 fix round. The pin had not
+// been moved when this PR added three probes (`GET /owners/ANGELA`,
+// `DELETE /owners/ANGELA`, `GET /animals/0X7`), so the floor carried three
+// probes of slack and every one of them could be deleted with the guard green.
+// Measured with this file's own extractor over PROBE_SOURCE at that head:
+// actual { animal: 21, owner: 13 } against a pin of { animal: 20, owner: 11 }.
+const PROBED_TARGET_COUNTS = { animal: 21, owner: 13 };
 
 /**
  * Request-target LITERALS present in PROBE_SOURCE, per model.
@@ -172,6 +178,122 @@ function probedTargetCounts(source, models) {
 const URL_PROPERTIES = /\b(?:request|req)\.(?:url|originalUrl|baseUrl|path)\b/;
 
 /**
+ * An id-coercion expression — abofs/stonyx-orm#270.
+ *
+ * A documented `access()` sample must contain NO id arithmetic. Before #270 the
+ * samples hand-copied `isNaN(id) ? id : parseInt(id)` out of the framework's
+ * module-private `getId()`, and were correct only for as long as they happened
+ * to match it character for character. Nothing held them together: changing the
+ * README's arithmetic reddened a test, while changing the framework's left 961
+ * assertions green with a protected record disclosed and destroyed.
+ *
+ * The remedy is that there is nothing to copy — `access()` is handed
+ * `request.recordId`, already normalised — so the rule is that the arithmetic
+ * must not reappear, in either direction.
+ *
+ * Paired with MENTIONS_ID so that arithmetic on something OTHER than an id
+ * (a page size, an age filter) is not swept up. Both must match on one line.
+ */
+const ID_COERCION = /\b(?:parseInt|parseFloat|Number|isNaN)\s*\(/;
+const MENTIONS_ID = /\bid\b|Id\b/i;
+
+/**
+ * Every remaining id-coercion site in the repo, with the reason it is still
+ * there. AC-5 of #270: one implementation, and any site not on this list is a
+ * new hand-copy.
+ *
+ * KEYED BY `path:line`, NOT BY PATH. The earlier form keyed by path, which gave
+ * every allowlisted FILE whole-file amnesty — and the worst-placed of those
+ * files is `src/orm-request.ts`, which owns `getId()` and `auth()` and is the
+ * file #270 was filed against.
+ *
+ * Measured on the path-keyed form, at head, twice by two reviewers and again
+ * here before this change: a brand-new hand-rolled normaliser added inside
+ * `src/orm-request.ts` —
+ *
+ *   function reviewerAddedBadNormaliser(rawId?: string): string | number {
+ *     if (!rawId) return '';
+ *     if (isNaN(rawId as unknown as number)) return rawId;
+ *
+ *     return parseInt(rawId);
+ *   }
+ *
+ * — left this test at 11 pass / 0 fail, rc=0, with AC-5 reading `ok`. The same
+ * code in a non-allowlisted file reds by name. The docblock claimed "any site
+ * not on this list is a new hand-copy"; that was only ever true of an unknown
+ * FILE. Line keys make the claim and the measurement the same statement.
+ *
+ * COST, STATED SO IT IS NOT DISCOVERED: inserting or deleting lines above one
+ * of these sites moves it, and this guard then reds on the `stale` assertion
+ * with the new coordinates in the message. That is the same deliberate-edit
+ * property PROBED_TARGET_COUNTS carries — the fix is to paste the coordinates
+ * the failure prints, in the commit that moved them, so the diff records it.
+ *
+ * The three persistence-path entries are NOT approved duplicates — they are the
+ * same divergence one layer over, and they already differ from the normaliser
+ * by omitting its `if (!id) return ''` guard. They were split out of #270
+ * deliberately: they sit on the persistence path rather than the authorization
+ * path, and two of them cannot be verified without a live MySQL/Postgres, so
+ * folding them into a priority-critical security fix would have put unverifiable
+ * adapter edits inside it. Tracked as #282; delete the entry when #282 lands.
+ *
+ * WHAT "EVERY SITE" MEANS HERE, AND THE TWO ESCAPES BEHIND THE WORDING. This
+ * guard reads SOURCE TEXT, one line at a time, and it is keyed by `path:line`.
+ * Both facts are holes, and both were measured at this head rather than
+ * reasoned about:
+ *
+ *   1. IT ONLY SEES A COERCION THAT NAMES AN ID. `ID_COERCION` is paired with
+ *      `MENTIONS_ID`, so renaming one local defeats it. An exact copy of the
+ *      canonical normaliser with `id` renamed to `raw`, appended to
+ *      `test/sample/access/global-access.ts` — a scanned, non-allowlisted file —
+ *      left this file at 11 pass / 0 fail, rc=0, with AC-5 reading `ok`. The
+ *      byte-identical copy with the local still named `id` reds and names both
+ *      lines. The pairing is deliberate (see MENTIONS_ID: it keeps arithmetic on
+ *      a page size or an age filter out), so this is a cost, not an oversight.
+ *
+ *   2. AN ALLOWLISTED LINE HAS WHOLE-LINE AMNESTY. The key is `path:line`, and
+ *      the filter drops the whole line, so a second coercion appended to an
+ *      already-listed line inherits its entry. Measured: appending
+ *      `const handCopyId = isNaN(id as unknown as number) ? id : parseInt(id as string);`
+ *      onto `src/normalize-record-id.ts:85` built clean and left this file at
+ *      11 pass / 0 fail, rc=0, AC-5 `ok`. Line keys were already the SECOND
+ *      narrowing of this key (path -> path:line); a third would be column keys,
+ *      and that is the same trade one axis over.
+ *
+ * So the claim this assertion carries is scoped to what it measures: no
+ * id-NAMING coercion expression on an UNLISTED LINE. It is not an exhaustive
+ * enumeration of id coercion, and it is not a proof that only one normaliser
+ * exists. Neither escape is closed here — closing either means a different
+ * mechanism (an AST pass over the module, or per-expression rather than
+ * per-line keys), which is the #279 terminus, not another regex.
+ *
+ * NOT AN EXHAUSTIVE ENUMERATION OF ID MATCHING. `ID_COERCION` matches coercion
+ * FUNCTION CALLS. `src/view-resolver.ts:208` (`r.id === id || r.id == id`) is
+ * the same permissive dual-match family, sits on the request resolution path
+ * via `src/store.ts`, and is structurally invisible here because it coerces
+ * with `==`. Recorded on #282, not fixed here.
+ */
+const KNOWN_COERCION_SITES = {
+  // The one implementation. Everything else delegates to it.
+  'src/normalize-record-id.ts:85': 'the canonical normaliser (#270) — the isNaN guard',
+  'src/normalize-record-id.ts:87': 'the canonical normaliser (#270) — the parseInt, deliberately without a radix',
+
+  // Split out of #270 — the create-response and SQL-persist paths. Each of
+  // these normalises a RESPONSE id (`response?.data?.id`), not a URL id.
+  'src/orm-request.ts:524': 'create-response path duplicate — split out of #270, tracked as #282',
+  'src/postgres/postgres-db.ts:523': 'persist path duplicate — split out of #270, tracked as #282',
+  'src/mysql/mysql-db.ts:450': 'persist path duplicate — split out of #270, tracked as #282',
+
+  // Not a copy of the normaliser, and — the load-bearing half — NOT ON ANY
+  // REQUEST PATH: `src/cli.ts` is its only importer in `src/`, so no route, no
+  // access() and nothing downstream of getId() reaches it. It also matches a
+  // row by EITHER spelling (`r.id === id || r.id === Number(id)`) rather than
+  // resolving one canonical key, so it produces no key to disagree about.
+  'src/standalone-db.ts:113': 'standalone JSON db `get` dual-match — no request path, not a resolution normaliser',
+  'src/standalone-db.ts:159': 'standalone JSON db `delete` dual-match — no request path, not a resolution normaliser',
+};
+
+/**
  * Strip comments before applying URL_PROPERTIES.
  *
  * The rule is about what a sample AUTHORIZES on, not about which words appear
@@ -209,7 +331,21 @@ function stripComments(code) {
 
     if (char === '/' && next === '*') {
       index += 2;
-      while (index < code.length && !(code[index] === '*' && code[index + 1] === '/')) index += 1;
+
+      // Newlines inside a block comment are PRESERVED. Dropping them shortens
+      // the stripped text and every line index computed from it is then a
+      // fiction: measured at the head of this PR, the canonical normaliser's
+      // two coercion lines — in a file whose header comment is longer than its
+      // code — were reported as `:6` and `:8`, some sixty lines early. Nothing
+      // depended on the number until AC-5's allowlist became line-keyed, at
+      // which point a wrong number is a guard that cannot be satisfied.
+      // Pinned by the 'the reported line number is the REAL source line'
+      // control below.
+      while (index < code.length && !(code[index] === '*' && code[index + 1] === '/')) {
+        if (code[index] === '\n') out += '\n';
+        index += 1;
+      }
+
       index += 2;
       continue;
     }
@@ -252,6 +388,21 @@ async function trackedMarkdown() {
   });
 
   return stdout.split('\0').filter(Boolean);
+}
+
+/**
+ * The tracked access() samples that are SOURCE rather than markdown.
+ *
+ * From git's index for the same reason the markdown population is: a directory
+ * walk sees files git does not, and misses the question being asked.
+ */
+async function sourceAccessSampleFiles() {
+  const { stdout } = await execFileAsync('git', ['ls-files', '-z', '--', 'test/sample/access'], {
+    cwd: process.cwd(),
+    maxBuffer: 32 * 1024 * 1024,
+  });
+
+  return stdout.split('\0').filter(Boolean).filter(file => /\.(?:ts|js|mjs|cjs)$/.test(file));
 }
 
 module('[Docs] reachable access() samples (#265)', function(hooks) {
@@ -435,8 +586,189 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
     );
   });
 
-  test('every reachable access() sample declares the one-argument contract', function(assert) {
-    for (const { path, code } of samples) {
+  test('AC-4 (#270) — no reachable access() sample contains id arithmetic', function(assert) {
+    for (const { path, code, population } of samples) {
+      const offending = stripComments(code)
+        .split('\n')
+        .filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line));
+
+      assert.deepEqual(
+        offending,
+        [],
+        `${path} (${population}): sample must not normalise an id itself — access() is handed request.recordId, already resolved (#270)`
+      );
+    }
+  });
+
+  test('AC-4 (#270) — control: the id-arithmetic rule fires on a real hand-copy and not on prose about one', function(assert) {
+    // Same two-sided shape the URL rule carries. Without the first half the
+    // guard would ban the sentence explaining the fix; without the second it
+    // could be silently satisfied by a sample that still coerces.
+    const withCaution = [
+      "export default class OwnerAccess {",
+      "  models = ['owner'];",
+      "  access(request) {",
+      "    // Do NOT write isNaN(id) ? id : parseInt(id) here — the ORM already did it.",
+      "    const { recordId } = request;",
+      "    return recordId === 'angela' ? false : ['read'];",
+      "  }",
+      "}",
+    ].join('\n');
+
+    assert.deepEqual(
+      stripComments(withCaution).split('\n').filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line)),
+      [],
+      'a commented caution naming parseInt does not trip the guard'
+    );
+
+    const coercing = withCaution.replace(
+      "const { recordId } = request;",
+      "const recordId = isNaN(request.params.id) ? request.params.id : parseInt(request.params.id);"
+    );
+
+    assert.equal(
+      stripComments(coercing).split('\n').filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line)).length,
+      1,
+      'an actual hand-copied normalisation IS caught'
+    );
+
+    // And the shape that would slip past a parseInt-only rule.
+    const numberForm = withCaution.replace(
+      "const { recordId } = request;",
+      "const recordId = Number(request.params.id);"
+    );
+
+    assert.equal(
+      stripComments(numberForm).split('\n').filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line)).length,
+      1,
+      'a Number()-spelled normalisation is caught too'
+    );
+
+    // Non-vacuity in the other direction: arithmetic that is NOT about an id
+    // must not be swept up, or the rule becomes a ban on arithmetic.
+    const unrelated = withCaution.replace(
+      "const { recordId } = request;",
+      "const pageSize = parseInt(request.query.limit);"
+    );
+
+    assert.deepEqual(
+      stripComments(unrelated).split('\n').filter(line => ID_COERCION.test(line) && MENTIONS_ID.test(line)),
+      [],
+      'coercion of something that is not an id does not trip the guard'
+    );
+  });
+
+  test('AC-5 (#270) — one normaliser: no id-coercion expression outside the known sites', async function(assert) {
+    // Run as an assertion rather than by hand, because a grep somebody
+    // remembers to run is not a guard. Enumerated from git's index for the same
+    // reason the packed set comes from npm's: a directory walk sees files git
+    // does not, and misses the question being asked.
+    const { stdout } = await execFileAsync('git', ['ls-files', '-z', '--', 'src', 'README.md', 'docs', 'test/sample'], {
+      cwd: process.cwd(),
+      maxBuffer: 32 * 1024 * 1024,
+    });
+
+    const files = stdout.split('\0').filter(Boolean);
+
+    // Non-vacuity: an empty or failed enumeration satisfies every assertion below.
+    assert.ok(files.length > 10, `git enumerated ${files.length} file(s) in the scanned set`);
+    assert.ok(files.includes('src/normalize-record-id.ts'), 'the canonical normaliser is in the scanned set');
+    assert.ok(files.includes('README.md'), 'README.md is in the scanned set');
+    assert.ok(files.includes('test/sample/access/global-access.ts'), 'the reference access sample is in the scanned set');
+
+    const found = [];
+
+    for (const path of files) {
+      const contents = await readFile(path, 'utf8');
+      const lines = stripComments(contents).split('\n');
+
+      lines.forEach((line, index) => {
+        if (ID_COERCION.test(line) && MENTIONS_ID.test(line)) found.push({ path, line: index + 1, text: line.trim() });
+      });
+    }
+
+    // Control: the scanner must be able to SEE the one site we know exists,
+    // or a zero result means nothing.
+    assert.ok(
+      found.some(hit => hit.path === 'src/normalize-record-id.ts'),
+      `the scanner found the canonical normaliser itself — ${found.length} site(s) total`
+    );
+
+    // `path:line`, not `path`. Keyed by path, a second normaliser added
+    // ANYWHERE inside an allowlisted file is invisible — measured green for a
+    // brand-new hand-copy inside src/orm-request.ts, the file #270 was filed
+    // against. See KNOWN_COERCION_SITES.
+    const unexpected = found
+      .filter(hit => !(`${hit.path}:${hit.line}` in KNOWN_COERCION_SITES))
+      .map(hit => `${hit.path}:${hit.line}  ${hit.text}`);
+
+    assert.deepEqual(
+      unexpected,
+      [],
+      'every id-coercion expression that NAMES AN ID, on a line not already allowlisted, is either the canonical normaliser ' +
+      'or a site explicitly split out of #270 (see #282) — a new one here is a new hand-copy. ' +
+      'If a listed site simply MOVED, update its line in KNOWN_COERCION_SITES in the same commit that moved it.'
+    );
+
+    // And the list does not rot: an entry whose site no longer coerces — or no
+    // longer sits on that line — should be corrected in the same commit that
+    // moved or fixed it.
+    const foundKeys = new Set(found.map(hit => `${hit.path}:${hit.line}`));
+    const stale = Object.keys(KNOWN_COERCION_SITES).filter(key => !foundKeys.has(key));
+
+    assert.deepEqual(
+      stale,
+      [],
+      'no stale entries in KNOWN_COERCION_SITES — delete an entry when its site is fixed, or re-point it when the line moves. ' +
+      `Sites actually found: [${[...foundKeys].sort().join(', ')}]`
+    );
+
+    // CONTROL for the line keys themselves. A line-keyed allowlist is only
+    // meaningful if the number is a real source line, and until this commit it
+    // was not: stripComments discarded the newlines inside block comments, so
+    // src/normalize-record-id.ts:71 was reported as :6. Read each allowlisted
+    // coordinate out of the RAW file — no stripping — and require that the line
+    // it names actually carries an id coercion.
+    for (const key of Object.keys(KNOWN_COERCION_SITES)) {
+      const separator = key.lastIndexOf(':');
+      const filePath = key.slice(0, separator);
+      const lineNumber = Number(key.slice(separator + 1));
+      const rawLine = (await readFile(filePath, 'utf8')).split('\n')[lineNumber - 1];
+
+      assert.ok(
+        rawLine !== undefined && ID_COERCION.test(rawLine) && MENTIONS_ID.test(rawLine),
+        `${key} names a REAL source line that coerces an id — raw line reads: ${JSON.stringify(rawLine)}`
+      );
+    }
+  });
+
+  test('every reachable access() sample declares the one-argument contract', async function(assert) {
+    // The population is markdown samples PLUS the tracked source samples under
+    // test/sample/access. Markdown alone was measured to be too narrow:
+    // changing `access(request)` to `access(request, context)` in
+    // test/sample/access/global-access.ts — the sample a contributor reads and
+    // the file `test:reference` actually boots — left the main glob 916/0
+    // green, while the same edit in README.md redded this test. A contract
+    // guard that cannot see the reference implementation of the contract is
+    // not covering it.
+    //
+    // #202 will make this signature additive by design; when it does, this is
+    // the assertion whose deliberate edit records the change.
+    const sourceSamples = [];
+
+    for (const path of await sourceAccessSampleFiles()) {
+      sourceSamples.push({ path, code: await readFile(path, 'utf8'), population: 'source' });
+    }
+
+    // Non-vacuity: an empty enumeration satisfies the loop below.
+    assert.ok(sourceSamples.length > 0, `git enumerated ${sourceSamples.length} source access sample(s) under test/sample/access`);
+    assert.ok(
+      sourceSamples.some(sample => sample.path === 'test/sample/access/global-access.ts'),
+      'the reference access sample is in the arity population'
+    );
+    assert.ok(samples.length > 0, `${samples.length} markdown access sample(s) in the arity population`);
+
+    for (const { path, code } of [...samples, ...sourceSamples]) {
       const signature = code.match(/\baccess\s*\(([^)]*)\)/);
 
       assert.ok(signature, `${path}: sample declares an access() method`);
