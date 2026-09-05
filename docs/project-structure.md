@@ -38,6 +38,25 @@ A lightweight ORM for the Stonyx framework that provides structured data modelin
 | Test Mocking | Sinon | ^21.0.0 | Stubs and spies |
 | Package Manager | pnpm | N/A | Local `file:` references for sibling packages |
 
+### Optional peers must never be reachable from the entry graph
+
+`@stonyx/rest-server`, `mysql2`, `pg` and the `@aws-sdk/*` DynamoDB clients are
+declared `optional` in `peerDependenciesMeta`. A plain default `pnpm install`
+therefore does **not** install them, and an ORM-only consumer legitimately has
+none of them on disk.
+
+Node links an ES module's entire *static* import graph before evaluating any of
+it. So a single `import x from '<optional-peer>'` anywhere reachable from
+`dist/index.js` makes `import('@stonyx/orm')` throw `ERR_MODULE_NOT_FOUND`
+before one line of ORM code runs -- `optional: true` and an unconditional static
+import cannot both be true. Every optional dependency is loaded instead with
+`const { default: X } = await import(...)` inside the runtime guard that decides
+whether it is needed (see `Orm.init()` in `src/main.ts`).
+
+This is enforced by `test/unit/lazy-rest-server-import-test.ts`, which links
+`dist/index.js` in a child process with the peer made to resolve as absent. See
+stonyx-orm#200 and #280.
+
 ## Architecture
 
 The ORM follows a **singleton + registry** pattern. A single `Orm` instance manages models, serializers, and transforms. Records are stored in an in-memory `Store` (nested Maps) and optionally persisted to JSON files or MySQL.
