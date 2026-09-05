@@ -32,6 +32,41 @@ function linkUnderAbsentPeer(target: string) {
   return JSON.parse(line);
 }
 
+// Every runtime module a consumer can reach through the published `exports`
+// map, DERIVED FROM package.json rather than listed here.
+//
+// A hand-written list is what let this defect through twice: the first version
+// of this test pinned `dist/index.js` alone, and a static peer import added to
+// src/exports/db.ts left the whole suite green while `@stonyx/orm/db` threw
+// ERR_MODULE_NOT_FOUND out of the tarball. Driving the enumeration off the
+// manifest means a subpath added later is covered without anyone remembering to
+// come back here.
+//
+// The `types` condition is skipped: .d.ts files are erased before runtime and
+// are never linked by Node. Everything else in the condition tree is a real
+// runtime target and is probed.
+function collectExportTargets() {
+  const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+  const targets: { subpath: string; condition: string; target: string }[] = [];
+
+  function walk(node: unknown, subpath: string, condition: string) {
+    if (typeof node === 'string') {
+      targets.push({ subpath, condition, target: node });
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'types') continue;
+      walk(value, subpath, condition ? `${condition}.${key}` : key);
+    }
+  }
+
+  for (const [subpath, node] of Object.entries(pkg.exports ?? {})) walk(node, subpath, '');
+
+  return { subpaths: Object.keys(pkg.exports ?? {}), targets };
+}
+
 // Regression tests for stonyx-orm#280 — a recurrence of #200.
 //
 // '@stonyx/rest-server' is declared an OPTIONAL peer, but src/main.ts imported
@@ -43,30 +78,51 @@ function linkUnderAbsentPeer(target: string) {
 // `import('@stonyx/orm')` after a plain default install — an ORM-only consumer
 // could not boot.
 //
-// MUTATION THESE TESTS DIE UNDER: restore the static
-// `import setupRestServer from './setup-rest-server.js';` at the top of
-// src/main.ts (and drop the `await import()` in the restServer guard). Test 1
-// then reports code === 'ERR_ABSENT_OPTIONAL_PEER', and tests 3/4/5 fail on the
-// source shape.
+// MUTATIONS THESE TESTS DIE UNDER:
+//  1. restore the static `import setupRestServer from './setup-rest-server.js';`
+//     at the top of src/main.ts (and drop the `await import()` in the guard) —
+//     test 1 reports the sentinel for the '.' subpath, and tests 4/5/6 fail on
+//     the source shape;
+//  2. add `import '@stonyx/rest-server';` to the top of ANY module reachable
+//     from ANY published subpath — e.g. src/exports/db.ts or src/hooks.ts —
+//     test 1 reports the sentinel for that subpath. Measured; see PR #283.
 module('[Unit] Lazy rest-server import (#280)', function() {
-  test('AC1 — the published entry graph links with the optional peer absent', function(assert) {
-    assert.ok(existsSync(path.join(repoRoot, 'dist/index.js')), 'dist/index.js is built');
+  test('AC1 — every published `exports` subpath links with the optional peer absent', function(assert) {
+    const { targets } = collectExportTargets();
 
-    const probe = linkUnderAbsentPeer('dist/index.js');
+    for (const { subpath, condition, target } of targets) {
+      const where = `${subpath} (${condition}) -> ${target}`;
 
-    assert.notStrictEqual(
-      probe.code,
-      SENTINEL_CODE,
-      `dist/index.js must not statically reach '@stonyx/rest-server' (got: ${probe.message})`
-    );
-    assert.strictEqual(
-      probe.outcome,
-      'threw',
-      'the probe reaches module evaluation (stonyx/config throws its own uninitialised-framework precondition)'
-    );
+      assert.ok(existsSync(path.join(repoRoot, target)), `${where} is built`);
+
+      const probe = linkUnderAbsentPeer(target);
+
+      assert.notStrictEqual(
+        probe.code,
+        SENTINEL_CODE,
+        `${where} must not statically reach '@stonyx/rest-server' (got: ${probe.message})`
+      );
+    }
+  });
+
+  test('AC1 — the subpath enumeration is complete and non-vacuous', function(assert) {
+    const { subpaths, targets } = collectExportTargets();
+
+    // If `exports` is ever restructured into a shape this walker does not
+    // understand, the loop above goes silently empty and stops guarding
+    // anything. Fail here instead.
+    assert.ok(subpaths.length > 0, `package.json declares ${subpaths.length} export subpaths`);
+
+    for (const subpath of subpaths) {
+      assert.ok(
+        targets.some(t => t.subpath === subpath),
+        `subpath ${subpath} produced at least one probed runtime target`
+      );
+    }
+
     assert.ok(
-      /Stonyx has not been initialized yet/.test(probe.message),
-      `linking completed; only evaluation failed, on the framework precondition (got: ${probe.message})`
+      targets.every(t => t.target.startsWith('./dist/')),
+      'every probed target resolves into ./dist (i.e. these are the packed files)'
     );
   });
 
@@ -80,6 +136,36 @@ module('[Unit] Lazy rest-server import (#280)', function() {
       probe.code,
       SENTINEL_CODE,
       'dist/setup-rest-server.js statically reaches the optional peer, and the probe reports it'
+    );
+  });
+
+  test('AC1 — the `bin` entry point links with the optional peer absent', function(assert) {
+    // `bin` is published too, and it is NOT in `exports`, so the loop above
+    // cannot reach it. It is probed separately rather than through the probe
+    // module because importing it RUNS the CLI (it prints help and exits), so
+    // its stdout is not the probe's JSON. Linking still happens before any of
+    // that, so a static reach dies with the sentinel on stderr.
+    const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+    const bin = pkg.bin?.['stonyx-orm'];
+    assert.ok(typeof bin === 'string' && bin.length > 0, `package.json declares bin ${bin}`);
+
+    const run = (entry: string) =>
+      `${spawnSync(process.execPath, ['--import', REGISTER, entry], { cwd: repoRoot, encoding: 'utf8' }).stderr}`;
+
+    // Control for THIS invocation path — it does not go through the probe
+    // module, so it needs its own proof that the resolve hook is installed and
+    // that the assertion below could fail.
+    assert.ok(
+      run('./dist/setup-rest-server.js').includes(SENTINEL_CODE),
+      'control: the same invocation DOES report the sentinel for a module that statically reaches the peer'
+    );
+
+    const stderr = run(bin);
+    const hit = stderr.split('\n').find(line => line.includes(SENTINEL_CODE)) ?? '';
+
+    assert.notOk(
+      stderr.includes(SENTINEL_CODE),
+      `${bin} must not statically reach '@stonyx/rest-server' (${hit.trim()})`
     );
   });
 
@@ -117,18 +203,26 @@ module('[Unit] Lazy rest-server import (#280)', function() {
     );
   });
 
-  test('AC3 — the lazy import matches the sibling optional-driver convention', function(assert) {
+  test('AC3 — setup-rest-server.js is the only dist module whose laziness is load-bearing', function(assert) {
+    // The invariant is NOT "every optional dependency is imported in this exact
+    // shape" — the SQL/DynamoDB drivers are lazily imported here too, but that
+    // is not what isolates THEIR peers: `src/*/db.ts` carries no peer specifier
+    // at all, and the isolation lives one layer down in `src/*/connection.ts`.
+    // setup-rest-server.js is different: it names the peer through its own
+    // static graph, so the `await import()` in Orm.init() is the only thing
+    // keeping '@stonyx/rest-server' off the entry graph.
     const source = readFileSync(path.join(repoRoot, 'src/main.ts'), 'utf8');
 
-    // The SQL/DynamoDB drivers are optional peers too and are already lazily
-    // imported a few lines above, in the same method, in this exact shape.
-    assert.ok(
-      /const \{ default: DynamoDBDB \} = await import\(['"]\.\/dynamodb\/dynamodb-db\.js['"]\)/.test(source),
-      'the reference convention (dynamodb driver) is still present'
-    );
     assert.ok(
       /const \{ default: setupRestServer \} = await import\(['"]\.\/setup-rest-server\.js['"]\)/.test(source),
-      'the rest-server import uses the same `const { default: X } = await import(...)` form'
+      'setup-rest-server.js is reached through `const { default: X } = await import(...)`'
+    );
+
+    const probe = linkUnderAbsentPeer('dist/setup-rest-server.js');
+    assert.strictEqual(
+      probe.code,
+      SENTINEL_CODE,
+      'and it does name the optional peer statically — which is why that import must stay lazy'
     );
   });
 });
