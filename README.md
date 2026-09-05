@@ -355,6 +355,29 @@ form that is safe to match on — `request.baseUrl` is the mount text as the
 client spelled it (`/OWNERS`), not the model. A class may still list several
 models in `models` when they share one rule.
 
+**Numeric ids: normalise before you compare.** `request.params.id` is raw text
+from the client. When it looks numeric the ORM runs it through `parseInt()`
+before it resolves the record, so `007`, `7.0`, `7e0`, `0x7`, `+7`, `%207` and
+`7%0A` all address record `7` — while a `===` against the raw text matches only
+the one spelling you wrote down. Normalise the id the same way the lookup does,
+before comparing:
+
+```javascript
+export default class AnimalAccess {
+  models = ['animal'];
+
+  access(request) {
+    const { id } = request.params;
+
+    if (id === '7') return false;
+
+    if (id === undefined) return record => record.id !== 7;
+
+    return ['read', 'create', 'update', 'delete'];
+  }
+}
+```
+
 The sample above is executed verbatim against a live server by
 `test/integration/readme-access/`, which reads it out of this file: the request
 `DELETE /owners/angela` is asserted to return 403 with the record intact, along

@@ -81,20 +81,32 @@ export function findAccessSamples(markdown) {
 }
 
 /**
- * @returns {Promise<{ code: string, path: string }>} the single access() sample
- *   in README.md. Throws if there is not exactly one — a second one would be a
- *   second population, which is the defect this issue closes.
+ * Every access() sample in README.md, in document order.
+ *
+ * This used to throw unless there was exactly ONE. The intent was right — a
+ * second, unmeasured sample is the defect #265 closes — but the remedy was to
+ * forbid coverage rather than provide it, and it was load-bearing in the wrong
+ * direction: an additive sample the extractor could not see left the count at 1
+ * and the tripwire silent. Returning all of them, and having the harness boot
+ * all of them, makes the guard additive-safe by construction instead of by the
+ * breadth of a regex.
+ *
+ * Throws on zero: a README with no access() sample means the extractor stopped
+ * matching, and every assertion downstream would pass vacuously.
+ *
+ * @param {string} [path]
+ * @returns {Promise<Array<{ code: string, path: string, index: number }>>}
  */
-export async function extractReadmeAccessSample(path = './README.md') {
+export async function extractReadmeAccessSamples(path = './README.md') {
   const markdown = await readFile(path, 'utf8');
   const matches = findAccessSamples(markdown);
 
-  if (matches.length !== 1) {
+  if (matches.length === 0) {
     throw new Error(
-      `Expected exactly 1 access() sample in ${path}, found ${matches.length}. ` +
+      `Expected at least 1 access() sample in ${path}, found 0. ` +
       'Every documented access() sample must be driven by test/integration/readme-access.'
     );
   }
 
-  return { code: matches[0], path };
+  return matches.map((code, index) => ({ code, path, index }));
 }

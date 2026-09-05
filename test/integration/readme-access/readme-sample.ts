@@ -29,13 +29,23 @@ import RestServer from '@stonyx/rest-server';
 import { setupIntegrationTests } from 'stonyx/test-helpers';
 import config from 'stonyx/config';
 import { raw, serialized } from '../../sample/payload.js';
+import { rawRequest, jsonBody } from '../../helpers/raw-http.js';
 
 const { module, test } = QUnit;
 
 /** The record the documented sample exists to protect. */
 const PROTECTED = 'angela';
 
+/**
+ * The record the SECOND documented sample protects. `animal` has numeric ids,
+ * which is the case the owner sample cannot exercise: `isNaN('angela')` is true,
+ * so getId() returns it untouched and the string sample is safe by accident of
+ * the model it picked (Phase 3 BLOCKER 1 / Phase 4 addendum HIGH 3).
+ */
+const PROTECTED_ANIMAL = 7;
+
 let origin;
+let port;
 
 /**
  * Re-seed the protected record if a probe destroyed it, so one failing
@@ -50,11 +60,26 @@ async function restoreProtectedRecord() {
   return true;
 }
 
+/**
+ * Same containment for the numeric-id record. Without it a destructive probe
+ * silently turns every LATER assertion vacuous — measured: once `DELETE
+ * /animals/007` destroyed record 7, "PATCH is denied and the record is
+ * unmodified" and "GET /animals omits the protected record" both went GREEN
+ * because there was no longer a record to disclose.
+ */
+async function restoreProtectedAnimal() {
+  if (await store.find('animal', PROTECTED_ANIMAL)) return false;
+
+  createRecord('animal', raw.animals.find(animal => animal.id === PROTECTED_ANIMAL));
+  return true;
+}
+
 module('[Integration] README access() sample (#265)', function(hooks) {
   setupIntegrationTests(hooks);
 
   hooks.before(function() {
-    origin = `http://localhost:${config.restServer.port}`;
+    port = Number(config.restServer.port);
+    origin = `http://localhost:${port}`;
 
     // Fresh process, empty store — seed the sample dataset.
     for (const category of serialized.categories) createRecord('category', category);
@@ -177,5 +202,145 @@ module('[Integration] README access() sample (#265)', function(hooks) {
         assert.notOk(ids.includes(PROTECTED), `GET ${spelling} omits "${PROTECTED}"`);
       });
     }
+  });
+
+  // ==========================================================================
+  // The numeric-id class. src/orm-request.ts getId() coerces a numeric-looking
+  // id through parseInt() BEFORE it resolves the record; the documented
+  // predicate compares the raw text. Those are different values, and parseInt
+  // is aggressively lossy, so one address-bar spelling is denied and every
+  // alias of it is granted.
+  //
+  // Driven over RAW SOCKETS (test/helpers/raw-http.ts, new — abofs/stonyx-orm#266
+  // records that no such client existed). This is not ceremony: the finding is
+  // about the request TARGET, and `fetch` rewrites the property under test.
+  // `/animals/ 7` carries a literal space, which fetch percent-encodes before
+  // it reaches the wire, so a fetch-based test would measure the client.
+  // ==========================================================================
+  module('numeric-id aliases (getId parseInt coercion)', function() {
+    /**
+     * Every spelling parseInt() folds onto 7. Measured, not reasoned: each was
+     * confirmed to resolve record 7 under the pre-fix sample.
+     */
+    const ALIASES = [
+      ['/animals/7', 'the exact spelling the sample names'],
+      ['/animals/007', 'leading zeroes'],
+      ['/animals/7.0', 'trailing decimal'],
+      ['/animals/7.9', 'fractional — parseInt truncates'],
+      ['/animals/7e0', 'exponent notation'],
+      ['/animals/0x7', 'hex — parseInt auto-detects the 0x radix'],
+      ['/animals/%207', 'percent-encoded leading space'],
+      ['/animals/%2B7', 'percent-encoded plus sign'],
+      ['/animals/7%0A', 'percent-encoded trailing newline'],
+      // Found by the raw-socket sweep; neither appears in any SME variant table.
+      ['/animals/%097', 'percent-encoded tab'],
+      ['/animals/+7', 'a bare, unencoded + in the request target'],
+    ];
+
+    test('control — the raw-socket client reaches the server and reads an unprotected record', async function(assert) {
+      // Without this, every `status >= 400` assertion below passes vacuously
+      // against a client that cannot talk to the server at all.
+      const response = await rawRequest({ port, target: '/animals/8' });
+
+      assert.equal(response.status, 200, 'GET /animals/8 over a raw socket -> 200');
+      assert.equal(jsonBody(response)?.data?.id, 8, 'the raw-socket client parses a real JSON:API body');
+    });
+
+    test('control — the protected animal exists and is reachable by the router', async function(assert) {
+      // Proves the 403s below are reachable-but-denied, not merely absent.
+      assert.ok(await store.find('animal', PROTECTED_ANIMAL), `animal ${PROTECTED_ANIMAL} is seeded`);
+    });
+
+    for (const [target, why] of ALIASES) {
+      test(`GET ${target} (${why}) does not serve the protected record`, async function(assert) {
+        const response = await rawRequest({ port, target });
+        const served = jsonBody(response)?.data?.id;
+
+        assert.notEqual(served, PROTECTED_ANIMAL, `GET ${target} must not disclose animal ${PROTECTED_ANIMAL} — served id ${served}`);
+        assert.ok(response.status >= 400, `GET ${target} -> ${response.status} (${response.statusLine})`);
+      });
+    }
+
+    test('DELETE /animals/007 is denied and the record survives', async function(assert) {
+      const response = await rawRequest({ port, method: 'DELETE', target: '/animals/007' });
+
+      assert.ok(response.status >= 400, `DELETE /animals/007 -> ${response.status} (denied)`);
+
+      const survived = Boolean(await store.find('animal', PROTECTED_ANIMAL));
+      assert.ok(survived, `animal ${PROTECTED_ANIMAL} still exists after the DELETE`);
+
+      const restored = await restoreProtectedAnimal();
+      assert.notOk(restored, 'record did not have to be re-seeded — nothing destroyed it');
+    });
+
+    test('PATCH /animals/7.9 is denied and the record is unmodified', async function(assert) {
+      const before = await store.find('animal', PROTECTED_ANIMAL);
+
+      // Non-vacuity: a PATCH cannot be proven harmless against a record that a
+      // previous probe already destroyed.
+      assert.ok(before, `animal ${PROTECTED_ANIMAL} is present before the PATCH`);
+
+      const size = before?.size;
+
+      const response = await rawRequest({
+        port,
+        method: 'PATCH',
+        target: '/animals/7.9',
+        headers: { 'Content-Type': 'application/vnd.api+json' },
+        body: JSON.stringify({ data: { id: '7', type: 'animals', attributes: { size: 'PWNED' } } }),
+      });
+
+      assert.ok(response.status >= 400, `PATCH /animals/7.9 -> ${response.status} (denied)`);
+
+      const after = await store.find('animal', PROTECTED_ANIMAL);
+      assert.equal(after?.size, size, `animal ${PROTECTED_ANIMAL}.size is unchanged — was "${size}", now "${after?.size}"`);
+    });
+
+    test('GET /animals omits the protected record', async function(assert) {
+      const response = await rawRequest({ port, target: '/animals' });
+
+      assert.equal(response.status, 200, 'GET /animals -> 200');
+
+      const ids = jsonBody(response)?.data?.map(record => record.id) ?? [];
+
+      // Non-vacuity: "omits 7" is satisfied by a store from which 7 was deleted.
+      assert.ok(await store.find('animal', PROTECTED_ANIMAL), `animal ${PROTECTED_ANIMAL} is still in the store`);
+      assert.ok(ids.length > 0, `the collection is non-empty — got ${ids.length} records`);
+      assert.notOk(ids.includes(PROTECTED_ANIMAL), `GET /animals omits ${PROTECTED_ANIMAL} — got [${ids}]`);
+    });
+
+    test('control — the numeric sample is not a blanket refusal', async function(assert) {
+      // A sample that denied everything would satisfy every assertion above.
+      const response = await rawRequest({ port, target: '/animals/8' });
+
+      assert.equal(response.status, 200, 'GET /animals/8 -> 200');
+      assert.equal(jsonBody(response)?.data?.id, 8, 'an unprotected animal is served in full');
+    });
+
+    test('a LITERAL space in the request target is rejected by the HTTP parser, not by the sample', async function(assert) {
+      // Phase 4's addendum lists `GET /animals/ 7 -> 200, served data.id 7`.
+      // Over a raw socket it does not reproduce: node's HTTP parser rejects the
+      // request line before Express sees it, because an unencoded space
+      // terminates the request target. Their measurement is consistent with a
+      // client that percent-encoded the space first — which is `%207`, a real
+      // bypass that IS in the list above.
+      //
+      // Pinned rather than dropped: this spelling is safe for a reason that has
+      // nothing to do with the access sample, so if the parser ever loosens,
+      // this goes red instead of quietly joining the alias set.
+      const response = await rawRequest({ port, target: '/animals/ 7' });
+
+      assert.equal(response.status, 400, `GET "/animals/ 7" -> ${response.status} (${response.statusLine})`);
+      assert.notEqual(jsonBody(response)?.data?.id, PROTECTED_ANIMAL, 'nothing is served');
+    });
+
+    test('control — a non-numeric id is not silently folded onto the protected record', async function(assert) {
+      // getId() returns '7abc' untouched (isNaN is true), so it must 404 rather
+      // than resolve 7. This is the boundary that proves the aliases above are
+      // parseInt semantics and not a wildcard.
+      const response = await rawRequest({ port, target: '/animals/7abc' });
+
+      assert.notEqual(jsonBody(response)?.data?.id, PROTECTED_ANIMAL, 'GET /animals/7abc does not resolve record 7');
+    });
   });
 });

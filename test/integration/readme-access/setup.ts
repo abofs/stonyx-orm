@@ -16,20 +16,27 @@
  * test/config/environment.ts clobbers the paths.
  */
 import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { extractReadmeAccessSample } from '../../helpers/readme-sample-helper.js';
+import { extractReadmeAccessSamples } from '../../helpers/readme-sample-helper.js';
 
 const cwd = process.cwd();
 
 const GENERATED_DIR = './test/integration/readme-access/generated';
 
-// Write the README's sample to disk unmodified, and make it the only access
-// class the server can load. Nothing between README.md and the running server
-// gets to edit these bytes.
-const { code } = await extractReadmeAccessSample(`${cwd}/README.md`);
+// Write EVERY README access() sample to disk unmodified, and make them the only
+// access classes the server can load. Nothing between README.md and the running
+// server gets to edit these bytes.
+//
+// All of them, not just the first: a documented sample that nothing boots is
+// the exact defect #265 closes, and until this PR a second sample was silently
+// unmeasured. Each sample declares its own `models`, so they mount side by side.
+const samples = await extractReadmeAccessSamples(`${cwd}/README.md`);
 
 await rm(GENERATED_DIR, { recursive: true, force: true });
 await mkdir(GENERATED_DIR, { recursive: true });
-await writeFile(`${GENERATED_DIR}/readme-access.js`, code, 'utf8');
+
+for (const { code, index } of samples) {
+  await writeFile(`${GENERATED_DIR}/readme-access-${index}.js`, code, 'utf8');
+}
 
 const { default: Stonyx } = await import('stonyx');
 
