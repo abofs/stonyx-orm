@@ -158,6 +158,12 @@ export default class OwnerAccess {
   models = ['owner'];
 
   access(request) {
+    // Fail closed on a build that predates abofs/stonyx-orm#270: such a build
+    // never attaches `recordId`, so the collection branch below would fire on
+    // the record route and authorize it outright. Exact no-op on a build that
+    // has the change — `recordId` is always assigned, `undefined` included.
+    if (!('recordId' in request)) return false;
+
     // `request.recordId` is the id the ORM resolves the record by, computed
     // before access() runs by the same function the lookup uses — so the
     // predicate and the lookup cannot disagree (abofs/stonyx-orm#270). Never

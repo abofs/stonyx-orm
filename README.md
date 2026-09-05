@@ -322,6 +322,12 @@ export default class OwnerAccess {
   models = ['owner'];
 
   access(request) {
+    // Fail closed on a build that predates abofs/stonyx-orm#270: such a build
+    // never attaches `recordId`, so the collection branch below would fire on
+    // the record route and authorize it outright. Exact no-op on a build that
+    // has the change — `recordId` is always assigned, `undefined` included.
+    if (!('recordId' in request)) return false;
+
     // `request.recordId` is the id the ORM resolves the record by. The ORM
     // computes it before `access()` runs, from `request.params.id`, using the
     // same function the record lookup uses — so your predicate and the lookup
@@ -381,30 +387,11 @@ to keep in sync — abofs/stonyx-orm#270. It is `undefined` on collection routes
 which is how you tell a collection request from a record request. `params.id` is
 left untouched, so anything that needs the raw client text still has it.
 
-**Version floor: `request.recordId` requires the release that carries
-abofs/stonyx-orm#270.** Measured on the published tarballs: `0.3.2-alpha.106`
-(this change's alpha) has `request.recordId` and exports `normalizeRecordId`;
-`0.3.2-beta.231`, the newest build on the `beta` tag at the time of writing, has
-neither, and `latest` is `0.3.1`. **On any earlier build the samples above fail
-open, completely** — measured against `origin/dev`: `recordId` is `undefined` on
-every route, so `if (recordId === undefined) return record => …` fires on the
-*record* route, and a function return authorizes the request outright.
-`GET /owners/angela` and `GET /animals/7` both returned 200 and served the
-protected record, and `DELETE` on both returned 204 and destroyed it.
-
-If you cannot pin the version, make the samples fail *closed* instead — one line,
-a no-op on a new build and a refusal on an old one:
-
-```javascript
-access(request) {
-  // Old builds do not attach recordId. Refuse rather than fall through to the
-  // collection branch, which would authorize the record route outright.
-  if (!('recordId' in request)) return false;
-
-  const { recordId } = request;
-  // …
-}
-```
+**The samples above fail *closed* on a build that predates
+abofs/stonyx-orm#270.** That is what the first line of each `access()` is for. A
+build without this change never attaches `recordId`, so `recordId === undefined`
+— the collection branch — fires on the *record* route, and a function return
+authorizes the request outright.
 
 The same normalisation is exported for the places `access()` does not reach —
 hooks, custom handlers, your own lookups:
@@ -432,6 +419,12 @@ export default class AnimalAccess {
   models = ['animal'];
 
   access(request) {
+    // Fail closed on a build that predates abofs/stonyx-orm#270: such a build
+    // never attaches `recordId`, so the collection branch below would fire on
+    // the record route and authorize it outright. Exact no-op on a build that
+    // has the change — `recordId` is always assigned, `undefined` included.
+    if (!('recordId' in request)) return false;
+
     // Already normalised by the ORM, and it agrees with the lookup for every
     // spelling of 7 above. For a numeric-id model it is a NUMBER, not a
     // string, so compare it against a number.
