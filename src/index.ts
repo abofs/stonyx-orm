@@ -30,6 +30,7 @@ export type { PersistErrorDetail } from './main.js';
 export { Model, View, Serializer }; // base classes
 export { attr, belongsTo, hasMany, createRecord, updateRecord }; // helpers
 export { count, avg, sum, min, max }; // aggregate helpers
+export { default as normalizeRecordId } from './normalize-record-id.js'; // canonical URL-id -> record-id resolution (#270)
 export { beforeHook, afterHook, clearHook, clearAllHooks } from './hooks.js'; // middleware hooks
 
 // Store API:

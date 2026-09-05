@@ -7,6 +7,7 @@ import type { HookContext } from './hooks.js';
 import config from 'stonyx/config';
 import type { OrmRecord } from './types/orm-types.js';
 import { isOrmRecord } from './utils.js';
+import normalizeRecordId from './normalize-record-id.js';
 
 interface OrmRequest$ extends Request {
   protocol?: string;
@@ -16,6 +17,10 @@ interface OrmRequest$ extends Request {
   baseUrl?: string;
   method: string;
   params: { [key: string]: string };
+  // Attached by auth() before access() runs — abofs/stonyx-orm#270. This is the
+  // value the ORM resolves the record by; `params.id` remains the raw client
+  // text it was parsed from.
+  recordId?: string | number;
   body?: { [key: string]: unknown };
   query?: { [key: string]: string };
   get(header: string): string;
@@ -107,12 +112,13 @@ function getBaseUrl(request: OrmRequest$, pluralizedModel: string): string {
   return `${protocol}://${host}${prefix}`;
 }
 
+// Kept as a name because twelve call sites read `getId(request.params)`, and
+// docs/hooks.md documents that spelling. It is now a thin delegate: there is
+// exactly ONE normalisation in the repo, and it is the exported one a consumer
+// can import. A second implementation here is the defect abofs/stonyx-orm#270
+// exists to remove — see src/normalize-record-id.ts.
 function getId(params: { id?: string; [key: string]: unknown }): string | number {
-  const id = params.id;
-  if (!id) return '';
-  if (isNaN(id as unknown as number)) return id;
-
-  return parseInt(id);
+  return normalizeRecordId(params.id);
 }
 
 function buildResponse(
@@ -598,6 +604,37 @@ export default class OrmRequest extends Request {
   }
 
   auth(request: OrmRequest$, state: { [key: string]: unknown }): number | undefined {
+    // abofs/stonyx-orm#270 — hand the predicate the value the record is
+    // ACTUALLY resolved by, rather than the raw text it was parsed from.
+    //
+    // This is the default path precisely because it requires the consumer to
+    // remember nothing. Exporting `normalizeRecordId` alone would leave the
+    // framework owning resolution while asking every consumer to call one
+    // function, with no signal when they forget — the same silent fail-open,
+    // one step over. The export is the escape hatch for hooks and custom
+    // handlers; this line is the contract.
+    //
+    // `request.params` is deliberately NOT mutated. Twelve `getId(...)` call
+    // sites, the serializer, and consumer hooks (docs/hooks.md documents
+    // `getId(request.params)`) all read it, and changing `params.id` from
+    // string to number underneath them is a silent behaviour change on paths
+    // this issue is not about.
+    //
+    // Synchronous by necessity: @stonyx/rest-server calls auth() without
+    // awaiting it.
+    //
+    // The `undefined` branch is a PRESENCE check, not a second normalisation:
+    // it answers "does this route carry an :id at all", which is how both
+    // documented samples tell a collection request from a record request. It
+    // cannot be folded into normalizeRecordId, because that function must keep
+    // returning '' for a falsy id — `store.get(key, undefined)` returns the
+    // whole model Map rather than a record (abofs/stonyx-orm#167, pinned by
+    // test/unit/store-get-falsy-id-test.ts), so the resolution path depends on
+    // the '' it returns today.
+    const rawId = request.params?.id;
+
+    request.recordId = rawId === undefined ? undefined : normalizeRecordId(rawId);
+
     const access = this.access(request);
 
     if (!access) return 403;
