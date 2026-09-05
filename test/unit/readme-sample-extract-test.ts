@@ -17,7 +17,7 @@
  * ```javascript (18 occurrences) against ```js (12).
  */
 import QUnit from 'qunit';
-import { findAccessSamples, extractReadmeAccessSample } from '../helpers/readme-sample-helper.js';
+import { findAccessSamples, extractReadmeAccessSamples } from '../helpers/readme-sample-helper.js';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -104,25 +104,49 @@ module('[Docs] access() sample extraction (#265)', function() {
     assert.deepEqual(findAccessSamples(markdown), [], 'nothing that is not an access class is returned');
   });
 
-  test('the "exactly one sample" tripwire fires on an additive javascript-fenced sample', async function(assert) {
+  test('every sample is returned, so the harness boots every sample', async function(assert) {
+    // This replaces a "throw unless there is exactly 1" tripwire. The intent was
+    // right — an unmeasured second sample is the defect — but forbidding a
+    // second sample is not the same as covering one, and the throw was silent
+    // in the additive case anyway because the count stayed at 1.
     const dir = await mkdtemp(join(tmpdir(), 'orm-265-'));
     const path = join(dir, 'README.md');
 
     try {
       await writeFile(path, `# Doc\n\n${fenced('js', GOOD_SAMPLE)}\n${fenced('javascript', FAIL_OPEN_SAMPLE)}`, 'utf8');
 
+      const samples = await extractReadmeAccessSamples(path);
+
+      assert.equal(samples.length, 2, `both samples are returned — got ${samples.length}`);
+      assert.deepEqual(samples.map(sample => sample.index), [0, 1], 'each carries a stable index, so setup.ts can name its generated file');
+      assert.ok(
+        samples.some(sample => sample.code.includes('request.url')),
+        'the additive fail-open sample is one of them — it will be booted and measured, not silently shipped'
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a README with no access() sample throws instead of passing vacuously', async function(assert) {
+    // Non-vacuity control for every guard downstream: zero samples satisfies
+    // "no packed sample authorizes on a URL" and "every packed sample declares
+    // one argument" trivially.
+    const dir = await mkdtemp(join(tmpdir(), 'orm-265-'));
+    const path = join(dir, 'README.md');
+
+    try {
+      await writeFile(path, '# Doc\n\n' + fenced('js', "await store.find('owner', 'angela');"), 'utf8');
+
       let error;
       try {
-        await extractReadmeAccessSample(path);
+        await extractReadmeAccessSamples(path);
       } catch (e) {
         error = e;
       }
 
-      assert.ok(error, 'a second population throws instead of booting the good sample and reporting green');
-      assert.ok(
-        /found 2/.test(error?.message ?? ''),
-        `the throw names the real count — got: ${error?.message}`
-      );
+      assert.ok(error, 'a README with no access() sample throws');
+      assert.ok(/found 0/.test(error?.message ?? ''), `the throw names the count — got: ${error?.message}`);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
