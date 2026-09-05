@@ -21,8 +21,21 @@
  */
 import { readFile } from 'node:fs/promises';
 
-/** Opens or closes a fenced block: three-or-more backticks/tildes, optional info string. */
-const FENCE_LINE = /^(`{3,}|~{3,})[ \t]*(\S*)[ \t]*$/;
+/**
+ * Opens or closes a fenced block: three-or-more backticks/tildes, then an
+ * arbitrary info string.
+ *
+ * The info string is `(.*?)`, not `(\S*)`. A fence like ```js title="x" carries
+ * a space, and a pattern that only accepts one word silently fails to recognise
+ * it as an opener — after which its CLOSING fence is read as an opener and the
+ * prose after it is captured as a code block. The sample vanishes from the
+ * guard's view. That is the same class of hole as the ```js-only regex this
+ * scanner replaced, one spelling over.
+ *
+ * Per CommonMark a CLOSING fence may not carry an info string, which is what
+ * distinguishes the two below.
+ */
+const FENCE_LINE = /^(`{3,}|~{3,})[ \t]*(.*?)[ \t]*$/;
 
 /** The block is identified by its shape, not by a line number that drifts. */
 function isAccessSample(code) {

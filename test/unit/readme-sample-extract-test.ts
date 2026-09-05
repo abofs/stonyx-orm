@@ -84,6 +84,30 @@ module('[Docs] access() sample extraction (#265)', function() {
     });
   }
 
+  test('an info string with a space does not hide the sample, or mis-pair the fences', function(assert) {
+    // ```js title="global-access.js" is a normal docs-tooling spelling. A
+    // scanner that only accepts a single-word info string does not recognise
+    // the opener, and then reads the CLOSING fence as an opener — so the sample
+    // vanishes AND the prose after it is captured as if it were code.
+    const markdown = [
+      '# Doc',
+      '',
+      '```js title="global-access.js"',
+      FAIL_OPEN_SAMPLE,
+      '```',
+      '',
+      'Prose after.',
+      '',
+      fenced('bash', 'pnpm test'),
+    ].join('\n');
+
+    const found = findAccessSamples(markdown);
+
+    assert.equal(found.length, 1, `the sample behind a spaced info string is found — got ${found.length}`);
+    assert.ok(found[0].includes('request.url'), 'and it is the fail-open one, so the guard will fail on it');
+    assert.notOk(found.some(code => code.includes('Prose after.')), 'prose between blocks is not captured as code');
+  });
+
   test('a bare (unlabelled) fence carrying an access() sample is visible', function(assert) {
     // README.md has 35 unlabelled fences; a sample in one of them ships too.
     const markdown = '# Doc\n\n```\n' + GOOD_SAMPLE + '\n```\n';
