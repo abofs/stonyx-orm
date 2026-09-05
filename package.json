@@ -4,7 +4,7 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.3.2-beta.216",
+  "version": "0.3.2-beta.217",
   "description": "",
   "main": "dist/index.js",
   "type": "module",
@@ -71,7 +71,7 @@
   "dependencies": {
     "@stonyx/cron": "0.2.1-beta.118",
     "@stonyx/events": "0.1.1-beta.63",
-    "@stonyx/utils": "0.2.3-beta.26",
+    "@stonyx/utils": "0.2.3-beta.27",
     "stonyx": "0.2.3-beta.93"
   },
   "peerDependencies": {
