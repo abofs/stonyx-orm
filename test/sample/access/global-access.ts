@@ -3,19 +3,48 @@
  */
 export default class GlobalAccess {
   models = ['owner', 'animal', 'trait', 'category', 'phone-number']; // * instead of an array will allow access to all models
-  
+
   // Custom logic here
   access(request) {
-    const { originalUrl: url } = request; // destructure originalUrl from express request object
+    // `access` runs after route matching, so `params` is populated and `id` has
+    // already been URL-decoded. Never match on request.url (mount-relative) or
+    // request.originalUrl (raw client text: query strings, trailing slashes,
+    // casing and percent-encoding all move it) — see abofs/stonyx-orm#265.
+    const { id } = request.params;
 
-    // Returning false explicitly denies access
-    if (url.endsWith('/owners/angela')) return false;
+    // The matched route pattern, not the URL the client typed
+    const route = request.route?.path;
+    const isCollection = route === '/';
+    const isRecord = route === '/:id';
 
-    // Intentional Gap: This logic does not block access to angela's animals if called individually by id
+    // The plural model name comes from the mount, which is matched
+    // case-insensitively, so normalise it before comparing
+    const model = request.baseUrl.split('/').pop().toLowerCase();
 
-    // Returning a function will will plug it in to response object as a filter
-    if (url.endsWith('/owners')) return record => record.id !== 'angela';
-    if (url.endsWith('/animals')) return record => record.owner !== 'angela';
+    if (model === 'owners') {
+      // Returning false explicitly denies access
+      if (isRecord && id === 'angela') return false;
+
+      // Intentional Gap: This logic does not block access to angela's animals if called individually by id
+
+      // Returning a function will plug it in to response object as a filter
+      if (isCollection) return record => record.id !== 'angela';
+    }
+
+    // KNOWN DEFECT — abofs/stonyx-orm#256. `record.owner` is the related Record
+    // instance, not the id string, so `!== 'angela'` is ALWAYS true: this filter
+    // removes nothing and GET /animals serves all of angela's animals. Measured,
+    // and pinned by reference-sample.ts so it stays a tracked decision rather
+    // than an unnoticed leak. Not fixed here — #256 owns it, and #265 is scoped
+    // to the URL-vs-params axis.
+    //
+    // Note this line also WIDENS #256's surface relative to the pre-#265 code:
+    // `url.endsWith('/animals')` was false for /animals/, /ANIMALS and
+    // /animals?x=1, whereas `model === 'animals' && isCollection` is true for
+    // all of them. That is inert only because the predicate never fires, and it
+    // is the correct direction — once #256 lands, the filter applies to every
+    // spelling instead of one.
+    if (model === 'animals' && isCollection) return record => record.owner !== 'angela';
 
     // Allows full access to all calls that don't match any of the above conditions
     return ['read', 'create', 'update', 'delete'];

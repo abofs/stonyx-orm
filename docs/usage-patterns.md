@@ -148,25 +148,44 @@ await Orm.db.save();
 
 ## 7. Access Control
 
+> The authoritative sample is in [`README.md`](../README.md#rest-server-integration).
+> It is the only copy that ships in the npm tarball, and it is executed verbatim
+> against a live server by `test/integration/readme-access/`. The copy below is
+> guarded against the same rules but is not itself booted — prefer the README.
+
 ```javascript
-// test/sample/access/global-access.js
-export default class GlobalAccess {
-  models = ['owner', 'animal']; // or '*' for all
+export default class OwnerAccess {
+  models = ['owner'];
 
   access(request) {
-    // Deny specific access
-    if (request.url.endsWith('/owner/angela')) return false;
+    // Authorize on request.params, never on a URL property. Inside the mounted
+    // sub-app the request's own URL is rewritten relative to the mount point,
+    // and every other URL spelling is raw client text that varies with query
+    // strings, trailing slashes, casing and percent-encoding — abofs/stonyx-orm#265.
+    const { id } = request.params;
 
-    // Filter collections
-    if (request.url.endsWith('/owner')) {
-      return record => record.id !== 'angela';
-    }
+    // Normalise the id the way the record lookup does. No radix on parseInt:
+    // that is deliberate, and matches src/orm-request.ts getId().
+    const recordId = id === undefined ? undefined : (isNaN(id) ? id : parseInt(id));
+
+    // Deny specific access
+    if (recordId === 'angela') return false;
+
+    // Filter collections. NOTE: a function return authorizes the request
+    // outright — the operations list below is not consulted — so this branch
+    // permits POST /owners as well as reads.
+    if (recordId === undefined) return record => record.id !== 'angela';
 
     // Grant CRUD permissions
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
+
+One access class per model when the rules are model-specific: `access()` receives
+only the request, and the request does not carry the model name in a form that is
+safe to match on. A class may list several models in `models` when they share one
+rule.
 
 ## 8. REST API (Auto-generated)
 

@@ -1,0 +1,16 @@
+# Markdown is committed and checked out with LF.
+#
+# docs/usage-patterns.md was authored with CRLF and picked up a whole-file
+# line-ending conversion in abofs/stonyx-orm#268, which turned a ~19-line edit
+# into a 701-line diff no reviewer can read. Pinning the ending stops the next
+# editor's toolchain from doing it again in the other direction.
+*.md text eol=lf
+
+# docs/hooks.md is the one markdown file still stored with CRLF in the index.
+# Exempted rather than renormalised: measured, `*.md text eol=lf` alone leaves
+# it permanently `M` in a FRESH clone, because checkout writes the blob's CRLF
+# bytes while the clean filter normalises them back to LF. Renormalising it
+# here would add a 250-line line-ending-only diff to a security fix, which is
+# the same unreadable-diff problem this file exists to prevent. Drop this line
+# in the PR that next edits docs/hooks.md for real.
+docs/hooks.md -text

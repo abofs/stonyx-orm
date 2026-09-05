@@ -318,15 +318,96 @@ await setupRestServer('/', './access');
 Access classes define models and provide custom filtering/authorization logic:
 
 ```js
-export default class GlobalAccess {
-  models = ['owner', 'animal'];
+export default class OwnerAccess {
+  models = ['owner'];
 
   access(request) {
-    if (request.url.endsWith('/owner/angela')) return false;
+    // `access` runs after route matching, so `request.params` is populated and
+    // `id` has already been URL-decoded. Authorize on it, never on a URL.
+    const { id } = request.params;
+
+    // `id` is still raw client text. Normalise it the way the record lookup
+    // does, or your predicate and the lookup disagree — see "Numeric ids" below.
+    // No radix on parseInt: that is deliberate, and it must stay that way.
+    const recordId = id === undefined ? undefined : (isNaN(id) ? id : parseInt(id));
+
+    // Returning false explicitly denies access to this record
+    if (recordId === 'angela') return false;
+
+    // No `id` means the collection route. Returning a function plugs it in to
+    // the response object as a filter. NOTE: a function return authorizes the
+    // request outright — the operations list below is not consulted — so this
+    // branch permits POST /owners as well as reads.
+    if (recordId === undefined) return record => record.id !== 'angela';
+
+    // Returning a list of operations allows full access to everything else
     return ['read', 'create', 'update', 'delete'];
   }
 }
 ```
+
+**Do not authorize on the request URL.** `request.url` is rewritten relative to
+the mount point, so inside the REST server it is `/angela`, not `/owners/angela`
+— a suffix comparison against it never matches and the request falls through to
+whatever the method returns next. `request.originalUrl` keeps the full path but
+is still the raw text the client sent, so it varies with query strings
+(`/owners?x=1`), trailing slashes (`/owners/angela/`), casing (`/OwNeRs/angela`)
+and percent-encoding (`/owners/%61ngela`). Each of those is a plain address-bar
+request. Which of them reach your handler at all depends on how the REST server
+configures Express route matching — that is a deployment detail you should not
+be building an authorization decision on top of. `request.params.id` is
+identical for every spelling that does reach you.
+
+**One access class per model when the rules are model-specific.** `access()`
+receives only the request, and the request does not carry the model name
+directly — `request.baseUrl` is the *mount text as the client spelled it*
+(`/OWNERS`), so it must be case-normalised before it is compared, and it is
+still the mount rather than the model. Deriving a model from it means every
+unrecognised spelling falls through to whatever your method returns next, so
+prefer one class per model. A class may still list several models in `models`
+when they share one rule.
+
+**Numeric ids: normalise before you compare.** `request.params.id` is raw text
+from the client. When it looks numeric the ORM coerces it — `isNaN(id) ? id :
+parseInt(id)` — *before* it resolves the record, so `7`, `007`, `7.0`, `7.9`,
+`7e0`, `0x7`, `+7`, `%207` (a leading space), `%097` (a tab) and `7%0A` (a
+trailing newline) all address record `7`, while a `===` against the raw text
+matches only the one spelling you wrote down. Every other spelling falls through
+to whatever your method returns next — which, in the shape above, is a full CRUD
+grant. All of them are plain address-bar requests.
+
+Two details are load-bearing. `parseInt` is called with **no radix**, so `0x7`
+is `7` and not `0`; writing `parseInt(id, 10)` in your predicate re-opens the
+hex spelling. And the coercion applies only when the id looks numeric, so a
+model with string ids (like `owner` above) is unaffected — which is exactly why
+this is easy to miss. Normalise the same way the lookup does:
+
+```javascript
+export default class AnimalAccess {
+  models = ['animal'];
+
+  access(request) {
+    const { id } = request.params;
+
+    // Agrees with the lookup for every spelling of 7 above. Compare the
+    // coerced value, which for a numeric-id model is a number, not a string.
+    const recordId = id === undefined ? undefined : (isNaN(id) ? id : parseInt(id));
+
+    if (recordId === 7) return false;
+
+    if (recordId === undefined) return record => record.id !== 7;
+
+    return ['read', 'create', 'update', 'delete'];
+  }
+}
+```
+
+Both samples above are extracted from this file and executed verbatim against a
+live server on every CI run — see
+[`test/integration/readme-access/`](https://github.com/abofs/stonyx-orm/tree/dev/test/integration/readme-access).
+`DELETE /owners/angela` is asserted to be refused with the record intact, and
+every spelling named above is measured individually, the numeric ones over a raw
+socket. Nothing in this section is prose that was never run.
 
 ### Upgrading: behaviour changes
 
