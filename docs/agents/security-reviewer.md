@@ -28,6 +28,9 @@
 ## Live Knowledge
 
 - Access classes receive the raw Express `request` object — any authorization logic that reads headers, cookies, or tokens runs in this layer and must validate inputs defensively
+- Authorize on `request.params`, never on a URL property: inside the mounted sub-app `request.url` is rewritten relative to the mount point, and `originalUrl` / `baseUrl` / `path` are raw client text that varies with query strings, trailing slashes, casing and percent-encoding (abofs/stonyx-orm#265)
+- `request.params.id` is raw text too — the ORM coerces a numeric-looking id with `parseInt` (no radix) *before* it resolves the record, so a predicate comparing the raw value denies one spelling and grants its aliases (`007`, `7.0`, `0x7`, `%207`). Normalise before comparing; abofs/stonyx-orm#270 tracks exporting the normaliser
+- A function return from `access()` is an unconditional allow — `auth()` applies the operations list only on the array branch, so a collection filter also authorizes writes on that collection
 - The `include` query parameter for relationship sideloading traverses relationships recursively — unbounded `include` depth could expose more data than intended or cause performance issues
 - The `__data` / `__relationships` internals on records are accessible via the proxy but marked as private — consumer code that bypasses the proxy can skip transforms and write arbitrary values
 - SQL migration generation compares model schemas against database state — the generated SQL runs with the configured database user's permissions, so privilege escalation depends on the DB user's grants

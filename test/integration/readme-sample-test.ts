@@ -28,9 +28,63 @@ const execFileAsync = promisify(execFile);
 /** Properties that carry the client's raw URL text. None is safe to authorize on. */
 const URL_PROPERTIES = /\b(?:request|req)\.(?:url|originalUrl|baseUrl|path)\b/;
 
+/**
+ * Strip comments before applying URL_PROPERTIES.
+ *
+ * The rule is about what a sample AUTHORIZES on, not about which words appear
+ * near it. Applied to raw lines the guard forbade the single most useful thing
+ * an author could write next to the sample — the inline caution "do NOT use
+ * request.url here, it is mount-relative" — which is a true statement and the
+ * whole point of the fix. A ban on phrasings eventually bans a true statement.
+ *
+ * Quote-aware so `'http://example.com'` is not truncated at the `//`, which
+ * would let a real `request.url` later on the same line escape the check.
+ */
+function stripComments(code) {
+  let out = '';
+  let quote = null;
+  let index = 0;
+
+  while (index < code.length) {
+    const char = code[index];
+    const next = code[index + 1];
+
+    if (quote) {
+      if (char === '\\') { out += char + (next ?? ''); index += 2; continue; }
+      if (char === quote) quote = null;
+      out += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') { quote = char; out += char; index += 1; continue; }
+
+    if (char === '/' && next === '/') {
+      while (index < code.length && code[index] !== '\n') index += 1;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      index += 2;
+      while (index < code.length && !(code[index] === '*' && code[index + 1] === '/')) index += 1;
+      index += 2;
+      continue;
+    }
+
+    out += char;
+    index += 1;
+  }
+
+  return out;
+}
+
 /** Files npm would put in the tarball, straight from npm's own enumeration. */
 async function packedFiles() {
-  const { stdout } = await execFileAsync('npm', ['pack', '--dry-run', '--json'], {
+  // --ignore-scripts: `npm pack` runs prepare/prepack/postpack, and this repo's
+  // prepublishOnly is `npm test`, so the enumeration already runs inside the
+  // publish path. There are no such scripts today; adding one should not make
+  // this call recursive. The file list is unaffected by the flag.
+  const { stdout } = await execFileAsync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: process.cwd(),
     maxBuffer: 32 * 1024 * 1024,
   });
@@ -38,19 +92,46 @@ async function packedFiles() {
   return JSON.parse(stdout)[0].files.map(file => file.path);
 }
 
-module('[Docs] packed access() samples (#265)', function(hooks) {
+/**
+ * Markdown tracked in the repo, from git's own index rather than a directory
+ * walk — the same reason the packed set comes from npm's enumeration.
+ *
+ * This is the SECOND population. The packed set contains exactly two markdown
+ * files (LICENSE.md and README.md), so a guard scoped to it structurally cannot
+ * fail on docs/** — and docs/usage-patterns.md carried the identical fail-open
+ * sample through the fix that repaired the README, because nothing read it.
+ * docs/index.md is what routes a reader browsing GitHub to access control.
+ */
+async function trackedMarkdown() {
+  const { stdout } = await execFileAsync('git', ['ls-files', '-z', '--', '*.md'], {
+    cwd: process.cwd(),
+    maxBuffer: 32 * 1024 * 1024,
+  });
+
+  return stdout.split('\0').filter(Boolean);
+}
+
+module('[Docs] reachable access() samples (#265)', function(hooks) {
   let packed;
+  let tracked;
   let samples;
 
   hooks.before(async function() {
     packed = await packedFiles();
+    tracked = await trackedMarkdown();
 
-    // Collect every access() sample from every packed markdown document.
+    // Collect every access() sample from every markdown document a reader can
+    // reach — the tarball a consumer installs, and the repo they browse.
+    const documents = new Map();
+
+    for (const path of packed.filter(file => file.endsWith('.md'))) documents.set(path, 'packed');
+    for (const path of tracked) documents.set(path, documents.has(path) ? 'packed' : 'repo');
+
     samples = [];
 
-    for (const path of packed.filter(file => file.endsWith('.md'))) {
+    for (const [path, population] of documents) {
       const markdown = await readFile(path, 'utf8');
-      for (const code of findAccessSamples(markdown)) samples.push({ path, code });
+      for (const code of findAccessSamples(markdown)) samples.push({ path, code, population });
     }
   });
 
@@ -64,25 +145,71 @@ module('[Docs] packed access() samples (#265)', function(hooks) {
     );
   });
 
-  test('at least one access() sample is packed', function(assert) {
-    // The two assertions below are satisfied by an empty sample list; this is
-    // the control that says there was something to check.
-    assert.ok(samples.length > 0, `found ${samples.length} packed access() sample(s)`);
+  test('the repo markdown set is what it claims to be', function(assert) {
+    // Non-vacuity for the docs/** half: without this, deleting docs/ or a
+    // silently-failing `git ls-files` would make every check below pass.
+    assert.ok(tracked.length > 0, `git enumerated ${tracked.length} tracked markdown file(s)`);
+    assert.ok(tracked.includes('docs/usage-patterns.md'), 'docs/usage-patterns.md is in the scanned set — it carried the third copy of the defect');
+    assert.ok(tracked.includes('docs/project-structure.md'), 'docs/project-structure.md is in the scanned set');
   });
 
-  test('no packed access() sample authorizes on a request URL', function(assert) {
-    for (const { path, code } of samples) {
-      const offending = code.split('\n').filter(line => URL_PROPERTIES.test(line));
+  test('at least one access() sample is reachable, in each population', function(assert) {
+    // The checks below are satisfied by an empty sample list; this is the
+    // control that says there was something to check — in BOTH populations,
+    // because a docs-only regression must not hide behind a healthy README.
+    const byPopulation = { packed: 0, repo: 0 };
+    for (const { population } of samples) byPopulation[population] += 1;
+
+    assert.ok(byPopulation.packed > 0, `found ${byPopulation.packed} packed access() sample(s)`);
+    assert.ok(byPopulation.repo > 0, `found ${byPopulation.repo} repo-only access() sample(s)`);
+  });
+
+  test('no reachable access() sample authorizes on a request URL', function(assert) {
+    for (const { path, code, population } of samples) {
+      const offending = stripComments(code).split('\n').filter(line => URL_PROPERTIES.test(line));
 
       assert.deepEqual(
         offending,
         [],
-        `${path}: sample must not read a URL property — request.url is mount-relative and originalUrl is raw client text`
+        `${path} (${population}): sample must not read a URL property — request.url is mount-relative and originalUrl is raw client text`
       );
     }
   });
 
-  test('every packed access() sample declares the one-argument contract', function(assert) {
+  test('an honest inline caution about request.url is still allowed', function(assert) {
+    // The rule bans authorizing on a URL, not mentioning one. Guards the
+    // stripComments() carve-out above against being quietly removed.
+    const withCaution = [
+      "export default class OwnerAccess {",
+      "  models = ['owner'];",
+      "  access(request) {",
+      "    // Do NOT use request.url here — it is mount-relative.",
+      "    const { id } = request.params;",
+      "    return id === 'angela' ? false : ['read'];",
+      "  }",
+      "}",
+    ].join('\n');
+
+    assert.deepEqual(
+      stripComments(withCaution).split('\n').filter(line => URL_PROPERTIES.test(line)),
+      [],
+      'a commented caution naming request.url does not trip the guard'
+    );
+
+    // Control: the guard still fires on the real thing, on the same input shape.
+    const authorizing = withCaution.replace(
+      "const { id } = request.params;",
+      "if (request.url.endsWith('/owners/angela')) return false;"
+    );
+
+    assert.equal(
+      stripComments(authorizing).split('\n').filter(line => URL_PROPERTIES.test(line)).length,
+      1,
+      'an actual request.url predicate is still caught'
+    );
+  });
+
+  test('every reachable access() sample declares the one-argument contract', function(assert) {
     for (const { path, code } of samples) {
       const signature = code.match(/\baccess\s*\(([^)]*)\)/);
 
