@@ -20,7 +20,6 @@ import log from 'stonyx/log';
 import { forEachFileImport } from '@stonyx/utils/file';
 import { kebabCaseToPascalCase, pluralize } from '@stonyx/utils/string';
 import { registerPluralName } from './plural-registry.js';
-import setupRestServer from './setup-rest-server.js';
 import baseTransforms from './transforms.js';
 import Store from './store.js';
 import Serializer from './serializer.js';
@@ -177,6 +176,13 @@ export default class Orm {
     }
 
     if (restServer.enabled === 'true') {
+      // Lazy-imported so the optional `@stonyx/rest-server` peer is only resolved
+      // when the consumer has actually enabled REST. A static import here pulls
+      // setup-rest-server -> orm-request/meta-request -> '@stonyx/rest-server'
+      // into the entry graph, so `import('@stonyx/orm')` throws
+      // ERR_MODULE_NOT_FOUND for an ORM-only consumer that never installed the
+      // optional peer. Same reason the SQL/DynamoDB drivers above are lazy. (#280)
+      const { default: setupRestServer } = await import('./setup-rest-server.js');
       promises.push(setupRestServer(restServer.route, paths.access, restServer.metaRoute));
     }
 
