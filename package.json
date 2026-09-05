@@ -4,7 +4,7 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.3.2-beta.221",
+  "version": "0.3.2-beta.222",
   "description": "",
   "main": "dist/index.js",
   "type": "module",
@@ -69,7 +69,7 @@
   },
   "homepage": "https://github.com/abofs/stonyx-orm#readme",
   "dependencies": {
-    "@stonyx/cron": "0.2.1-beta.120",
+    "@stonyx/cron": "0.2.1-beta.121",
     "@stonyx/events": "0.1.1-beta.64",
     "@stonyx/utils": "0.2.3-beta.27",
     "stonyx": "0.2.3-beta.94"
