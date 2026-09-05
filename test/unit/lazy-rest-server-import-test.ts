@@ -67,6 +67,26 @@ function collectExportTargets() {
   return { subpaths: Object.keys(pkg.exports ?? {}), targets };
 }
 
+// Every command a consumer can reach through the published `bin` map, DERIVED
+// FROM package.json for the same reason `exports` is.
+//
+// Hand-pinning `pkg.bin['stonyx-orm']` here reproduced the hardcoded-list
+// defect one field over: adding a SECOND published bin command whose module
+// statically imports '@stonyx/rest-server' left the whole suite green at 7/7,
+// even though `npx stonyx-orm-rest` would have thrown ERR_MODULE_NOT_FOUND out
+// of the tarball. Measured; see PR #283.
+function collectBinTargets() {
+  const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+  const bin = pkg.bin;
+
+  // npm allows the string shorthand `"bin": "./dist/cli.js"`, which means
+  // { [pkg.name]: value }. Normalise it rather than silently probing nothing.
+  if (typeof bin === 'string') return [{ command: pkg.name, target: bin }];
+  if (!bin || typeof bin !== 'object') return [];
+
+  return Object.entries(bin).map(([command, target]) => ({ command, target: target as string }));
+}
+
 // Regression tests for stonyx-orm#280 — a recurrence of #200.
 //
 // '@stonyx/rest-server' is declared an OPTIONAL peer, but src/main.ts imported
@@ -86,6 +106,8 @@ function collectExportTargets() {
 //  2. add `import '@stonyx/rest-server';` to the top of ANY module reachable
 //     from ANY published subpath — e.g. src/exports/db.ts or src/hooks.ts —
 //     test 1 reports the sentinel for that subpath. Measured; see PR #283.
+//  3. publish a SECOND `bin` command whose module statically reaches the peer —
+//     test 4 reports the sentinel for that command. Measured; see PR #283.
 module('[Unit] Lazy rest-server import (#280)', function() {
   test('AC1 — every published `exports` subpath links with the optional peer absent', function(assert) {
     const { targets } = collectExportTargets();
@@ -139,34 +161,46 @@ module('[Unit] Lazy rest-server import (#280)', function() {
     );
   });
 
-  test('AC1 — the `bin` entry point links with the optional peer absent', function(assert) {
+  test('AC1 — every published `bin` entry point links with the optional peer absent', function(assert) {
     // `bin` is published too, and it is NOT in `exports`, so the loop above
-    // cannot reach it. It is probed separately rather than through the probe
-    // module because importing it RUNS the CLI (it prints help and exits), so
-    // its stdout is not the probe's JSON. Linking still happens before any of
-    // that, so a static reach dies with the sentinel on stderr.
-    const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-    const bin = pkg.bin?.['stonyx-orm'];
-    assert.ok(typeof bin === 'string' && bin.length > 0, `package.json declares bin ${bin}`);
+    // cannot reach it. These are probed separately rather than through the
+    // probe module because importing one RUNS the CLI (it prints help and
+    // exits), so its stdout is not the probe's JSON. Linking still happens
+    // before any of that, so a static reach dies with the sentinel on stderr.
+    const bins = collectBinTargets();
+
+    // Non-vacuity, same reason as test 2: if `bin` is ever emptied or
+    // restructured into a shape collectBinTargets() does not understand, the
+    // loop below goes silently empty and stops guarding anything.
+    assert.ok(
+      bins.length > 0,
+      `package.json declares ${bins.length} bin command(s): ${bins.map(b => b.command).join(', ')}`
+    );
 
     const run = (entry: string) =>
       `${spawnSync(process.execPath, ['--import', REGISTER, entry], { cwd: repoRoot, encoding: 'utf8' }).stderr}`;
 
     // Control for THIS invocation path — it does not go through the probe
     // module, so it needs its own proof that the resolve hook is installed and
-    // that the assertion below could fail.
+    // that the assertions below could fail.
     assert.ok(
       run('./dist/setup-rest-server.js').includes(SENTINEL_CODE),
       'control: the same invocation DOES report the sentinel for a module that statically reaches the peer'
     );
 
-    const stderr = run(bin);
-    const hit = stderr.split('\n').find(line => line.includes(SENTINEL_CODE)) ?? '';
+    for (const { command, target } of bins) {
+      const where = `bin ${command} -> ${target}`;
 
-    assert.notOk(
-      stderr.includes(SENTINEL_CODE),
-      `${bin} must not statically reach '@stonyx/rest-server' (${hit.trim()})`
-    );
+      assert.ok(existsSync(path.join(repoRoot, target)), `${where} is built`);
+
+      const stderr = run(target);
+      const hit = stderr.split('\n').find(line => line.includes(SENTINEL_CODE)) ?? '';
+
+      assert.notOk(
+        stderr.includes(SENTINEL_CODE),
+        `${where} must not statically reach '@stonyx/rest-server' (${hit.trim()})`
+      );
+    }
   });
 
   test('AC1 — src/main.ts has no static import of setup-rest-server', function(assert) {
@@ -205,12 +239,29 @@ module('[Unit] Lazy rest-server import (#280)', function() {
 
   test('AC3 — setup-rest-server.js is the only dist module whose laziness is load-bearing', function(assert) {
     // The invariant is NOT "every optional dependency is imported in this exact
-    // shape" — the SQL/DynamoDB drivers are lazily imported here too, but that
-    // is not what isolates THEIR peers: `src/*/db.ts` carries no peer specifier
-    // at all, and the isolation lives one layer down in `src/*/connection.ts`.
+    // shape" — the SQL/DynamoDB driver modules are lazily imported from
+    // Orm.init() too, but that is not what isolates THEIR peers.
+    //
+    // Those drivers are src/postgres/postgres-db.ts, src/mysql/mysql-db.ts,
+    // src/dynamodb/dynamodb-db.ts and src/timescale/timescale-db.ts. Each names
+    // its peer, if at all, only in a form that never reaches a runtime STATIC
+    // graph:
+    //   - `import type { Pool } from 'pg'` / `'mysql2/promise'`
+    //     (postgres-db.ts:15, mysql-db.ts:17) — erased by tsc; `grep` finds no
+    //     peer specifier in dist/postgres/postgres-db.js or dist/mysql/mysql-db.js;
+    //   - `return import('@aws-sdk/lib-dynamodb' as string)`
+    //     (dynamodb-db.ts:87,103 -> dist/dynamodb/dynamodb-db.js:61,64) — a
+    //     dynamic import, resolved only when called;
+    //   - timescale-db.ts names none.
+    // The rest of the isolation lives in src/postgres/connection.ts:22,
+    // src/mysql/connection.ts:20 and src/dynamodb/connection.ts:29,32.
+    //
     // setup-rest-server.js is different: it names the peer through its own
-    // static graph, so the `await import()` in Orm.init() is the only thing
-    // keeping '@stonyx/rest-server' off the entry graph.
+    // STATIC graph — directly at src/setup-rest-server.ts:5 and through
+    // src/orm-request.ts:1 / src/meta-request.ts:1 — so the `await import()` in
+    // Orm.init() is the only thing keeping '@stonyx/rest-server' off the entry
+    // graph. See docs/project-structure.md, "Where each peer is actually
+    // isolated".
     const source = readFileSync(path.join(repoRoot, 'src/main.ts'), 'utf8');
 
     assert.ok(

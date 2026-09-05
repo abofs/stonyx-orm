@@ -81,10 +81,11 @@ them except through the guarded dynamic import in `Orm.init()`. Do not
 "fix" them.
 
 This is enforced by `test/unit/lazy-rest-server-import-test.ts`, which links
-**every** runtime target in the `package.json` `exports` map, plus `bin`, in a
-child process with the peer made to resolve as absent. The subpath list is
-derived from the manifest rather than written out in the test, so a subpath
-added later is covered by default. See stonyx-orm#200 and #280.
+**every** runtime target in the `package.json` `exports` map **and every command
+in `bin`**, in a child process with the peer made to resolve as absent. Both
+lists are derived from the manifest rather than written out in the test, so a
+subpath *or a bin command* added later is covered by default. See
+stonyx-orm#200 and #280.
 
 The consumer-facing half of this — how to configure an ORM-only app so it never
 tries to load `@stonyx/rest-server` — lives in
