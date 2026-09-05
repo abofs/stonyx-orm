@@ -1,9 +1,10 @@
 // @ts-nocheck
 import QUnit from 'qunit';
 import { spawnSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { LINK_MARKER, RESOLVE_MARKER } from '../helpers/link-marker-loader.mjs';
 
 const { module, test } = QUnit;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,7 @@ const repoRoot = path.resolve(__dirname, '../..');
 
 const SENTINEL_CODE = 'ERR_ABSENT_OPTIONAL_PEER';
 const REGISTER = './test/helpers/register-absent-optional-peer.mjs';
+const MARKERS = './test/helpers/register-link-marker.mjs';
 const PROBE = './test/helpers/probe-module-link.mjs';
 
 // Import `target` in a child process where '@stonyx/rest-server' is made to
@@ -178,7 +180,11 @@ module('[Unit] Lazy rest-server import (#280)', function() {
     );
 
     const run = (entry: string) =>
-      `${spawnSync(process.execPath, ['--import', REGISTER, entry], { cwd: repoRoot, encoding: 'utf8' }).stderr}`;
+      `${spawnSync(
+        process.execPath,
+        ['--import', REGISTER, '--import', MARKERS, entry],
+        { cwd: repoRoot, encoding: 'utf8' }
+      ).stderr}`;
 
     // Control for THIS invocation path — it does not go through the probe
     // module, so it needs its own proof that the resolve hook is installed and
@@ -190,11 +196,50 @@ module('[Unit] Lazy rest-server import (#280)', function() {
 
     for (const { command, target } of bins) {
       const where = `bin ${command} -> ${target}`;
+      const absolute = path.join(repoRoot, target);
+      const targetUrl = pathToFileURL(absolute).href;
 
-      assert.ok(existsSync(path.join(repoRoot, target)), `${where} is built`);
+      // A FILE, not merely a path that exists. `existsSync(path.join(root, ''))`
+      // is `existsSync(root)` and the repo root always exists, so an empty
+      // target used to satisfy this check; so did a directory. Measured in #283.
+      assert.ok(
+        statSync(absolute, { throwIfNoEntry: false })?.isFile() === true,
+        `${where} is built (the target is an existing file)`
+      );
 
       const stderr = run(target);
-      const hit = stderr.split('\n').find(line => line.includes(SENTINEL_CODE)) ?? '';
+      const markers = stderr.split('\n');
+
+      // NON-VACUITY, ASSERTED POSITIVELY. The checks that used to make up this
+      // loop were all satisfiable without the declared command ever being
+      // probed. Measured at 366c0e9a, each of these ran 7 pass / 0 fail:
+      //  - `"bin": ""` and `{ "stonyx-orm": "" }` — the child linked NOTHING
+      //    (exit 0, empty stderr), so the sentinel check passed by default;
+      //  - `"./dist"` and `"./dist/"` — Node resolved the directory to a
+      //    DIFFERENT module (dist/index.js) and the child died on an unrelated
+      //    error, so the sentinel check passed while the declared command was
+      //    never linked.
+      //
+      // These two markers come from the child itself, so they cannot be
+      // satisfied by an absence:
+      //  - LINK_MARKER fires after Node has read the target as a module, so it
+      //    proves the child was pointed at something loadable;
+      //  - RESOLVE_MARKER fires when Node asks to resolve a specifier ON BEHALF
+      //    OF the target, which it only does after parsing it — i.e. the child
+      //    entered STATIC DEPENDENCY RESOLUTION for this target, the phase in
+      //    which an absent optional peer throws. Without it, the assertion below
+      //    is reporting on a phase the child never reached.
+      // See test/helpers/link-marker-loader.mjs.
+      assert.ok(
+        markers.includes(`${LINK_MARKER}${targetUrl}`),
+        `${where} was loaded as a module by the child`
+      );
+      assert.ok(
+        markers.includes(`${RESOLVE_MARKER}${targetUrl}`),
+        `${where} reached static dependency resolution in the child, so the check below is not vacuous`
+      );
+
+      const hit = markers.find(line => line.includes(SENTINEL_CODE)) ?? '';
 
       assert.notOk(
         stderr.includes(SENTINEL_CODE),
