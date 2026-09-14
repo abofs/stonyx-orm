@@ -281,7 +281,7 @@ const KNOWN_COERCION_SITES = {
   // Split out of #270 — the create-response and SQL-persist paths. Each of
   // these normalises a RESPONSE id (`response?.data?.id`), not a URL id.
   'src/orm-request.ts:524': 'create-response path duplicate — split out of #270, tracked as #282',
-  'src/postgres/postgres-db.ts:523': 'persist path duplicate — split out of #270, tracked as #282',
+  'src/postgres/postgres-db.ts:528': 'persist path duplicate — split out of #270, tracked as #282',
   'src/mysql/mysql-db.ts:450': 'persist path duplicate — split out of #270, tracked as #282',
 
   // Not a copy of the normaliser, and — the load-bearing half — NOT ON ANY

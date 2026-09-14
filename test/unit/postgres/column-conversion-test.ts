@@ -96,6 +96,10 @@ function makeRecord(data, id = 1) {
 
 /** Run an UPDATE through the driver and return { sql, values }. */
 async function runUpdate(Ctor, deps, data, oldState = {}) {
+  // The driver is a singleton keyed on the constructor. Reset it here, not
+  // only in beforeEach: a single test may instantiate more than once, and a
+  // stale instance silently reuses the PREVIOUS deps.
+  Ctor.instance = undefined;
   const db = new Ctor(deps);
   db.pool = deps._mockPool;
   await db.persist('update', 'widget', { record: makeRecord(data), oldState }, {});
@@ -109,6 +113,7 @@ async function runCreate(Ctor, deps, data, id = 1) {
   deps.store.get = sinon.stub().callsFake((_name, wantedId) =>
     (wantedId === undefined ? new Map() : record));
 
+  Ctor.instance = undefined;
   const db = new Ctor(deps);
   db.pool = deps._mockPool;
   await db.persist('create', 'widget', { rawData: { ...data } }, { data: { id } });
@@ -233,6 +238,28 @@ module('[Unit] Column conversion — Postgres update path (#292)', function(hook
     assert.strictEqual(bound, '[1,2,3]', 'TimescaleDB binds "[1,2,3]"');
     assert.strictEqual(prepareValue(bound), '[1,2,3]', 'TimescaleDB sends valid JSON');
   });
+
+  // --- MEASURED KNOCK-ON: JSONB null --------------------------------------
+  // Sharing one rule across both paths necessarily picks ONE null semantic.
+  // Measured pre-fix: create binds 'null' (JSONB scalar null), update binds SQL
+  // NULL. The create path is required to stay byte-identical, so the update
+  // path converges on create's semantic. #292 lists JSONB-null unification as
+  // deliberately deferred; this test pins the change so it is visible rather
+  // than silent. If review rules the other way, this test is the one to flip.
+  test('KNOCK-ON: null in a JSONB column now binds the JSONB scalar null on BOTH paths',
+    async function(assert) {
+      const updateDeps = createPgDeps();
+      const update = await runUpdate(PostgresDB, updateDeps, { tags: null }, { tags: [1] });
+
+      assert.strictEqual(paramFor(update.sql, update.values, 'tags'), 'null',
+        'update binds the string "null" (pre-fix: SQL NULL) -- measured behaviour change');
+
+      const createDeps = createPgDeps();
+      const create = await runCreate(PostgresDB, createDeps, { id: 1, tags: null });
+
+      assert.ok(create.values.includes('null'),
+        'create binds the string "null" -- unchanged by this fix');
+    });
 
   // --- AC8: no inline stringify left --------------------------------------
   test('src/postgres/postgres-db.ts contains no JSON.stringify', function(assert) {
