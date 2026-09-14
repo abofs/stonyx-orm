@@ -8,6 +8,8 @@ import { createRecord } from '../manage-record.js';
 import { confirm } from '@stonyx/utils/prompt';
 import { readFile } from '@stonyx/utils/file';
 import { getPluralName } from '../plural-registry.js';
+import { convertRow } from '../column-conversion.js';
+import { postgresJsonRule } from './column-rules.js';
 import { isDbError } from '../utils.js';
 import config from 'stonyx/config';
 import log from 'stonyx/log';
@@ -61,6 +63,8 @@ interface PostgresDeps {
   confirm: typeof confirm;
   readFile: typeof readFile;
   getPluralName: typeof getPluralName;
+  convertRow: typeof convertRow;
+  postgresJsonRule: typeof postgresJsonRule;
   config: typeof config;
   log: typeof log;
   path: typeof path;
@@ -73,7 +77,8 @@ const defaultDeps: PostgresDeps = {
   introspectModels, introspectViews, getTopologicalOrder, schemasToSnapshot,
   loadLatestSnapshot, detectSchemaDrift,
   buildInsert, buildUpdate, buildDelete, buildSelect, buildVectorSearch, buildHybridSearch,
-  createRecord, store, confirm, readFile, getPluralName, config, log, path
+  createRecord, store, confirm, readFile, getPluralName, config, log, path,
+  convertRow, postgresJsonRule
 };
 
 export default class PostgresDB {
@@ -535,7 +540,10 @@ export default class PostgresDB {
       delete insertData.id;
     }
 
-    const { sql, values } = this.deps.buildInsert(schema.table, insertData);
+    // Convert the *complete* payload (attributes + id + FKs) in one place (#292).
+    const row = this.deps.convertRow(insertData, schema.columns, this.deps.postgresJsonRule);
+
+    const { sql, values } = this.deps.buildInsert(schema.table, row);
 
     const result = await this.requirePool().query(sql, values);
 
@@ -600,7 +608,12 @@ export default class PostgresDB {
     // PostgreSQL doesn't have ON UPDATE CURRENT_TIMESTAMP -- set updated_at manually
     changedData.updated_at = new Date();
 
-    const { sql, values } = this.deps.buildUpdate(schema.table, id, changedData);
+    // Same conversion, same choke point as the create path (#292). Columns
+    // appended after the attribute loop (FKs, updated_at) are absent from
+    // schema.columns and pass through untouched.
+    const row = this.deps.convertRow(changedData, schema.columns, this.deps.postgresJsonRule);
+
+    const { sql, values } = this.deps.buildUpdate(schema.table, id, row);
     await this.requirePool().query(sql, values);
   }
 
@@ -626,13 +639,11 @@ export default class PostgresDB {
       row.id = data.id;
     }
 
-    // Attribute columns
-    for (const [col, pgType] of Object.entries(schema.columns)) {
+    // Attribute columns. Type conversion is NOT applied here -- it is applied
+    // once to the finished payload by the caller, via convertRow (#292).
+    for (const col of Object.keys(schema.columns)) {
       if (data[col] !== undefined) {
-        // JSONB columns: stringify non-string values for PostgreSQL JSONB storage
-        row[col] = pgType === 'JSONB' && typeof data[col] !== 'string'
-          ? JSON.stringify(data[col])
-          : data[col];
+        row[col] = data[col];
       }
     }
 

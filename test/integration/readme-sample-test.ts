@@ -235,7 +235,9 @@ const MENTIONS_ID = /\bid\b|Id\b/i;
  * deliberately: they sit on the persistence path rather than the authorization
  * path, and two of them cannot be verified without a live MySQL/Postgres, so
  * folding them into a priority-critical security fix would have put unverifiable
- * adapter edits inside it. Tracked as #282; delete the entry when #282 lands.
+ * adapter edits inside it. #282 tracked them and was CLOSED UNFIXED in the
+ * 2026-09 backlog reset (2026-09-08, stateReason COMPLETED, no linked PR), so
+ * these sites are currently untracked. Delete the entry when they are fixed.
  *
  * WHAT "EVERY SITE" MEANS HERE, AND THE TWO ESCAPES BEHIND THE WORDING. This
  * guard reads SOURCE TEXT, one line at a time, and it is keyed by `path:line`.
@@ -271,7 +273,8 @@ const MENTIONS_ID = /\bid\b|Id\b/i;
  * FUNCTION CALLS. `src/view-resolver.ts:208` (`r.id === id || r.id == id`) is
  * the same permissive dual-match family, sits on the request resolution path
  * via `src/store.ts`, and is structurally invisible here because it coerces
- * with `==`. Recorded on #282, not fixed here.
+ * with `==`. Was recorded on #282, which closed unfixed — currently untracked,
+ * and not fixed here.
  */
 const KNOWN_COERCION_SITES = {
   // The one implementation. Everything else delegates to it.
@@ -280,9 +283,9 @@ const KNOWN_COERCION_SITES = {
 
   // Split out of #270 — the create-response and SQL-persist paths. Each of
   // these normalises a RESPONSE id (`response?.data?.id`), not a URL id.
-  'src/orm-request.ts:524': 'create-response path duplicate — split out of #270, tracked as #282',
-  'src/postgres/postgres-db.ts:523': 'persist path duplicate — split out of #270, tracked as #282',
-  'src/mysql/mysql-db.ts:450': 'persist path duplicate — split out of #270, tracked as #282',
+  'src/orm-request.ts:524': 'create-response path duplicate — split out of #270; #282 closed unfixed in the 2026-09 backlog reset, currently untracked',
+  'src/postgres/postgres-db.ts:528': 'persist path duplicate — split out of #270; #282 closed unfixed in the 2026-09 backlog reset, currently untracked',
+  'src/mysql/mysql-db.ts:450': 'persist path duplicate — split out of #270; #282 closed unfixed in the 2026-09 backlog reset, currently untracked',
 
   // Not a copy of the normaliser, and — the load-bearing half — NOT ON ANY
   // REQUEST PATH: `src/cli.ts` is its only importer in `src/`, so no route, no
@@ -706,7 +709,7 @@ module('[Docs] reachable access() samples (#265)', function(hooks) {
       unexpected,
       [],
       'every id-coercion expression that NAMES AN ID, on a line not already allowlisted, is either the canonical normaliser ' +
-      'or a site explicitly split out of #270 (see #282) — a new one here is a new hand-copy. ' +
+      'or a site explicitly split out of #270 (see KNOWN_COERCION_SITES; #282 tracked these and closed unfixed) — a new one here is a new hand-copy. ' +
       'If a listed site simply MOVED, update its line in KNOWN_COERCION_SITES in the same commit that moved it.'
     );
 
