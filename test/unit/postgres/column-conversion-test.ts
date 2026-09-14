@@ -261,6 +261,27 @@ module('[Unit] Column conversion — Postgres update path (#292)', function(hook
         'create binds the string "null" -- unchanged by this fix');
     });
 
+  // --- ACCEPTED KNOCK-ON: BigInt ------------------------------------------
+  // Measured at 789476b^ (pre-fix driver): UPDATE bound the raw 10n, which pg's
+  // prepareValue renders '10', while CREATE already threw from the inline
+  // JSON.stringify. At head both paths throw. This is the update path
+  // converging on create, not a new failure class, and it is accepted rather
+  // than carved out: measured, adding a BigInt branch to the shared rule makes
+  // CREATE bind '10' where it previously threw, which the AC forbids. Pinned so
+  // the accepted regression cannot drift back silently.
+  test('ACCEPTED KNOCK-ON: BigInt in a JSONB column throws on BOTH paths',
+    async function(assert) {
+      await assert.rejects(
+        runUpdate(PostgresDB, createPgDeps(), { tags: 10n }),
+        /serialize a BigInt/,
+        'update throws (pre-fix it bound 10n, which pg renders as JSON number 10)');
+
+      await assert.rejects(
+        runCreate(PostgresDB, createPgDeps(), { id: 1, tags: 10n }),
+        /serialize a BigInt/,
+        'create throws -- unchanged by this fix, which is what update converges on');
+    });
+
   // --- AC8: no inline stringify left --------------------------------------
   test('src/postgres/postgres-db.ts contains no JSON.stringify', function(assert) {
     const source = readFileSync(path.join(repoRoot, 'src/postgres/postgres-db.ts'), 'utf8');
@@ -268,7 +289,15 @@ module('[Unit] Column conversion — Postgres update path (#292)', function(hook
 
     assert.strictEqual(occurrences, 0,
       'conversion lives in the shared module, not inline in the driver');
-    assert.ok(source.includes('convertRow'), 'the driver routes through convertRow (guards the count above)');
+    // Count CALL SITES, not mentions. `source.includes('convertRow')` is
+    // satisfied by this file's own comments and by the import/deps lines, so it
+    // stays green on a driver that performs no conversion at all (measured).
+    // The regex is text-keyed and so fails CLOSED under a refactor that renames
+    // or destructures the call -- red, never silently green.
+    const callSites = (source.match(/this\.deps\.convertRow\(/g) || []).length;
+
+    assert.strictEqual(callSites, 2,
+      'both write paths actually CALL convertRow (guards the count above)');
   });
 });
 

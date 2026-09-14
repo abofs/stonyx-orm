@@ -19,8 +19,17 @@ import type { ColumnRule } from '../column-conversion.js';
  *    `schema.columns`.
  *
  * The `'JSONB'` sentinel is the exact literal emitted by
- * `src/postgres/type-map.ts` (`getPgType`/`mysqlTypeToPg`), which is the only
- * producer of the values in `schema.columns`.
+ * `src/postgres/type-map.ts`, the only module that produces the values in
+ * `schema.columns`. The two producing functions are `getPgType` and
+ * `getVectorType` (`src/postgres/schema-introspector.ts` writes `columns[key]`
+ * at exactly three sites, all routed through those two); `mysqlTypeToPg` is not
+ * exported and is reachable only from inside `getPgType`.
+ *
+ * One documented gap: `getPgType` returns a consumer transform's declared
+ * `pgType` verbatim, so a consumer writing `pgType: 'jsonb'` puts a value in
+ * `schema.columns` that type-map never authored and this exact-match sentinel
+ * misses. It misses identically on the create path, pre-fix and post-fix --
+ * pre-existing and symmetric, not introduced here.
  */
 export const postgresJsonRule: ColumnRule = (value, columnType) =>
   columnType === 'JSONB' && typeof value !== 'string'

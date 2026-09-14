@@ -41,7 +41,12 @@ export function convertRow(
   const converted: Record<string, unknown> = {};
 
   for (const [col, value] of Object.entries(row)) {
-    converted[col] = rule(value, columns[col]);
+    // `Object.hasOwn`, not `columns[col]`: a column named `toString` or
+    // `constructor` would otherwise reach the rule with a function as its
+    // "declared type". Inert for the shipped Postgres rule (strict equality
+    // against 'JSONB'), but `ColumnRule` is the extension point other drivers
+    // write against, and the obvious `if (columnType)` rule would invert.
+    converted[col] = rule(value, Object.hasOwn(columns, col) ? columns[col] : undefined);
   }
 
   return converted;
