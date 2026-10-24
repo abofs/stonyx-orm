@@ -173,36 +173,61 @@ module('[Integration] reference access sample (#265)', function(hooks) {
     createRecord('owner', raw.owners.find(o => o.name === 'bob'));
   });
 
-  test('KNOWN #256 — the animal collection filter removes nothing, and that is pinned', async function(assert) {
-    // global-access.ts:34 returns `record => record.owner !== 'angela'`, but
-    // record.owner is the related Record instance, not the id string, so the
-    // predicate is never false. Phase 3 and Phase 4 measured this independently
-    // and got the same numbers; this pins it so the reference sample cannot
-    // silently endorse the shape, and so #256 landing is a visible event here
-    // rather than a quiet change.
-    //
-    // WHEN #256 IS FIXED THIS TEST GOES RED. That is the point: flip the
-    // expectation to `leaked.length === 0` in the same commit that fixes it.
-    const response = await fetch(`${origin}/animals`);
-    assert.equal(response.status, 200, 'GET /animals -> 200');
+  // ==========================================================================
+  // #256. A belongsTo on a hydrated record is the related Record, not its id,
+  // so the sample's animal filter must compare `record.owner?.id`. Before the
+  // fix it compared the Record itself to 'angela', which is never equal, and
+  // GET /animals served every one of angela's animals.
+  //
+  // Bound to the exact survivor list, not a count or an absence check: an
+  // unfiltered collection fails the equality, and so does a filter that removes
+  // too much.
+  // ==========================================================================
+  module('#256 — the animal collection filter compares the owner id', function() {
+    const ANGELAS = [1, 3, 7, 10, 11, 15, 17, 20].map(String);
+    const SURVIVORS = [2, 4, 5, 6, 8, 9, 12, 13, 14, 16, 18, 19].map(String);
+    const byNumber = (a, b) => Number(a) - Number(b);
 
-    const { data } = await response.json();
-    const leaked = data.filter(record => record.relationships?.owner?.data?.id === PROTECTED);
+    test('every spelling of GET /animals serves exactly the non-angela animals', async function(assert) {
+      for (const spelling of ['/animals', '/animals/', '/ANIMALS', '/animals?x=1']) {
+        const response = await fetch(`${origin}${spelling}`);
+        const served = disclosedIds(await response.text()).map(String).sort(byNumber);
 
-    assert.ok(data.length > 0, `the collection is non-empty — got ${data.length} animals`);
-    assert.ok(
-      leaked.length > 0,
-      `#256 is still live: ${leaked.length} of ${data.length} animals belong to "${PROTECTED}" and the filter did not remove them (ids [${leaked.map(r => r.id)}])`
-    );
+        if (response.status === 404) {
+          assert.deepEqual(served, [], `GET ${spelling} -> 404 and serves nothing`);
+          continue;
+        }
 
-    // The widened surface, also inert only because the predicate never fires.
-    for (const spelling of ['/animals/', '/ANIMALS', '/animals?x=1']) {
-      const wide = await fetch(`${origin}${spelling}`);
+        assert.equal(response.status, 200, `GET ${spelling} -> 200`);
+        assert.deepEqual(served, SURVIVORS, `GET ${spelling} serves exactly the ${SURVIVORS.length} animals not owned by "${PROTECTED}" — got [${served}]`);
 
-      assert.ok([200, 404].includes(wide.status), `GET ${spelling} -> ${wide.status} (200 lenient | 404 strict)`);
-    }
+        const leaked = ANGELAS.filter(id => served.includes(id));
+        assert.deepEqual(leaked, [], `GET ${spelling} serves none of ${PROTECTED}'s animals`);
+      }
+    });
+
+    test('an unowned animal is served, and GET /animals stays 200', async function(assert) {
+      // The inverse that separates `record.owner?.id` from `record.owner.id`:
+      // without `?.`, one animal with no owner throws inside the filter and the
+      // whole collection returns 500.
+      const UNOWNED = 99;
+
+      // Already-serialized shape (see `serialized.animals` in test/sample/payload.ts), with no owner
+      createRecord('animal', { id: UNOWNED, type: 1, age: 1, size: 'small' }, { serialize: false });
+
+      try {
+        assert.notOk(store.get('animal', UNOWNED).owner, `animal ${UNOWNED} has no owner`);
+
+        const response = await fetch(`${origin}/animals`);
+        assert.equal(response.status, 200, 'GET /animals -> 200 with an unowned animal in the store');
+
+        const served = disclosedIds(await response.text()).map(String);
+        assert.ok(served.includes(String(UNOWNED)), `the unowned animal ${UNOWNED} is served — got [${served}]`);
+      } finally {
+        store.remove('animal', UNOWNED);
+      }
+    });
   });
-
 
   // ==========================================================================
   // AC-3, as an OUTCOME. The string-id model was never "safe by design" — it
@@ -250,9 +275,9 @@ module('[Integration] reference access sample (#265)', function(hooks) {
   });
 
   test('the documented Intentional Gap is still intentional', async function(assert) {
-    // global-access.ts:28 states it does not block angela's related routes.
-    // Pinned so the gap stays a decision rather than quietly becoming an
-    // accident. The gap is a DISCLOSURE of the protected record's related data;
+    // The "Intentional Gap" comment in global-access.ts states it does not block
+    // angela's related routes. Pinned so the gap stays a decision rather than
+    // quietly becoming an accident. The gap is a DISCLOSURE of the protected record's related data;
     // it is tracked as part of abofs/stonyx-orm#202 (access() cannot see the
     // model, so a per-model rule cannot reach the related routes). If #202 or a
     // successor closes it, this test is the one that will read as a regression

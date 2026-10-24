@@ -109,7 +109,7 @@ Each hook receives a context object:
 **Notes:**
 - `oldState` is captured via `JSON.parse(JSON.stringify())` before operation executes
 - For delete operations, `recordId` is available since the record may no longer exist
-- `oldState` enables precise field-level change detection
+- `oldState` enables precise attribute-level change detection. It holds attributes only (`record.__data`), not relationships
 - `params.id` is the raw client text as a STRING (`/animals/05` gives `{ id: '05' }`). The id the ORM resolved the record by is `request.recordId`, and for a numeric-id model it is a NUMBER (`5` for both `/animals/5` and `/animals/05`) — abofs/stonyx-orm#270. Key lookups on `request.recordId`, never on `params.id`.
 
 ## Implementation Details
@@ -125,7 +125,7 @@ _withHooks(operation, handler) {
     if (operation === 'update' || operation === 'delete') {
       const existingRecord = await store.find(this.model, normalizeRecordId(request.params.id));
       if (existingRecord) {
-        context.oldState = JSON.parse(JSON.stringify(existingRecord));
+        context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
       }
     }
 
@@ -191,9 +191,24 @@ beforeHook('delete', 'animal', (context) => {
 afterHook('update', 'animal', (context) => {
   if (!context.oldState) return;
 
-  // Detect specific field changes
-  if (context.oldState.owner !== context.record.owner) {
-    console.log(`Owner changed from ${context.oldState.owner} to ${context.record.owner}`);
+  // Detect specific attribute changes
+  if (context.oldState.size !== context.record.size) {
+    console.log(`Size changed from ${context.oldState.size} to ${context.record.size}`);
+  }
+});
+
+// `oldState` holds attributes only, and a belongsTo is the related Record, not
+// its id. To detect a relationship change, capture the id before the update.
+beforeHook('update', 'animal', (context) => {
+  context.state.previousOwnerId = store.get('animal', context.request.recordId)?.owner?.id;
+});
+
+afterHook('update', 'animal', (context) => {
+  const previousOwnerId = context.state.previousOwnerId;
+  const ownerId = context.record?.owner?.id;
+
+  if (previousOwnerId !== ownerId) {
+    console.log(`Owner changed from ${previousOwnerId} to ${ownerId}`);
   }
 });
 ```
