@@ -12,5 +12,4 @@
 - [Security](security.md) -- Where authorization happens and what the ORM does not check
 - [Testing](testing.md) -- Suite commands, ports, fixtures, singleton resets
 - [Code Style](code-style.md) -- Source conventions applied in review
-- [Improvements](improvements.md) -- Tracked improvement opportunities
 - [Release](release.md) -- Release process

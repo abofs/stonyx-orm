@@ -19,7 +19,6 @@
 12. [Testing](#testing)
 13. [Deployment & CI/CD](#deployment--cicd)
 14. [Conventions & Standards](#conventions--standards)
-15. [Known Issues & Technical Debt](#known-issues--technical-debt)
 
 ---
 
@@ -185,7 +184,7 @@ stonyx-orm/
 │       ├── db-schema.js             # Test DB schema
 │       ├── constants.js             # Test constants
 │       └── payload.js               # Sample raw + expected data
-├── .claude/                         # Agent entry point + code-style-rules
+├── .claude/                         # Agent entry point (points at docs/index.md)
 ├── .github/workflows/
 │   ├── ci.yml                       # PR CI pipeline
 │   └── publish.yml                  # NPM publish workflow
@@ -272,14 +271,14 @@ Because the prefix is the *mount* rather than the config string:
 - **That normalisation is not total.** `ORM_REST_ROUTE='/api/'` mounts at `/api/` and advertises
   `http://host/api//animals`; `ORM_REST_ROUTE=''` advertises `http://host//animals`. Both are
   live URLs that return 200, because the link mirrors the real mount rather than guessing at a
-  tidier one — but whether a trailing-slash route should be accepted at all is open as
-  abofs/stonyx-orm#261.
+  tidier one. Whether a trailing-slash route should be accepted at all is undecided, and no
+  issue tracks it.
 - **Do not prepend the mount yourself.** The published link already contains it; prepending
   produces `/api/api/animals/1`.
 
 If `request.baseUrl` is absent (programmatic invocation) or does not end in the model segment,
-the prefix falls back to empty and links are origin-only. The second case is a silent fallback
-tracked as abofs/stonyx-orm#260.
+the prefix falls back to empty and links are origin-only. The second case is a silent fallback,
+and no issue tracks it.
 
 **Include parameter** supports comma-separated relationships and dot-notation nesting: `?include=owner.pets,traits`
 
@@ -415,12 +414,3 @@ Published to npm as `@stonyx/orm` with public access and provenance.
 - **ES Modules**: All files use `import`/`export`
 - **License headers**: Apache 2.0 in core source files
 - **Git workflow**: Feature branches → `dev` → `main`
-
-## Known Issues & Technical Debt
-
-See [improvements.md](improvements.md) for detailed findings. Key items:
-
-- `config/environment.js` contains a stray `console.log(MYSQL_HOST)` statement
-- `getOrSet` utility is duplicated across `has-many.js` and `belongs-to.js`
-- `getRelationshipInfo()` is duplicated across `orm-request.js`, `schema-introspector.js`, and `meta-request.js`
-- `getCollectionKeys()` and `getDirPath()` are duplicated between `db.js` and `migrate.js`
