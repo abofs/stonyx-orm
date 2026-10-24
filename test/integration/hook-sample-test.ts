@@ -138,8 +138,10 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
   setupIntegrationTests(hooks);
 
   hooks.before(async function() {
-    createRecord('owner', { name: TARGET_OWNER, sex: 'female', age: 30 });
-    createRecord('animal', { id: TARGET_ID, type: 'dog', details: { age: 1, c: 'small', location: { owner: TARGET_OWNER } } });
+    // Already-serialized shape, so the sample serializer's trait handler does not
+    // add a habitat trait to the shared store (the Db schema test expects none).
+    createRecord('owner', { id: TARGET_OWNER, gender: 'female', age: 30 }, { serialize: false });
+    createRecord('animal', { id: TARGET_ID, type: 'dog', age: 1, size: 'small', owner: TARGET_OWNER }, { serialize: false });
 
     // The samples' ambient context. `store` is the real store behind a recorder,
     // so a sample's lookup returns exactly what the ORM's would.

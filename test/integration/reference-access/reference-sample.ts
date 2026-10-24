@@ -212,8 +212,8 @@ module('[Integration] reference access sample (#265)', function(hooks) {
       // whole collection returns 500.
       const UNOWNED = 99;
 
-      // Raw payload shape (see test/sample/payload.ts) with no `details.location.owner`
-      createRecord('animal', { id: UNOWNED, type: 'dog', details: { age: 1, c: 'small', x: 'black' } });
+      // Already-serialized shape (see `serialized.animals` in test/sample/payload.ts), with no owner
+      createRecord('animal', { id: UNOWNED, type: 1, age: 1, size: 'small' }, { serialize: false });
 
       try {
         assert.notOk(store.get('animal', UNOWNED).owner, `animal ${UNOWNED} has no owner`);
