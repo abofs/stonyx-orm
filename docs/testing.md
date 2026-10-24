@@ -9,9 +9,11 @@ How this repo's test suite is put together, for anyone adding or changing tests.
 | `pnpm test` | Builds, then runs `test/**/*-test.ts` with `NODE_ENV=test`, then `test:mounted` once per `ORM_TEST_ROUTE` value (`/`, `/api`, `api`, `/api/v1`, `/api/`), then `test:readme` and `test:reference` |
 | `pnpm test:readme` | The README access samples, in their own process (`test/integration/readme-access/`) |
 | `pnpm test:reference` | The `test/sample/` access class and record-id resolution (`test/integration/reference-access/`) |
-| `pnpm test:dynamodb` | DynamoDB integration tests (`test/integration/dynamodb/`). Not part of `pnpm test`; needs DynamoDB Local on `http://localhost:8000` |
+| `pnpm test:dynamodb` | DynamoDB integration tests (`test/integration/dynamodb/`) under their own setup; needs DynamoDB Local on `http://localhost:8000` |
 
 `test:mounted`, `test:readme`, `test:reference` and `test:dynamodb` use their own setup files and do **not** run under `NODE_ENV=test`: with it set, the `test/config/environment.ts` overrides are merged into their config and replace the paths their setup sets.
+
+`test/integration/dynamodb/stress-test.ts` also matches the `pnpm test` glob, so its 14 tests run in the main run too, under `test/setup.ts` and `NODE_ENV=test` rather than the DynamoDB setup. With nothing answering on `:8000`, each returns with `assert.expect(0)` and reports `ok` without testing anything, after a health check that retries for several seconds. An `ok` for those tests in `pnpm test` is not DynamoDB coverage; run `pnpm test:dynamodb` against DynamoDB Local for that.
 
 Each REST-serving run binds a port. The defaults are `REST_PORT` 2666 (from `@stonyx/rest-server`, for the main run), `MOUNTED_REST_PORT` 2777, `README_REST_PORT` 2888 and `REFERENCE_REST_PORT` 2999. Set them to free ports when another process already holds one; a run that hits `EADDRINUSE` does not test what it reports.
 
