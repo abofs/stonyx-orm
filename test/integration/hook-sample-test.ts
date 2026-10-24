@@ -83,6 +83,15 @@ const TARGET_OWNER = 'hook-sample-owner';
 const TARGET_URL = `/animals/0${TARGET_ID}`;
 
 /**
+ * An animal with NO owner, for the authorization sample's refusal side
+ * (#256). The sample compares `animal.owner?.id` to `user.id`; when the animal
+ * is unowned and the user has no id, both sides are `undefined` and a sample
+ * that only compares ids lets a non-admin delete it. Requested by the plain
+ * spelling: this case is about the comparison, not the id resolution.
+ */
+const UNOWNED_ID = 4271;
+
+/**
  * A floor on the executed corpus, in the same shape as PROBED_TARGET_COUNTS
  * (test/integration/readme-sample-test.ts) and NUMERIC_CORPUS_FLOOR
  * (test/integration/reference-access/record-id-resolution.ts).
@@ -134,6 +143,15 @@ let executed = [];
 let patchStatus = null;
 let deleteStatus = null;
 
+/** The user the next request runs as; read by the first-registered hook. */
+let currentUser = null;
+
+/** The refusal side of the authorization sample (#256), measured before the allowed DELETE. */
+let deniedStatuses = {};
+
+/** Notifications sent by an attribute-only PATCH on the unowned animal (#256). */
+let unownedPatchNotifications = null;
+
 module('[Docs] executed hook samples (#270)', function(hooks) {
   setupIntegrationTests(hooks);
 
@@ -142,6 +160,7 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
     // add a habitat trait to the shared store (the Db schema test expects none).
     createRecord('owner', { id: TARGET_OWNER, gender: 'female', age: 30 }, { serialize: false });
     createRecord('animal', { id: TARGET_ID, type: 'dog', age: 1, size: 'small', owner: TARGET_OWNER }, { serialize: false });
+    createRecord('animal', { id: UNOWNED_ID, type: 'dog', age: 1, size: 'small' }, { serialize: false });
 
     // The samples' ambient context. `store` is the real store behind a recorder,
     // so a sample's lookup returns exactly what the ORM's would.
@@ -166,12 +185,13 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
     globalThis.afterHook = afterHook;
 
     // Registered FIRST so it runs before every sample hook: two samples read
-    // `context.state.currentUser`. The record's OWNER, not an admin (#256): the
-    // authorization sample lets an owner delete their own animal, so a correct
-    // sample does not halt the request and every later sample still runs, while
-    // a sample that compares the owner Record to the id refuses it with 403.
+    // `context.state.currentUser`. For the observed DELETE it is the record's
+    // OWNER, not an admin (#256): the authorization sample lets an owner delete
+    // their own animal, so a correct sample does not halt the request and every
+    // later sample still runs, while a sample that compares the owner Record to
+    // the id refuses it with 403. The refusal cases run first, as other users.
     beforeHook('delete', 'animal', context => {
-      context.state.currentUser = { id: TARGET_OWNER, isAdmin: false };
+      context.state.currentUser = currentUser;
     });
 
     await rm(GENERATED_DIR, { recursive: true, force: true });
@@ -196,6 +216,35 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
       }
     }
 
+    const url = path => `http://localhost:${config.restServer.port}${path}`;
+
+    // An attribute-only update on the UNOWNED animal (#256): no owner before,
+    // none after, so the adoption samples must stay silent. Both sides of their
+    // comparison are `undefined` here, and equal is the right answer.
+    const unownedPatch = await fetch(url(`/animals/${UNOWNED_ID}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { type: 'animal', attributes: { age: 2 } } }),
+    });
+    unownedPatchNotifications = { status: unownedPatch.status, sent: [...observedNotifications] };
+
+    // The refusal side of the authorization sample (#256), before anything is
+    // observed. Each must be refused; a sample that lets either through deletes
+    // the record, and the allowed DELETE below then has nothing to delete.
+    currentUser = { id: 'hook-sample-stranger', isAdmin: false };
+    deniedStatuses.nonOwner = (await fetch(url(TARGET_URL), { method: 'DELETE' })).status;
+
+    currentUser = { isAdmin: false };
+    deniedStatuses.idlessOnUnowned = (await fetch(url(`/animals/${UNOWNED_ID}`), { method: 'DELETE' })).status;
+
+    // Everything above was about a different record or a refused request; the
+    // observation tests below are about the target's PATCH and DELETE only.
+    observedLookups.length = 0;
+    observedCacheKeys.length = 0;
+    observedAuditEntries.length = 0;
+    observedNotifications.length = 0;
+    currentUser = { id: TARGET_OWNER, isAdmin: false };
+
     // An attribute-only update first (#256): enters the samples' update hooks.
     // The owner does not change, so a sample that detects an owner change must
     // stay silent here.
@@ -213,6 +262,7 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
   hooks.after(function() {
     clearAllHooks();
     store.remove('owner', TARGET_OWNER);
+    if (store.get('animal', UNOWNED_ID)) store.remove('animal', UNOWNED_ID);
     delete globalThis.store;
     delete globalThis.cache;
     delete globalThis.auditLog;
@@ -286,6 +336,7 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
       );
     }
   });
+
   test('the authorization sample lets the owner delete their own animal (#256)', function(assert) {
     // The request runs as TARGET_OWNER, not an admin. The sample compares the
     // record's owner to the user's id; a sample that compares the owner Record
@@ -295,6 +346,36 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
       204,
       `DELETE ${TARGET_URL} as its owner "${TARGET_OWNER}" (not an admin) -> ${deleteStatus}; ` +
       '403 means a documented authorization sample compared the owner Record to the user id instead of `owner.id`'
+    );
+  });
+
+  test('the authorization sample refuses a non-owner, and an id-less user on an unowned animal (#256)', function(assert) {
+    // The inverse of the test above. Without it, an authorization sample with
+    // its check removed (`if (false)`) passes this whole file.
+    assert.strictEqual(
+      deniedStatuses.nonOwner,
+      403,
+      `DELETE ${TARGET_URL} as a non-owner, non-admin -> ${deniedStatuses.nonOwner}; a documented authorization sample let it through`
+    );
+
+    // `animal.owner?.id !== user.id` is `undefined !== undefined` here: false,
+    // so a sample that only compares ids deletes the animal.
+    assert.strictEqual(
+      deniedStatuses.idlessOnUnowned,
+      403,
+      `DELETE /animals/${UNOWNED_ID} (no owner) as a non-admin with no id -> ${deniedStatuses.idlessOnUnowned}; ` +
+      'a documented authorization sample treated "no owner" and "no user id" as a match'
+    );
+  });
+
+  test('no adoption notification on an update to an unowned animal (#256)', function(assert) {
+    // No owner before and none after: both sides of the adoption samples'
+    // comparison are `undefined`, and "unchanged" is the correct reading.
+    assert.strictEqual(unownedPatchNotifications.status, 200, `PATCH /animals/${UNOWNED_ID} -> ${unownedPatchNotifications.status}`);
+    assert.deepEqual(
+      unownedPatchNotifications.sent,
+      [],
+      `an attribute-only update to an unowned animal sent ${unownedPatchNotifications.sent.length} notification(s): ${JSON.stringify(unownedPatchNotifications.sent)}`
     );
   });
 

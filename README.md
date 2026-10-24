@@ -821,8 +821,10 @@ beforeHook('delete', 'animal', (context) => {
   const user = context.state.currentUser;
   const animal = store.get('animal', context.request.recordId);
 
-  // `animal.owner` is the related Record, so compare its id
-  if (animal.owner?.id !== user.id && !user.isAdmin) {
+  // `animal.owner` is the related Record, so compare its id. Refuse an unowned
+  // animal outright: `animal.owner?.id !== user.id` lets a user with no id
+  // delete it, because `undefined !== undefined` is false
+  if (!user.isAdmin && (!animal.owner || animal.owner.id !== user.id)) {
     return 403; // Forbidden
   }
 });
