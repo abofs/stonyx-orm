@@ -306,7 +306,7 @@ Auto-save modes: `'true'` (cron interval), `'false'` (disabled), `'onUpdate'` (a
 
 ### MySQL Persistence
 
-Enabled when `MYSQL_HOST` env var is set. Uses mysql2 connection pool. On init, loads all records from MySQL into the in-memory store. CRUD operations persist to MySQL after in-memory mutation. Supports:
+Enabled when `MYSQL_HOST` env var is set. Uses mysql2 connection pool. On init, loads into the in-memory store only the records of models declared `static memory = true`; every other model (`memory` defaults to `false`) is read from MySQL on demand by `store.find()` / `store.findAll()`, and `store.get()` does not see it. A record read that way resolves a `belongsTo` only when the related record is in memory (see [internals.md](./internals.md#store-reads-and-the-memory-flag)). CRUD operations persist to MySQL after in-memory mutation. Supports:
 - Schema introspection from model definitions
 - Migration generation via schema diffs (`.snapshot.json`)
 - Migration apply/rollback with transactions

@@ -9,7 +9,7 @@ A lightweight ORM for Stonyx projects, featuring model definitions, serializers,
 
 ## Highlights
 
-- **Automatic Loading**: Models, serializers, transforms, and access classes are auto-registered from their configured directories. Models, serializers, transforms and views are also loaded from subdirectories and named after their path (`models/admin/user-role.ts` registers `admin/user-role`); access classes are loaded only from the top level of `paths.access`, and one in a subdirectory is silently never loaded.
+- **Automatic Loading**: Models, serializers, transforms, views and access classes are auto-registered from their configured directories. Models, serializers, transforms and views are also loaded from subdirectories and named after their path (`models/admin/user-role.ts` registers `admin/user-role`); access classes are loaded only from the top level of `paths.access`, and one in a subdirectory is silently never loaded.
 - **Models**: Define attributes with type-safe proxies (`attr`) and relationships (`hasMany`, `belongsTo`).
 - **Serializers**: Map raw data into model-friendly structures, including nested properties.
 - **Transforms**: Apply custom transformations on data values automatically.
@@ -313,7 +313,7 @@ In directory mode, each collection is stored as `{directory}/{collection}.json` 
 
 ### MySQL Mode
 
-Set the `MYSQL_HOST` environment variable to enable MySQL persistence. The ORM loads all records into memory on startup and persists CRUD operations to MySQL automatically. Supports schema-aware migration generation, apply, rollback, and drift detection.
+Set the `MYSQL_HOST` environment variable to enable MySQL persistence. At startup the ORM loads into memory only the records of models declared `static memory = true`; every other model (the default is `memory = false`) is read from MySQL on demand by `store.find()` / `store.findAll()`, and the synchronous `store.get()` does not see it (see [docs/internals.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/internals.md#store-reads-and-the-memory-flag)). A record read that way resolves a `belongsTo` only when the related record is already in memory; otherwise the relationship is `null`. CRUD operations are persisted to MySQL automatically. Supports schema-aware migration generation, apply, rollback, and drift detection.
 
 | Command | Description |
 |---------|-------------|
@@ -441,6 +441,11 @@ still the mount rather than the model. Deriving a model from it means every
 unrecognised spelling falls through to whatever your method returns next, so
 prefer one class per model. A class may still list several models in `models`
 when they share one rule.
+
+`access()` covers a model's own routes only: records of that model served
+through another model's `?include=`, `/:id/<relationship>` or
+`/:id/relationships/<relationship>` routes are never
+checked against it. See [docs/security.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/security.md).
 
 **Numeric ids: authorize on `request.recordId`, not on `request.params.id`.**
 `params.id` is raw text from the client. When it looks numeric the ORM coerces
@@ -639,6 +644,7 @@ GET /animals/1
 #### Limitations
 
 - Only available on GET endpoints (not POST/PATCH)
+- Included records are authorized only by the requested model's `access()`, not by their own model's, and `include` has no built-in cap on depth or on the number of paths; a long `include` blocks the server while it is walked. [docs/security.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/security.md) has the measurements and an `access()` check that caps both.
 
 ## Lifecycle Hooks
 
@@ -737,8 +743,11 @@ beforeHook('create', 'animal', (context) => {
 // resolved the record by. `context.params.id` is the raw client text and is a
 // different value for every alias of the same id, so a lookup keyed on it
 // finds nothing on a numeric-id model (abofs/stonyx-orm#270).
-beforeHook('delete', 'animal', (context) => {
-  const animal = store.get('animal', context.request.recordId);
+// `store.find` rather than `store.get`: on MySQL/PostgreSQL a model without
+// `static memory = true` is not in memory, and `get` returns undefined.
+// Before hooks are awaited, so an async hook works here.
+beforeHook('delete', 'animal', async (context) => {
+  const animal = await store.find('animal', context.request.recordId);
   if (animal.protected) {
     return { errors: [{ detail: 'Cannot delete protected animals' }] };
   }
@@ -769,8 +778,9 @@ beforeHook('create', 'owner', (context) => {
 // Send notification after animal is adopted.
 // `oldState` holds attributes only, and a belongsTo is the related Record, not
 // its id: capture the previous owner's id before the update, compare ids after.
-beforeHook('update', 'animal', (context) => {
-  context.state.previousOwnerId = store.get('animal', context.request.recordId)?.owner?.id;
+// On SQL the owner resolves only when it is in memory (see MySQL Mode).
+beforeHook('update', 'animal', async (context) => {
+  context.state.previousOwnerId = (await store.find('animal', context.request.recordId))?.owner?.id;
 });
 
 afterHook('update', 'animal', async (context) => {
@@ -839,10 +849,13 @@ afterHook('delete', 'animal', async (context) => {
 // same value `access()` is handed. Authorizing on `context.params.id` instead
 // looks up the raw client text: on a numeric-id model that lookup returns
 // `undefined` for EVERY spelling, `animal.owner` throws, and the check never
-// runs. Measured; abofs/stonyx-orm#270.
-beforeHook('delete', 'animal', (context) => {
+// runs. Measured; abofs/stonyx-orm#270. `store.find`, not `store.get`: on SQL a
+// model without `static memory = true` is not in memory. On SQL `animal.owner`
+// resolves only when the owner is in memory too, and is `null` otherwise, so this
+// check then refuses the owner as well (see MySQL Mode).
+beforeHook('delete', 'animal', async (context) => {
   const user = context.state.currentUser;
-  const animal = store.get('animal', context.request.recordId);
+  const animal = await store.find('animal', context.request.recordId);
 
   // `animal.owner` is the related Record, so compare its id. Refuse an unowned
   // animal outright: `animal.owner?.id !== user.id` lets a user with no id
