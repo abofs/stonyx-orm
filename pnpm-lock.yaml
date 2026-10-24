@@ -20,8 +20,8 @@ importers:
         specifier: ^3.0.0
         version: 3.1046.0(@aws-sdk/client-dynamodb@3.1046.0)
       '@stonyx/cron':
-        specifier: 0.2.1-beta.165
-        version: 0.2.1-beta.165
+        specifier: 0.2.1-beta.166
+        version: 0.2.1-beta.166
       '@stonyx/events':
         specifier: 0.1.1-beta.72
         version: 0.1.1-beta.72
@@ -408,8 +408,8 @@ packages:
     resolution: {integrity: sha512-R8Rdn8Hy72KKcebgLiv8jQcQkXoLMOGGv5uI1/k0l+snqkOzQ1R0ChUBCxWMlBsFMekWjq0wRudIweFs7sKT5A==}
     engines: {node: '>=14.0.0'}
 
-  '@stonyx/cron@0.2.1-beta.165':
-    resolution: {integrity: sha512-lo0teqoyU2Oitujil2wdtt+GDczXVy8frCBE+JkdWMDAprJaXLMP2pU3tIWHIkDsND0V6VHv0PX/s8Qhqvgbzg==}
+  '@stonyx/cron@0.2.1-beta.166':
+    resolution: {integrity: sha512-sUoaJqoEcea/3OP1JfuUrnlDC+/FIclKg1s5sJAUoLD6LC/RnAlWjrBihTbt3DOxzwzLp8DtQRZ3os6nccaS9g==}
 
   '@stonyx/events@0.1.1-beta.72':
     resolution: {integrity: sha512-JMb6gmGtAnAqMpq9ASGBKMkUhvvwzCQd+S5KZ5p/wL/1hTncpq6EOcIIMukl872V9VXgg8hvc+XS9pnMhsDOUg==}
@@ -1376,7 +1376,7 @@ snapshots:
       '@smithy/util-buffer-from': 2.2.0
       tslib: 2.8.1
 
-  '@stonyx/cron@0.2.1-beta.165':
+  '@stonyx/cron@0.2.1-beta.166':
     dependencies:
       stonyx: 0.2.3-beta.61
 
