@@ -38,6 +38,4 @@ export async function getPool({ host, port, user, password, database, connection
 }
 ```
 
-Current state of the source: `getPool` in `src/postgres/connection.ts` follows this rule. `getPool` in `src/mysql/connection.ts` is still written the "avoid" way shown above.
-
-A candidate lint rule, if one is added later, is ESLint's `prefer-destructuring` configured for function parameters.
+Current state of the source: `getPool` in `src/postgres/connection.ts` destructures in the body, which avoids the dot reads but is not the signature form. `getPool` in `src/mysql/connection.ts` is still written the "avoid" way shown above.
