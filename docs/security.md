@@ -4,11 +4,25 @@ What an app that exposes the ORM's REST routes needs to know about where authori
 
 ## Authorization
 
-- **Access classes are the only authorization gate on generated routes.** `access(request)` receives the Express request with `request.recordId` attached, and returns `false` (403), an operations array, or a filter function. A filter function is an unconditional allow for every method on that collection, including `POST`; the operations list is consulted only when an array is returned (README, REST Server Integration).
+- **Access classes are the only authorization gate on generated routes.** `access(request)` receives the raw Express request with `request.recordId` attached, so headers, cookies, tokens and query values read there are client input and are validated defensively. It returns `false` (403), an operations array, or a filter function. A filter function is an unconditional allow for every method on that collection, including `POST`; the operations list is consulted only when an array is returned (README, REST Server Integration).
 - **Authorize on `request.recordId`, never on a URL property or on raw `request.params.id`.** The README explains why and documents [`normalizeRecordId`](../README.md#normalizerecordidid) for code that `access()` does not reach.
 - **Before hooks are a second gate, not a replacement.** A `beforeHook` that returns any value other than `undefined` halts the operation and that value becomes the response (`src/orm-request.ts`, `_withHooks`). Hooks run after `access()` has already allowed the request.
-- **`included` records are not checked against their own model's `access()`.** `?include=` walks the relationships of the records in `data` and adds every related record it reaches (`collectIncludedRecords` in `src/orm-request.ts`); no access class is consulted for the related model. An access rule that hides a record from its own collection route does not hide it from another model's `?include=`.
-- **`?include=` has no depth or size cap.** The parameter is split on `,` and `.` with no limit on the number of paths or segments (`parseInclude` in `src/orm-request.ts`). Each segment walks one relationship level, and records are deduplicated by type and id, so a circular path such as `owner.pets.owner` ends when the path ends. The size of the response is bounded only by the data.
+- **Related records are authorized only by the source model's `access()`.** Three routes serve records of another model: `?include=` adds every related record it reaches from the records in `data` (`collectIncludedRecords` in `src/orm-request.ts`), and `/:id/<relationship>` and `/:id/relationships/<relationship>` return the related records and their linkage (`_generateRelationshipRoutes`). None of them consults the related model's access class. An access rule that hides a record from its own routes, even one that returns `false`, does not hide it from another model's `?include=` or relationship routes. Capping or refusing `include` does not close the two relationship routes.
+- **`?include=` has no depth or size cap, and its cost grows with the path length.** The parameter is split on `,` and `.` with no limit on the number of paths or segments (`parseInclude`). The response is deduplicated by type and id, but the traversal is not: at each level every related record is walked again, including ones already seen (`traverseIncludePath`). The work is roughly the relationship fan-out raised to the number of segments, while the response stays the same size. The traversal is synchronous, so it blocks every other request. Measured with one owner holding 208 animals: `GET /owners/<id>?include=pets.owner.pets.owner` took 14 ms, `…pets.owner.pets.owner.pets` 1.1 s, `…pets.owner.pets.owner.pets.owner` 2.7 s, and a 7-segment path had not returned after 70 s. The three that returned were all 127 KB.
+- **Cap `include` in `access()`.** `access()` runs before the handler on every route that honours `include`, so it can refuse deep paths. Put the check in each access class whose models have relationships. With this check the 7-segment path above returns 403 in 2-20 ms and `?include=pets.owner` is still served:
+
+  ```js
+  access(request) {
+    const { include } = request.query;
+    const maxSegments = 2;
+
+    // A repeated parameter (?include=a&include=b) arrives as an array and is refused too
+    if (include !== undefined && (typeof include !== 'string'
+      || include.split(',').some(path => path.split('.').length > maxSegments))) return false;
+
+    // ...the rest of the access rules
+  }
+  ```
 
 ## Request input
 
