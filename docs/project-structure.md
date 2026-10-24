@@ -285,7 +285,7 @@ tracked as abofs/stonyx-orm#260.
 
 **Fields parameter** supports sparse fieldsets: `?fields[animals]=age,size`
 
-**Filter parameter** supports dot-path filtering: `?filter[owner]=angela`
+**Filter parameter** supports dot-path filtering: `?filter[owner.id]=angela` (a belongsTo is the related record, so filter on its `id`)
 
 ## Database & Models
 

@@ -670,7 +670,7 @@ Each hook receives a context object with comprehensive information:
 - It contains a deep copy of the record's state **before** the operation executes (captured before the `before` hook fires)
 - The deep copy is created via JSON serialization (`JSON.parse(JSON.stringify())`) to ensure complete isolation
 - For `delete` operations, `recordId` is provided in after hooks since the record may no longer exist in the store
-- `oldState` is captured as a deep copy of the record's data before the operation, providing access to the previous field values
+- `oldState` is captured as a deep copy of the record's data before the operation, providing access to the previous attribute values. Relationships are not in it: to detect a relationship change, capture the related id in a `before` hook (see Side Effects below)
 - `params.id` is the raw client text as a STRING (`/animals/05` gives `{ id: '05' }`). The id the ORM resolved the record by is `request.recordId`, and for a numeric-id model it is a NUMBER (`5` for both `/animals/5` and `/animals/05`) — abofs/stonyx-orm#270. Key lookups on `request.recordId`, never on `params.id`.
 
 ### Usage Examples
@@ -743,15 +743,23 @@ beforeHook('create', 'owner', (context) => {
 #### Side Effects
 
 ```javascript
-// Send notification after animal is adopted (using oldState to detect changes)
+// Send notification after animal is adopted.
+// `oldState` holds attributes only, and a belongsTo is the related Record, not
+// its id: capture the previous owner's id before the update, compare ids after.
+beforeHook('update', 'animal', (context) => {
+  context.state.previousOwnerId = store.get('animal', context.request.recordId)?.owner?.id;
+});
+
 afterHook('update', 'animal', async (context) => {
-  // Use oldState to compare before/after values
-  if (context.oldState && context.oldState.owner !== context.record.owner) {
+  const previousOwner = context.state.previousOwnerId;
+  const newOwner = context.record?.owner?.id;
+
+  if (previousOwner !== newOwner) {
     await sendNotification({
       type: 'adoption',
       animalId: context.record.id,
-      previousOwner: context.oldState.owner,
-      newOwner: context.record.owner
+      previousOwner,
+      newOwner
     });
   }
 });
@@ -813,7 +821,8 @@ beforeHook('delete', 'animal', (context) => {
   const user = context.state.currentUser;
   const animal = store.get('animal', context.request.recordId);
 
-  if (animal.owner !== user.id && !user.isAdmin) {
+  // `animal.owner` is the related Record, so compare its id
+  if (animal.owner?.id !== user.id && !user.isAdmin) {
     return 403; // Forbidden
   }
 });
@@ -925,7 +934,8 @@ beforeHook('update', 'animal', (context) => {
 ```javascript
 // Update owner's pet count when animal is created
 afterHook('create', 'animal', async (context) => {
-  const owner = store.get('owner', context.record.owner);
+  // A belongsTo is already the related Record; no store lookup needed
+  const { owner } = context.record;
   if (owner) {
     owner.petCount = (owner.petCount || 0) + 1;
   }
