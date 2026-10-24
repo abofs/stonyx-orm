@@ -125,7 +125,7 @@ _withHooks(operation, handler) {
     if (operation === 'update' || operation === 'delete') {
       const existingRecord = await store.find(this.model, normalizeRecordId(request.params.id));
       if (existingRecord) {
-        context.oldState = JSON.parse(JSON.stringify(existingRecord));
+        context.oldState = JSON.parse(JSON.stringify(existingRecord.__data || existingRecord));
       }
     }
 

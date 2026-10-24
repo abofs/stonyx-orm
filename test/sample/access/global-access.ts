@@ -30,7 +30,11 @@ export default class GlobalAccess {
       // Returning false explicitly denies access
       if (isRecord && recordId === 'angela') return false;
 
-      // Intentional Gap: This logic does not block access to angela's animals if called individually by id
+      // Intentional Gap: this denies only /owners/angela and filters angela out of
+      // /owners. Her data is still served on related routes: her animals by id
+      // (/animals/1), her full owner record via an animal (/animals/1/owner), its
+      // linkage (/animals/1/relationships/owner), and her pets (/owners/angela/pets).
+      // A per-route deny is not a record boundary.
 
       // Returning a function will plug it in to response object as a filter
       if (isCollection) return record => record.id !== 'angela';
