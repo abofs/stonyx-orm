@@ -64,6 +64,16 @@ const GENERATED_DIR = './test/integration/generated-hooks';
 const TARGET_ID = 4270;
 
 /**
+ * The target's owner, and the user the request runs as — abofs/stonyx-orm#256.
+ *
+ * A belongsTo on a record is the related Record, not its id. The README's
+ * authorization sample compares the owner to `user.id`; running as the owner
+ * (not an admin) is what makes that comparison decide the outcome. Compared as
+ * a Record it never equals the id, and the owner's own DELETE is refused.
+ */
+const TARGET_OWNER = 'hook-sample-owner';
+
+/**
  * The request target. A LEADING-ZERO ALIAS, not the plain spelling — that is
  * the whole point of #270. `/animals/04270` and `/animals/4270` are one record
  * and two strings, so `params.id` and `recordId` differ here and an assertion
@@ -79,13 +89,14 @@ const TARGET_URL = `/animals/0${TARGET_ID}`;
  *
  * Every assertion below is driven by whatever the extractor returned, so a
  * sample that stops being extracted takes its own coverage with it silently.
- * Measured at this head: README.md yields 4 and docs/hooks.md yields 2.
+ * Measured at this head: README.md yields 4 and docs/hooks.md yields 3 (the
+ * relationship change-detection sample, #256, made it 3).
  *
  * A floor, not an equality — adding a documented sample should not need this
  * line touched. Removing one should. Lower it in the same commit and the diff
  * says what was given up.
  */
-const EXECUTED_HOOK_SAMPLE_FLOOR = { 'README.md': 4, 'docs/hooks.md': 2 };
+const EXECUTED_HOOK_SAMPLE_FLOOR = { 'README.md': 4, 'docs/hooks.md': 3 };
 
 /**
  * A floor on the OBSERVATIONS, not just on the number of samples executed.
@@ -99,8 +110,13 @@ const EXECUTED_HOOK_SAMPLE_FLOOR = { 'README.md': 4, 'docs/hooks.md': 2 };
  * Measured at this head: 6 executed samples produce 3 store lookups, 1 cache key
  * and 2 audit entries — 6 observations, one per sample, so every executed sample
  * is entered. These numbers are that fact, pinned.
+ *
+ * #256 added a PATCH before the DELETE, because two samples now capture the
+ * previous owner id in a `beforeHook('update', …)`. Measured after that change:
+ * 7 executed samples, 5 lookups (+2 update captures), 1 cache key, 3 audit
+ * entries (+1 update audit).
  */
-const OBSERVATION_FLOOR = { lookups: 3, cacheKeys: 1, auditEntries: 2 };
+const OBSERVATION_FLOOR = { lookups: 5, cacheKeys: 1, auditEntries: 3 };
 
 /** Every `store.get(model, id)` the executed samples made. */
 const observedLookups = [];
@@ -111,14 +127,19 @@ const observedCacheKeys = [];
 /** Every audit entry an executed sample wrote. */
 const observedAuditEntries = [];
 
+/** Every notification an executed sample sent. */
+const observedNotifications = [];
+
 let executed = [];
+let patchStatus = null;
 let deleteStatus = null;
 
 module('[Docs] executed hook samples (#270)', function(hooks) {
   setupIntegrationTests(hooks);
 
   hooks.before(async function() {
-    createRecord('animal', { id: TARGET_ID, type: 'dog', age: 1, size: 'small' });
+    createRecord('owner', { name: TARGET_OWNER, sex: 'female', age: 30 });
+    createRecord('animal', { id: TARGET_ID, type: 'dog', details: { age: 1, c: 'small', location: { owner: TARGET_OWNER } } });
 
     // The samples' ambient context. `store` is the real store behind a recorder,
     // so a sample's lookup returns exactly what the ORM's would.
@@ -138,15 +159,17 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
     });
     globalThis.cache = { invalidate: async key => { observedCacheKeys.push(key); } };
     globalThis.auditLog = { create: async entry => { observedAuditEntries.push(entry); } };
-    globalThis.sendNotification = async () => {};
+    globalThis.sendNotification = async notification => { observedNotifications.push(notification); };
     globalThis.beforeHook = beforeHook;
     globalThis.afterHook = afterHook;
 
     // Registered FIRST so it runs before every sample hook: two samples read
-    // `context.state.currentUser`. An admin, so neither sample halts the
-    // request and every later sample still runs.
+    // `context.state.currentUser`. The record's OWNER, not an admin (#256): the
+    // authorization sample lets an owner delete their own animal, so a correct
+    // sample does not halt the request and every later sample still runs, while
+    // a sample that compares the owner Record to the id refuses it with 403.
     beforeHook('delete', 'animal', context => {
-      context.state.currentUser = { id: 'harness-admin', isAdmin: true };
+      context.state.currentUser = { id: TARGET_OWNER, isAdmin: false };
     });
 
     await rm(GENERATED_DIR, { recursive: true, force: true });
@@ -171,12 +194,23 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
       }
     }
 
+    // An attribute-only update first (#256): enters the samples' update hooks.
+    // The owner does not change, so a sample that detects an owner change must
+    // stay silent here.
+    const patch = await fetch(`http://localhost:${config.restServer.port}${TARGET_URL}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { type: 'animal', attributes: { age: 2 } } }),
+    });
+    patchStatus = patch.status;
+
     const response = await fetch(`http://localhost:${config.restServer.port}${TARGET_URL}`, { method: 'DELETE' });
     deleteStatus = response.status;
   });
 
   hooks.after(function() {
     clearAllHooks();
+    store.remove('owner', TARGET_OWNER);
     delete globalThis.store;
     delete globalThis.cache;
     delete globalThis.auditLog;
@@ -200,6 +234,7 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
     // request that never happened and hooks that never ran — which is exactly
     // the failure mode this file exists to end. Floors rather than `> 0`,
     // because `> 0` is met by one sample carrying five silent ones.
+    assert.strictEqual(patchStatus, 200, `PATCH ${TARGET_URL} -> ${patchStatus} (200 means the update hook chain completed)`);
     assert.strictEqual(deleteStatus, 204, `DELETE ${TARGET_URL} -> ${deleteStatus} (204 means the request reached the ORM and the hook chain completed)`);
 
     for (const [what, floor] of Object.entries(OBSERVATION_FLOOR)) {
@@ -248,5 +283,28 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
         `a documented sample audited recordId ${JSON.stringify(entry.recordId)} (${typeof entry.recordId}); the ORM resolved ${TARGET_ID}`
       );
     }
+  });
+  test('the authorization sample lets the owner delete their own animal (#256)', function(assert) {
+    // The request runs as TARGET_OWNER, not an admin. The sample compares the
+    // record's owner to the user's id; a sample that compares the owner Record
+    // itself never matches and returns 403 here.
+    assert.strictEqual(
+      deleteStatus,
+      204,
+      `DELETE ${TARGET_URL} as its owner "${TARGET_OWNER}" (not an admin) -> ${deleteStatus}; ` +
+      '403 means a documented authorization sample compared the owner Record to the user id instead of `owner.id`'
+    );
+  });
+
+  test('no adoption notification on an update that does not change the owner (#256)', function(assert) {
+    // `oldState` holds attributes only, so `oldState.owner` is undefined and a
+    // sample that compares it to `record.owner` (a Record) notifies on EVERY
+    // update. This PATCH changes only `age`.
+    assert.strictEqual(patchStatus, 200, `PATCH ${TARGET_URL} -> ${patchStatus}`);
+    assert.deepEqual(
+      observedNotifications,
+      [],
+      `an attribute-only update sent ${observedNotifications.length} notification(s): ${JSON.stringify(observedNotifications)}`
+    );
   });
 });
