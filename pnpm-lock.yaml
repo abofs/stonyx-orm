@@ -23,8 +23,8 @@ importers:
         specifier: 0.2.1-beta.149
         version: 0.2.1-beta.149
       '@stonyx/events':
-        specifier: 0.1.1-beta.67
-        version: 0.1.1-beta.67
+        specifier: 0.1.1-beta.68
+        version: 0.1.1-beta.68
       '@stonyx/utils':
         specifier: 0.2.3-beta.25
         version: 0.2.3-beta.25
@@ -411,8 +411,8 @@ packages:
   '@stonyx/cron@0.2.1-beta.149':
     resolution: {integrity: sha512-nH/9ZjF1YTbn+uEySRh+G/Pmh7kHC8uBB+qZJ9fQiqteBG/TgRqAt+xWj8gPs/DbyRQxR/dBpWwMxYLQCqf7QA==}
 
-  '@stonyx/events@0.1.1-beta.67':
-    resolution: {integrity: sha512-xDPAJC8RuP0DUIVQxDLpRy2lxuvsQyfuMQ05U+a0qWPB++g9xoeOgor8LqTln6QvDGwxbN2ahbHVY7LIYm1+8Q==}
+  '@stonyx/events@0.1.1-beta.68':
+    resolution: {integrity: sha512-4sk4/lThqUO0ogETvcCtf5h4GpEFSCZN00XUnop+OQbJFfBSF9MVAebBsJ87Lp/U8e7F1q0p9Z67eBJ73Q5jlg==}
 
   '@stonyx/logs@1.0.1-beta.16':
     resolution: {integrity: sha512-6UccOlU3hnVDKSruFZ/uGXBjK/i8USNjjc7me3ooUxSVbSn+tWhdgkWH/CWDymmvOz+A/FBdDD3dPr1nchbZqQ==}
@@ -1353,7 +1353,7 @@ snapshots:
     dependencies:
       stonyx: 0.2.3-beta.61
 
-  '@stonyx/events@0.1.1-beta.67': {}
+  '@stonyx/events@0.1.1-beta.68': {}
 
   '@stonyx/logs@1.0.1-beta.16':
     dependencies:
