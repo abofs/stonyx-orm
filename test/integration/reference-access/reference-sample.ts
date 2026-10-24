@@ -204,6 +204,11 @@ module('[Integration] reference access sample (#265)', function(hooks) {
   });
 
 
+  module('#256 — the animal collection filter compares the owner id', function() {
+    test.skip('TODO: every spelling of GET /animals serves exactly the 12 non-angela animals', function() {});
+    test.skip('TODO: an unowned animal is served, and GET /animals stays 200', function() {});
+  });
+
   // ==========================================================================
   // AC-3, as an OUTCOME. The string-id model was never "safe by design" — it
   // was safe by the coincidence that getId() did not touch string ids, and one
