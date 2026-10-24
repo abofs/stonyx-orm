@@ -46,6 +46,21 @@ not put them on disk, and none of them is loaded unless your configuration asks
 for it. Add only the ones you actually use — see
 [Optional peer dependencies](#optional-peer-dependencies).
 
+## Exports
+
+| Import path | What it exports |
+| :--- | :--- |
+| `@stonyx/orm` | `Orm` (default), `store`, `relationships`, the base classes `Model`, `View`, `Serializer`, the aggregate helpers `count`, `avg`, `sum`, `min`, `max` (see [docs/views.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/views.md)), the helpers listed in [Exported Helpers](#exported-helpers), and the types `OrmAccessRequest` and `PersistErrorDetail` |
+| `@stonyx/orm/db` | the live DB instance (default), `data` (its record) and `saveDB()`. It reads `Orm.db` when it is imported, so import it only after the ORM has initialized |
+| `@stonyx/orm/standalone-db` | `StandaloneDB` (default): reads and writes the JSON db files directly, without booting Stonyx or the ORM |
+| `@stonyx/orm/migrate` | `fileToDirectory()`, `directoryToFile()`: convert the JSON db between file and directory mode |
+| `@stonyx/orm/commands` | the `db:*` command map (default) that the Stonyx CLI loads; see [Database (DB) Integration](#database-db-integration) |
+| `@stonyx/orm/hooks` | `beforeHook`, `afterHook`, `clearHook`, `clearAllHooks`, `getBeforeHooks`, `getAfterHooks`, and the `HookContext` type |
+
+## Samples
+
+[`test/sample/`](https://github.com/abofs/stonyx-orm/tree/dev/test/sample) is the canonical usage reference: models, serializers, transforms, views and an access class that the test suite loads as a running app, so they stay correct. It is not included in the npm package.
+
 ## Usage example
 
 This module is part of the **Stonyx framework**. To use it, first configure the `restServer` key in your `environment.js` file:
@@ -355,12 +370,20 @@ MySQL integration tests run automatically when MySQL is available. In CI (where 
 
 ## REST Server Integration
 
-The ORM can automatically register REST routes using your access classes.
+The ORM registers REST routes for the models your access classes name. It does this itself during initialization when `restServer.enabled` is `'true'`; there is no setup function to import or call. Configure it in `config/environment.js`:
 
 ```js
-import setupRestServer from '@stonyx/orm/setup-rest-server';
-
-await setupRestServer('/', './access');
+export default {
+  orm: {
+    paths: {
+      access: './access' // directory of access classes
+    },
+    restServer: {
+      enabled: 'true', // requires @stonyx/rest-server, see Optional peer dependencies
+      route: '/'       // mount prefix for the generated routes
+    }
+  }
+};
 ```
 
 Access classes define models and provide custom filtering/authorization logic:
