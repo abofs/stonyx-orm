@@ -325,7 +325,7 @@ Set the `MYSQL_HOST` environment variable to enable MySQL persistence. At startu
 
 ### DynamoDB Mode
 
-Set the `DYNAMODB_REGION` environment variable to enable DynamoDB persistence. Tables are created with PAY_PER_REQUEST (on-demand) billing. Global Secondary Indexes (GSIs) are auto-provisioned at startup based on model `belongsTo` relationships — each FK column gets a GSI. `findAll()` with conditions routes to a GSI Query when the condition key matches a GSI partition key; non-indexed attribute conditions fall back to Scan + FilterExpression (expensive for large tables). ULID generation replaces auto-increment for numeric-ID models.
+Set the `DYNAMODB_REGION` environment variable to enable DynamoDB persistence. Tables are created with PAY_PER_REQUEST (on-demand) billing. Global Secondary Indexes (GSIs) are auto-provisioned at startup based on model `belongsTo` relationships — each FK column gets a GSI. `findAll()` with conditions routes to a GSI Query when the condition key matches a GSI partition key; non-indexed attribute conditions fall back to Scan + FilterExpression (expensive for large tables). ULID generation replaces auto-increment for numeric-ID models. The `memory` flag works as in [MySQL Mode](#mysql-mode): only `static memory = true` models are loaded at startup, every other model is read on demand by `store.find()` / `store.findAll()` and is not seen by `store.get()`, and a record read that way resolves a `belongsTo` only when the related record is already in memory.
 
 ```javascript
 dynamodb: {
@@ -743,8 +743,9 @@ beforeHook('create', 'animal', (context) => {
 // resolved the record by. `context.params.id` is the raw client text and is a
 // different value for every alias of the same id, so a lookup keyed on it
 // finds nothing on a numeric-id model (abofs/stonyx-orm#270).
-// `store.find` rather than `store.get`: on MySQL/PostgreSQL a model without
-// `static memory = true` is not in memory, and `get` returns undefined.
+// `store.find` rather than `store.get`: with a database adapter (MySQL,
+// Postgres, TimescaleDB or DynamoDB) a model without `static memory = true` is
+// not in memory, and `get` returns undefined.
 // Before hooks are awaited, so an async hook works here.
 beforeHook('delete', 'animal', async (context) => {
   const animal = await store.find('animal', context.request.recordId);
@@ -778,7 +779,8 @@ beforeHook('create', 'owner', (context) => {
 // Send notification after animal is adopted.
 // `oldState` holds attributes only, and a belongsTo is the related Record, not
 // its id: capture the previous owner's id before the update, compare ids after.
-// On SQL the owner resolves only when it is in memory (see MySQL Mode).
+// With a database adapter (MySQL, Postgres, TimescaleDB or DynamoDB) the owner
+// resolves only when it is in memory (see MySQL Mode).
 beforeHook('update', 'animal', async (context) => {
   context.state.previousOwnerId = (await store.find('animal', context.request.recordId))?.owner?.id;
 });
@@ -849,10 +851,11 @@ afterHook('delete', 'animal', async (context) => {
 // same value `access()` is handed. Authorizing on `context.params.id` instead
 // looks up the raw client text: on a numeric-id model that lookup returns
 // `undefined` for EVERY spelling, `animal.owner` throws, and the check never
-// runs. Measured; abofs/stonyx-orm#270. `store.find`, not `store.get`: on SQL a
-// model without `static memory = true` is not in memory. On SQL `animal.owner`
-// resolves only when the owner is in memory too, and is `null` otherwise, so this
-// check then refuses the owner as well (see MySQL Mode).
+// runs. Measured; abofs/stonyx-orm#270. `store.find`, not `store.get`: with a
+// database adapter (MySQL, Postgres, TimescaleDB or DynamoDB) a model without
+// `static memory = true` is not in memory, and `animal.owner` resolves only when
+// the owner is in memory too, and is `null` otherwise, so this check then
+// refuses the owner as well (see MySQL Mode).
 beforeHook('delete', 'animal', async (context) => {
   const user = context.state.currentUser;
   const animal = await store.find('animal', context.request.recordId);

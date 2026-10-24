@@ -177,9 +177,9 @@ beforeHook('delete', 'animal', async (context) => {
   // `context.params.id` is the raw client text — on a numeric-id model
   // `store.get('animal', context.params.id)` returns `undefined` for every
   // spelling, and `animal.protected` then throws. Measured;
-  // abofs/stonyx-orm#270. `store.find`, not `store.get`: on MySQL/PostgreSQL a
-  // model without `static memory = true` is not in memory, and `get` returns
-  // undefined. Before hooks are awaited, so an async hook works here.
+  // abofs/stonyx-orm#270. `store.find`, not `store.get`: with a database adapter
+  // (MySQL, Postgres, TimescaleDB or DynamoDB) a model without
+  // `static memory = true` is not in memory, and `get` returns undefined. Before hooks are awaited, so an async hook works here.
   const animal = await store.find('animal', context.request.recordId);
   if (animal.protected) {
     return { errors: [{ detail: 'Cannot delete protected animals' }] };
@@ -201,7 +201,8 @@ afterHook('update', 'animal', (context) => {
 
 // `oldState` holds attributes only, and a belongsTo is the related Record, not
 // its id. To detect a relationship change, capture the id before the update.
-// On SQL the owner resolves only when it is in memory (see internals.md).
+// With a database adapter (MySQL, Postgres, TimescaleDB or DynamoDB) the owner
+// resolves only when it is in memory (see internals.md).
 beforeHook('update', 'animal', async (context) => {
   context.state.previousOwnerId = (await store.find('animal', context.request.recordId))?.owner?.id;
 });

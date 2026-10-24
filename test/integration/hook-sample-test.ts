@@ -165,7 +165,9 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
     // The samples' ambient context. `store` is the real store behind a recorder,
     // so a sample's lookup returns exactly what the ORM's would.
     // Both reads are recorded: the samples use the async `store.find`, because
-    // on SQL a `memory: false` model is not in memory and `store.get` misses it.
+    // with a database adapter a `memory: false` model is not in memory and
+    // `store.get` misses it. The `get` branch models that miss (an id lookup
+    // returns undefined), so a sample that reverts to `store.get` fails here.
     globalThis.store = new Proxy(store, {
       get(target, prop, receiver) {
         if (prop === 'find') {
@@ -182,7 +184,7 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
         }
 
         return (model, ...rest) => {
-          const result = target.get(model, ...rest);
+          const result = rest.length > 0 ? undefined : target.get(model, ...rest);
           if (rest.length > 0) observedLookups.push({ model, id: rest[0], resolved: result != null });
           return result;
         };

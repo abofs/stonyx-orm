@@ -4,10 +4,10 @@ Behaviour of the ORM's internals that is easy to get wrong when changing the sou
 
 ## Store reads and the `memory` flag
 
-- `Model.memory` defaults to `false` (`src/model.ts`). Set `static memory = true` on a model to have the SQL adapters load its records into the store at startup; `loadMemoryRecords()` skips every model whose flag is `false` (`src/mysql/mysql-db.ts`).
-- `store.get(model, id)` is synchronous and reads memory only. `store.find()` and `store.findAll()` are async: for a `memory: true` model they read the store, for any other model they query the SQL adapter when one is configured, and in JSON mode they fall back to the store (`src/store.ts`). `store.query()` always goes to the SQL adapter when one exists. Calling `get()` on a `memory: false` model in SQL mode returns stale or missing data.
-- A record that `find()` reads from SQL resolves a `belongsTo` only when the related record is already in the store; otherwise the relationship is `null` (its linkage is `{ data: null }`), even though the foreign key was read. With both `animal` and `owner` left at `memory: false`, `(await store.find('animal', id)).owner` is `null`.
-- `createRecord()` on a `memory: false` model persists to SQL and then evicts the record from the store once the write settles (`src/manage-record.ts`).
+- `Model.memory` defaults to `false` (`src/model.ts`). Set `static memory = true` on a model to have a database adapter (MySQL, Postgres, TimescaleDB or DynamoDB) load its records into the store at startup; each adapter's `loadMemoryRecords()` skips every model whose flag is `false` (`src/mysql/mysql-db.ts`, `src/postgres/postgres-db.ts`, `src/dynamodb/dynamodb-db.ts`).
+- `store.get(model, id)` is synchronous and reads memory only. `store.find()` and `store.findAll()` are async: for a `memory: true` model they read the store, for any other model they query the database adapter when one is configured, and in JSON file or directory mode they fall back to the store (`src/store.ts`). `store.query()` always goes to the database adapter when one exists. Calling `get()` on a `memory: false` model with a database adapter returns stale or missing data.
+- A record that `find()` reads from a database adapter (MySQL, Postgres, TimescaleDB or DynamoDB) resolves a `belongsTo` only when the related record is already in the store; otherwise the relationship is `null` (its linkage is `{ data: null }`), even though the foreign key was read. With both `animal` and `owner` left at `memory: false`, `(await store.find('animal', id)).owner` is `null`.
+- `createRecord()` on a `memory: false` model persists through the database adapter and then evicts the record from the store once the write settles (`src/manage-record.ts`).
 
 ## Two write paths
 
