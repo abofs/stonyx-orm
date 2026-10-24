@@ -4,7 +4,7 @@
     "stonyx-async",
     "stonyx-module"
   ],
-  "version": "0.3.2-beta.282",
+  "version": "0.3.2-beta.283",
   "description": "",
   "main": "dist/index.js",
   "type": "module",
