@@ -127,7 +127,7 @@ const EXECUTED_HOOK_SAMPLE_FLOOR = { 'README.md': 4, 'docs/hooks.md': 3 };
  */
 const OBSERVATION_FLOOR = { lookups: 5, cacheKeys: 1, auditEntries: 3 };
 
-/** Every `store.get(model, id)` the executed samples made. */
+/** Every `store.get(model, id)` and `store.find(model, id)` the executed samples made. */
 const observedLookups = [];
 
 /** Every cache key an executed sample built. */
@@ -164,15 +164,27 @@ module('[Docs] executed hook samples (#270)', function(hooks) {
 
     // The samples' ambient context. `store` is the real store behind a recorder,
     // so a sample's lookup returns exactly what the ORM's would.
+    // Both reads are recorded: the samples use the async `store.find`, because
+    // with a database adapter a `memory: false` model is not in memory and
+    // `store.get` misses it. The `get` branch models that miss (an id lookup
+    // returns undefined), so a sample that reverts to `store.get` fails here.
     globalThis.store = new Proxy(store, {
       get(target, prop, receiver) {
+        if (prop === 'find') {
+          return async (model, ...rest) => {
+            const result = await target.find(model, ...rest);
+            if (rest.length > 0) observedLookups.push({ model, id: rest[0], resolved: result != null });
+            return result;
+          };
+        }
+
         if (prop !== 'get') {
           const value = Reflect.get(target, prop, receiver);
           return typeof value === 'function' ? value.bind(target) : value;
         }
 
         return (model, ...rest) => {
-          const result = target.get(model, ...rest);
+          const result = rest.length > 0 ? undefined : target.get(model, ...rest);
           if (rest.length > 0) observedLookups.push({ model, id: rest[0], resolved: result != null });
           return result;
         };

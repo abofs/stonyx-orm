@@ -9,7 +9,7 @@ A lightweight ORM for Stonyx projects, featuring model definitions, serializers,
 
 ## Highlights
 
-- **Automatic Loading**: Models, serializers, transforms, and access classes are auto-registered from their configured directories.
+- **Automatic Loading**: Models, serializers, transforms, views and access classes are auto-registered from their configured directories. Models, serializers, transforms and views are also loaded from subdirectories and named after their path (`models/admin/user-role.ts` registers `admin/user-role`); access classes are loaded only from the top level of `paths.access`, and one in a subdirectory is silently never loaded.
 - **Models**: Define attributes with type-safe proxies (`attr`) and relationships (`hasMany`, `belongsTo`).
 - **Serializers**: Map raw data into model-friendly structures, including nested properties.
 - **Transforms**: Apply custom transformations on data values automatically.
@@ -45,6 +45,21 @@ That is the whole install for an ORM-only app. The database drivers and
 not put them on disk, and none of them is loaded unless your configuration asks
 for it. Add only the ones you actually use — see
 [Optional peer dependencies](#optional-peer-dependencies).
+
+## Exports
+
+| Import path | What it exports |
+| :--- | :--- |
+| `@stonyx/orm` | `Orm` (default), `store`, `relationships`, the base classes `Model`, `View`, `Serializer`, the aggregate helpers `count`, `avg`, `sum`, `min`, `max` (see [docs/views.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/views.md)), the helpers listed in [Exported Helpers](#exported-helpers), and the types `OrmAccessRequest` and `PersistErrorDetail` |
+| `@stonyx/orm/db` | the live DB instance (default), `data` (its record) and `saveDB()`. It reads `Orm.db` when it is imported, so import it only after the ORM has initialized |
+| `@stonyx/orm/standalone-db` | `StandaloneDB` (default): reads and writes the JSON db files directly, without booting Stonyx or the ORM |
+| `@stonyx/orm/migrate` | `fileToDirectory()`, `directoryToFile()`: convert the JSON db between file and directory mode |
+| `@stonyx/orm/commands` | the `db:*` command map (default) that the Stonyx CLI loads; see [Database (DB) Integration](#database-db-integration) |
+| `@stonyx/orm/hooks` | `beforeHook`, `afterHook`, `clearHook`, `clearAllHooks`, `getBeforeHooks`, `getAfterHooks`, and the `HookContext` type |
+
+## Samples
+
+[`test/sample/`](https://github.com/abofs/stonyx-orm/tree/dev/test/sample) is the canonical usage reference: models, serializers, transforms, views and an access class that the test suite loads as a running app, so they stay correct. It is not included in the npm package.
 
 ## Usage example
 
@@ -298,7 +313,7 @@ In directory mode, each collection is stored as `{directory}/{collection}.json` 
 
 ### MySQL Mode
 
-Set the `MYSQL_HOST` environment variable to enable MySQL persistence. The ORM loads all records into memory on startup and persists CRUD operations to MySQL automatically. Supports schema-aware migration generation, apply, rollback, and drift detection.
+Set the `MYSQL_HOST` environment variable to enable MySQL persistence. At startup the ORM loads into memory only the records of models declared `static memory = true`; every other model (the default is `memory = false`) is read from MySQL on demand by `store.find()` / `store.findAll()`, and the synchronous `store.get()` does not see it (see [docs/internals.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/internals.md#store-reads-and-the-memory-flag)). A record read that way resolves a `belongsTo` only when the related record is already in memory; otherwise the relationship is `null`. CRUD operations are persisted to MySQL automatically. Supports schema-aware migration generation, apply, rollback, and drift detection.
 
 | Command | Description |
 |---------|-------------|
@@ -310,7 +325,7 @@ Set the `MYSQL_HOST` environment variable to enable MySQL persistence. The ORM l
 
 ### DynamoDB Mode
 
-Set the `DYNAMODB_REGION` environment variable to enable DynamoDB persistence. Tables are created with PAY_PER_REQUEST (on-demand) billing. Global Secondary Indexes (GSIs) are auto-provisioned at startup based on model `belongsTo` relationships — each FK column gets a GSI. `findAll()` with conditions routes to a GSI Query when the condition key matches a GSI partition key; non-indexed attribute conditions fall back to Scan + FilterExpression (expensive for large tables). ULID generation replaces auto-increment for numeric-ID models.
+Set the `DYNAMODB_REGION` environment variable to enable DynamoDB persistence. Tables are created with PAY_PER_REQUEST (on-demand) billing. Global Secondary Indexes (GSIs) are auto-provisioned at startup based on model `belongsTo` relationships — each FK column gets a GSI. `findAll()` with conditions routes to a GSI Query when the condition key matches a GSI partition key; non-indexed attribute conditions fall back to Scan + FilterExpression (expensive for large tables). ULID generation replaces auto-increment for numeric-ID models. The `memory` flag works as in [MySQL Mode](#mysql-mode): only `static memory = true` models are loaded at startup, every other model is read on demand by `store.find()` / `store.findAll()` and is not seen by `store.get()`, and a record read that way resolves a `belongsTo` only when the related record is already in memory.
 
 ```javascript
 dynamodb: {
@@ -355,12 +370,20 @@ MySQL integration tests run automatically when MySQL is available. In CI (where 
 
 ## REST Server Integration
 
-The ORM can automatically register REST routes using your access classes.
+The ORM registers REST routes for the models your access classes name. It does this itself during initialization when `restServer.enabled` is `'true'`; there is no setup function to import or call. Configure it in `config/environment.js`:
 
 ```js
-import setupRestServer from '@stonyx/orm/setup-rest-server';
-
-await setupRestServer('/', './access');
+export default {
+  orm: {
+    paths: {
+      access: './access' // directory of access classes
+    },
+    restServer: {
+      enabled: 'true', // requires @stonyx/rest-server, see Optional peer dependencies
+      route: '/'       // mount prefix for the generated routes
+    }
+  }
+};
 ```
 
 Access classes define models and provide custom filtering/authorization logic:
@@ -418,6 +441,11 @@ still the mount rather than the model. Deriving a model from it means every
 unrecognised spelling falls through to whatever your method returns next, so
 prefer one class per model. A class may still list several models in `models`
 when they share one rule.
+
+`access()` covers a model's own routes only: records of that model served
+through another model's `?include=`, `/:id/<relationship>` or
+`/:id/relationships/<relationship>` routes are never
+checked against it. See [docs/security.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/security.md).
 
 **Numeric ids: authorize on `request.recordId`, not on `request.params.id`.**
 `params.id` is raw text from the client. When it looks numeric the ORM coerces
@@ -616,6 +644,7 @@ GET /animals/1
 #### Limitations
 
 - Only available on GET endpoints (not POST/PATCH)
+- Included records are authorized only by the requested model's `access()`, not by their own model's, and `include` has no built-in cap on depth or on the number of paths; a long `include` blocks the server while it is walked. [docs/security.md](https://github.com/abofs/stonyx-orm/blob/dev/docs/security.md) has the measurements and an `access()` check that caps both.
 
 ## Lifecycle Hooks
 
@@ -714,8 +743,12 @@ beforeHook('create', 'animal', (context) => {
 // resolved the record by. `context.params.id` is the raw client text and is a
 // different value for every alias of the same id, so a lookup keyed on it
 // finds nothing on a numeric-id model (abofs/stonyx-orm#270).
-beforeHook('delete', 'animal', (context) => {
-  const animal = store.get('animal', context.request.recordId);
+// `store.find` rather than `store.get`: with a database adapter (MySQL,
+// Postgres, TimescaleDB or DynamoDB) a model without `static memory = true` is
+// not in memory, and `get` returns undefined.
+// Before hooks are awaited, so an async hook works here.
+beforeHook('delete', 'animal', async (context) => {
+  const animal = await store.find('animal', context.request.recordId);
   if (animal.protected) {
     return { errors: [{ detail: 'Cannot delete protected animals' }] };
   }
@@ -746,8 +779,10 @@ beforeHook('create', 'owner', (context) => {
 // Send notification after animal is adopted.
 // `oldState` holds attributes only, and a belongsTo is the related Record, not
 // its id: capture the previous owner's id before the update, compare ids after.
-beforeHook('update', 'animal', (context) => {
-  context.state.previousOwnerId = store.get('animal', context.request.recordId)?.owner?.id;
+// With a database adapter (MySQL, Postgres, TimescaleDB or DynamoDB) the owner
+// resolves only when it is in memory (see MySQL Mode).
+beforeHook('update', 'animal', async (context) => {
+  context.state.previousOwnerId = (await store.find('animal', context.request.recordId))?.owner?.id;
 });
 
 afterHook('update', 'animal', async (context) => {
@@ -816,10 +851,14 @@ afterHook('delete', 'animal', async (context) => {
 // same value `access()` is handed. Authorizing on `context.params.id` instead
 // looks up the raw client text: on a numeric-id model that lookup returns
 // `undefined` for EVERY spelling, `animal.owner` throws, and the check never
-// runs. Measured; abofs/stonyx-orm#270.
-beforeHook('delete', 'animal', (context) => {
+// runs. Measured; abofs/stonyx-orm#270. `store.find`, not `store.get`: with a
+// database adapter (MySQL, Postgres, TimescaleDB or DynamoDB) a model without
+// `static memory = true` is not in memory, and `animal.owner` resolves only when
+// the owner is in memory too, and is `null` otherwise, so this check then
+// refuses the owner as well (see MySQL Mode).
+beforeHook('delete', 'animal', async (context) => {
   const user = context.state.currentUser;
-  const animal = store.get('animal', context.request.recordId);
+  const animal = await store.find('animal', context.request.recordId);
 
   // `animal.owner` is the related Record, so compare its id. Refuse an unowned
   // animal outright: `animal.owner?.id !== user.id` lets a user with no id

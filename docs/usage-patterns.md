@@ -107,7 +107,8 @@ import { createRecord, updateRecord, store } from '@stonyx/orm';
 // Create
 createRecord('owner', { id: 'bob', age: 30 });
 
-// Read
+// Read (JSON file or directory mode, or a `memory: true` model; otherwise
+// `await store.find('owner', 'bob')`)
 const owner = store.get('owner', 'bob');
 const allOwners = store.get('owner');
 

@@ -172,13 +172,15 @@ beforeHook('create', 'animal', (context) => {
 ### Custom Error Response
 
 ```javascript
-beforeHook('delete', 'animal', (context) => {
+beforeHook('delete', 'animal', async (context) => {
   // `context.request.recordId` is the id the ORM resolved this record by.
   // `context.params.id` is the raw client text — on a numeric-id model
   // `store.get('animal', context.params.id)` returns `undefined` for every
   // spelling, and `animal.protected` then throws. Measured;
-  // abofs/stonyx-orm#270.
-  const animal = store.get('animal', context.request.recordId);
+  // abofs/stonyx-orm#270. `store.find`, not `store.get`: with a database adapter
+  // (MySQL, Postgres, TimescaleDB or DynamoDB) a model without
+  // `static memory = true` is not in memory, and `get` returns undefined. Before hooks are awaited, so an async hook works here.
+  const animal = await store.find('animal', context.request.recordId);
   if (animal.protected) {
     return { errors: [{ detail: 'Cannot delete protected animals' }] };
   }
@@ -199,8 +201,10 @@ afterHook('update', 'animal', (context) => {
 
 // `oldState` holds attributes only, and a belongsTo is the related Record, not
 // its id. To detect a relationship change, capture the id before the update.
-beforeHook('update', 'animal', (context) => {
-  context.state.previousOwnerId = store.get('animal', context.request.recordId)?.owner?.id;
+// With a database adapter (MySQL, Postgres, TimescaleDB or DynamoDB) the owner
+// resolves only when it is in memory (see internals.md).
+beforeHook('update', 'animal', async (context) => {
+  context.state.previousOwnerId = (await store.find('animal', context.request.recordId))?.owner?.id;
 });
 
 afterHook('update', 'animal', (context) => {

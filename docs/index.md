@@ -8,5 +8,8 @@
 - [Views](views.md) -- Read-only computed views with aggregate helpers, in-memory resolver, and MySQL VIEW auto-generation
 - [Hooks](hooks.md) -- Before/after hooks for CRUD operations, halting, context object, change detection, and testing
 - [Project Structure](project-structure.md) -- Source layout and component overview
-- [Improvements](improvements.md) -- Tracked improvement opportunities
+- [Internals](internals.md) -- Store read paths, write paths, unload order, adapters, initialisation
+- [Security](security.md) -- Where authorization happens and what the ORM does not check
+- [Testing](testing.md) -- Suite commands, ports, fixtures, singleton resets
+- [Code Style](code-style.md) -- Source conventions applied in review
 - [Release](release.md) -- Release process
