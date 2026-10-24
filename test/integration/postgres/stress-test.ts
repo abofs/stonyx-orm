@@ -4,7 +4,7 @@ import pg from 'pg';
 import { TEST_PG_CONFIG } from '../../helpers/pg-test-helper.js';
 
 // Stress test configuration
-const VECTOR_DIM = 128;    // Smaller dims for speed — 768d validated in beatrix-shared#55 benchmark
+const VECTOR_DIM = 128;    // Smaller dims for speed
 const SCALES = [10_000, 50_000, 100_000];
 const CONCURRENT_CONNECTIONS = 50;
 const CONCURRENT_OPS = 10_000;
