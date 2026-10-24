@@ -9,7 +9,7 @@ A lightweight ORM for Stonyx projects, featuring model definitions, serializers,
 
 ## Highlights
 
-- **Automatic Loading**: Models, serializers, transforms, and access classes are auto-registered from their configured directories.
+- **Automatic Loading**: Models, serializers, transforms, and access classes are auto-registered from their configured directories. Models, serializers, transforms and views are also loaded from subdirectories and named after their path (`models/admin/user-role.ts` registers `admin/user-role`); access classes are loaded only from the top level of `paths.access`, and one in a subdirectory is silently never loaded.
 - **Models**: Define attributes with type-safe proxies (`attr`) and relationships (`hasMany`, `belongsTo`).
 - **Serializers**: Map raw data into model-friendly structures, including nested properties.
 - **Transforms**: Apply custom transformations on data values automatically.
