@@ -604,7 +604,11 @@ export default class PostgresDB {
     while (this._queuedWrites.length > 0) {
       const writes = this._takeNextWriteGroup();
       writes.forEach(write => this._inFlightWrites.add(write));
-      await this._executeWriteGroup(writes);
+      try {
+        await this._executeWriteGroup(writes);
+      } catch (error) {
+        writes.filter(write => this._inFlightWrites.has(write)).forEach(write => write.reject(error));
+      }
     }
   }
 
@@ -702,10 +706,10 @@ export default class PostgresDB {
   private async _insertCreates(schema: ModelSchema, creates: PreparedCreate[]): Promise<void> {
     if (creates.length === 1) return this._insertCreatesOneByOne(schema, creates);
 
-    const { sql, values } = this.deps.buildInsertMany(schema.table, creates.map(({ row }) => row));
     let result: { rows: Record<string, unknown>[] };
 
     try {
+      const { sql, values } = this.deps.buildInsertMany(schema.table, creates.map(({ row }) => row));
       result = await this.requirePool().query(sql, values);
     } catch {
       return this._insertCreatesOneByOne(schema, creates);

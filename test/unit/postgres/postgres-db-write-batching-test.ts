@@ -243,6 +243,39 @@ module('[Unit] PostgresDB — write batching and queue bounds (#306)', function(
     assert.deepEqual(singleRowInserts.map(({ values }) => values[0]), [1, 2, 3, 4, 5], 'every sibling was retried on its own');
   });
 
+  test('a create group that throws before its insert rejects every write in it and the queue keeps draining', async function(assert) {
+    const records = [makeWidget(1, { name: 'a' }), makeWidget(2, { name: 'b' })];
+    const harness = createHarness({ records });
+    const schemaError = new Error('model introspection failed');
+    harness.deps.introspectModels.onSecondCall().throws(schemaError);
+
+    harness.holdNextQuery();
+    const inFlightWrite = harness.db.persist('delete', 'widget', { recordId: 999 }, {});
+    const queuedCreates = records.map(record => persistCreate(harness.db, record));
+    const laterDelete = harness.db.persist('delete', 'widget', { recordId: 998 }, {});
+    await harness.releaseHeldQuery();
+    const outcomes = await settle([inFlightWrite, ...queuedCreates, laterDelete]);
+
+    assert.deepEqual(outcomes, ['fulfilled', schemaError, schemaError, 'fulfilled'], 'the failed group rejects and the next write still runs');
+    assert.strictEqual(harness.db.pendingWriteCount, 0, 'no write is left in flight');
+  });
+
+  test('an insert whose SQL cannot be built rejects its writes instead of leaving them pending', async function(assert) {
+    const records = [makeWidget(1, { name: 'a' }), makeWidget(2, { name: 'b' })];
+    const harness = createHarness({ records });
+    harness.deps.introspectModels.returns({ widget: { ...widgetSchema, table: 'bad table' }, gadget: { ...widgetSchema, table: 'gadgets' } });
+
+    harness.holdNextQuery();
+    const inFlightWrite = harness.db.persist('delete', 'gadget', { recordId: 999 }, {});
+    const queuedCreates = records.map(record => persistCreate(harness.db, record));
+    await harness.releaseHeldQuery();
+    const outcomes = await settle([inFlightWrite, ...queuedCreates]);
+
+    assert.strictEqual(outcomes[0], 'fulfilled');
+    assert.true(outcomes.slice(1).every(outcome => /Invalid SQL table name/.test(outcome?.message)), 'each create rejects with the build error');
+    assert.strictEqual(harness.db.pendingWriteCount, 0, 'no write is left in flight');
+  });
+
   test('writes beyond writeQueueLimit are rejected while the queue is full, then accepted once it drains', async function(assert) {
     const records = Array.from({ length: 5 }, (_, index) => makeWidget(index + 1, { name: `widget-${index + 1}` }));
     const harness = createHarness({ records, pgConfig: { writeQueueLimit: 3 } });
