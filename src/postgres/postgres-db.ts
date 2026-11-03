@@ -2,7 +2,7 @@ import { getPool, closePool } from './connection.js';
 import { ensureMigrationsTable, getAppliedMigrations, getMigrationFiles, applyMigration, parseMigrationFile } from './migration-runner.js';
 import { introspectModels, introspectViews, getTopologicalOrder, schemasToSnapshot } from './schema-introspector.js';
 import { loadLatestSnapshot, detectSchemaDrift } from './migration-generator.js';
-import { buildInsert, buildUpdate, buildDelete, buildSelect, buildVectorSearch, buildHybridSearch } from './query-builder.js';
+import { buildInsert, buildInsertMany, buildUpdate, buildDelete, buildSelect, buildVectorSearch, buildHybridSearch } from './query-builder.js';
 import { store } from '@stonyx/orm';
 import { createRecord } from '../manage-record.js';
 import { confirm } from '@stonyx/utils/prompt';
@@ -26,6 +26,43 @@ interface PersistContext {
 
 interface PersistResponse {
   data?: { id: unknown };
+}
+
+interface QueuedWrite {
+  operation: string;
+  modelName: string;
+  context: PersistContext;
+  response: PersistResponse;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
+interface PreparedCreate {
+  write: QueuedWrite;
+  modelName: string;
+  record: OrmRecord;
+  row: Record<string, unknown>;
+  isPendingId: boolean;
+}
+
+type ExitEmitter = Pick<NodeJS.Process, 'once' | 'removeListener'>;
+
+const POSTGRES_MAX_BIND_PARAMETERS = 65535;
+const DEFAULT_WRITE_BATCH_SIZE = 500;
+const DEFAULT_WRITE_QUEUE_LIMIT = 10000;
+
+export class WriteQueueFullError extends Error {
+  constructor(limit: number) {
+    super(`PostgresDB write queue is full (${limit} queued writes, writeQueueLimit); the write was rejected`);
+    this.name = 'WriteQueueFullError';
+  }
+}
+
+export class WriteQueueClosedError extends Error {
+  constructor() {
+    super('PostgresDB is shutting down; the write was rejected');
+    this.name = 'WriteQueueClosedError';
+  }
 }
 
 interface SearchResult {
@@ -53,6 +90,7 @@ interface PostgresDeps {
   loadLatestSnapshot: typeof loadLatestSnapshot;
   detectSchemaDrift: typeof detectSchemaDrift;
   buildInsert: typeof buildInsert;
+  buildInsertMany: typeof buildInsertMany;
   buildUpdate: typeof buildUpdate;
   buildDelete: typeof buildDelete;
   buildSelect: typeof buildSelect;
@@ -68,6 +106,7 @@ interface PostgresDeps {
   config: typeof config;
   log: typeof log;
   path: typeof path;
+  process: ExitEmitter;
   [key: string]: unknown;
 }
 
@@ -76,8 +115,8 @@ const defaultDeps: PostgresDeps = {
   getMigrationFiles, applyMigration, parseMigrationFile,
   introspectModels, introspectViews, getTopologicalOrder, schemasToSnapshot,
   loadLatestSnapshot, detectSchemaDrift,
-  buildInsert, buildUpdate, buildDelete, buildSelect, buildVectorSearch, buildHybridSearch,
-  createRecord, store, confirm, readFile, getPluralName, config, log, path,
+  buildInsert, buildInsertMany, buildUpdate, buildDelete, buildSelect, buildVectorSearch, buildHybridSearch,
+  createRecord, store, confirm, readFile, getPluralName, config, log, path, process,
   convertRow, postgresJsonRule
 };
 
@@ -95,14 +134,11 @@ export default class PostgresDB {
   pool!: Pool | null;
   pgConfig!: Record<string, unknown>;
 
-  /**
-   * Promise-chain mutex for write serialization (#156).
-   * All persist() calls chain through this single queue so concurrent
-   * fire-and-forget writes never produce parallel transactions
-   * on FK-linked rows (which cause deadlocks).
-   * Reads are NOT affected — only persist() serializes.
-   */
-  private _writeQueue: Promise<void> = Promise.resolve();
+  private _queuedWrites: QueuedWrite[] = [];
+  private _inFlightWrites = new Set<QueuedWrite>();
+  private _drainingWrites: Promise<void> | null = null;
+  private _acceptingWrites = true;
+  private _exitReport: (() => void) | null = null;
 
   constructor(deps: Partial<PostgresDeps> = {}) {
     const Ctor = this.constructor as typeof PostgresDB;
@@ -126,6 +162,20 @@ export default class PostgresDB {
     );
     await this.deps.ensureMigrationsTable(this.pool, this.pgConfig.migrationsTable as string | undefined);
     await this.loadMemoryRecords();
+    this._acceptingWrites = true;
+    this._registerExitReport();
+  }
+
+  get writeBatchSize(): number {
+    return Number(this.pgConfig?.writeBatchSize) || DEFAULT_WRITE_BATCH_SIZE;
+  }
+
+  get writeQueueLimit(): number {
+    return Number(this.pgConfig?.writeQueueLimit) || DEFAULT_WRITE_QUEUE_LIMIT;
+  }
+
+  get pendingWriteCount(): number {
+    return this._inFlightWrites.size + this._queuedWrites.length;
   }
 
   async startup(): Promise<void> {
@@ -211,8 +261,34 @@ export default class PostgresDB {
   }
 
   async shutdown(): Promise<void> {
+    this._acceptingWrites = false;
+    while (this._drainingWrites) await this._drainingWrites;
+    this._unregisterExitReport();
     await this.deps.closePool();
     this.pool = null;
+  }
+
+  private _registerExitReport(): void {
+    if (this._exitReport) return;
+    this._exitReport = () => this._reportUnpersistedWrites();
+    this.deps.process.once('exit', this._exitReport);
+  }
+
+  private _unregisterExitReport(): void {
+    if (!this._exitReport) return;
+    this.deps.process.removeListener('exit', this._exitReport);
+    this._exitReport = null;
+  }
+
+  private _reportUnpersistedWrites(): void {
+    const lostWrites = [...this._inFlightWrites, ...this._queuedWrites];
+    if (lostWrites.length === 0) return;
+
+    const lostByModel = new Map<string, number>();
+    for (const { modelName } of lostWrites) lostByModel.set(modelName, (lostByModel.get(modelName) ?? 0) + 1);
+    const breakdown = [...lostByModel].map(([modelName, count]) => `${modelName}: ${count}`).join(', ');
+
+    this.deps.log.error?.(`[PostgresDB] Process exiting with ${lostWrites.length} queued write(s) not persisted; they are lost (${breakdown})`);
   }
 
   async save(): Promise<void> {
@@ -494,77 +570,181 @@ export default class PostgresDB {
   }
 
   async persist(operation: string, modelName: string, context: PersistContext, response: PersistResponse): Promise<void> {
-    // Views are read-only -- no-op for all write operations
     const Orm = (await import('@stonyx/orm')).default;
     if ((Orm.instance as { isView?: (name: string) => boolean })?.isView?.(modelName)) return;
 
-    const work = async () => {
-      switch (operation) {
-        case 'create':
-          return this._persistCreate(modelName, context, response);
-        case 'update':
-          return this._persistUpdate(modelName, context, response);
-        case 'delete':
-          return this._persistDelete(modelName, context);
-      }
-    };
+    if (!this._acceptingWrites) throw new WriteQueueClosedError();
+    if (this._queuedWrites.length >= this.writeQueueLimit) throw new WriteQueueFullError(this.writeQueueLimit);
 
-    // Chain through the write queue — .then(work, work) ensures the queue
-    // advances even when a previous persist rejects (#156).
-    this._writeQueue = this._writeQueue.then(work, work);
-    return this._writeQueue;
+    return new Promise<void>((resolve, reject) => {
+      const write: QueuedWrite = {
+        operation, modelName, context, response,
+        resolve: () => {
+          this._inFlightWrites.delete(write);
+          resolve();
+        },
+        reject: (error: unknown) => {
+          this._inFlightWrites.delete(write);
+          reject(error);
+        },
+      };
+      this._queuedWrites.push(write);
+      this._drainWritesInBackground();
+    });
   }
 
-  private async _persistCreate(modelName: string, context: PersistContext, response: PersistResponse): Promise<void> {
-    const schemas = this.deps.introspectModels();
-    const schema = schemas[modelName];
+  private _drainWritesInBackground(): void {
+    if (this._drainingWrites) return;
+    this._drainingWrites = this._drainQueuedWrites().finally(() => {
+      this._drainingWrites = null;
+    });
+  }
 
-    if (!schema) return;
+  private async _drainQueuedWrites(): Promise<void> {
+    while (this._queuedWrites.length > 0) {
+      const writes = this._takeNextWriteGroup();
+      writes.forEach(write => this._inFlightWrites.add(write));
+      await this._executeWriteGroup(writes);
+    }
+  }
 
+  private _takeNextWriteGroup(): QueuedWrite[] {
+    const [first] = this._queuedWrites;
+    let groupSize = 1;
+
+    if (first.operation === 'create') {
+      while (
+        groupSize < this.writeBatchSize
+        && groupSize < this._queuedWrites.length
+        && this._queuedWrites[groupSize].operation === 'create'
+        && this._queuedWrites[groupSize].modelName === first.modelName
+      ) groupSize++;
+    }
+
+    return this._queuedWrites.splice(0, groupSize);
+  }
+
+  private async _executeWriteGroup(writes: QueuedWrite[]): Promise<void> {
+    const [first] = writes;
+    if (first.operation === 'create') return this._persistCreates(first.modelName, writes);
+
+    try {
+      if (first.operation === 'update') await this._persistUpdate(first.modelName, first.context, first.response);
+      if (first.operation === 'delete') await this._persistDelete(first.modelName, first.context);
+      first.resolve();
+    } catch (error) {
+      first.reject(error);
+    }
+  }
+
+  private async _persistCreates(modelName: string, writes: QueuedWrite[]): Promise<void> {
+    const schema = this.deps.introspectModels()[modelName];
+    const prepared: PreparedCreate[] = [];
+
+    for (const write of writes) {
+      try {
+        const create = schema ? this._prepareCreate(modelName, schema, write) : null;
+        if (create) prepared.push(create);
+        else write.resolve();
+      } catch (error) {
+        write.reject(error);
+      }
+    }
+
+    for (const chunk of this._chunkWithinBindParameterLimit(prepared)) {
+      await this._insertCreates(schema, chunk);
+    }
+  }
+
+  private _prepareCreate(modelName: string, schema: ModelSchema, write: QueuedWrite): PreparedCreate | null {
+    const { context, response } = write;
     const recordId = response?.data?.id;
     const storeRef = this.deps.store as unknown as {
       get(name: string, id: unknown): OrmRecord | null;
     };
     const record = recordId != null ? storeRef.get(modelName, isNaN(recordId as number) ? recordId : parseInt(recordId as string)) : null;
 
-    if (!record) return;
+    if (!record) return null;
 
     const insertData = this._recordToRow(record, schema, context.rawData);
-
-    // For auto-increment models, remove the pending ID.
-    // Check context.rawData (not record.__data) because __pendingSqlId is not a model
-    // attribute and gets lost during serialization.
     const isPendingId = context.rawData?.__pendingSqlId === true;
 
-    if (isPendingId) {
-      delete insertData.id;
-    }
+    if (isPendingId) delete insertData.id;
 
-    // Convert the *complete* payload (attributes + id + FKs) in one place (#292).
     const row = this.deps.convertRow(insertData, schema.columns, this.deps.postgresJsonRule);
 
-    const { sql, values } = this.deps.buildInsert(schema.table, row);
+    return { write, modelName, record, row, isPendingId };
+  }
 
-    const result = await this.requirePool().query(sql, values);
+  private _chunkWithinBindParameterLimit(prepared: PreparedCreate[]): PreparedCreate[][] {
+    const chunks: PreparedCreate[][] = [];
+    let chunk: PreparedCreate[] = [];
+    let chunkColumns = new Set<string>();
 
-    // Re-key the record in the store if PostgreSQL generated the ID (via RETURNING)
-    if (isPendingId && result.rows.length > 0) {
-      const pendingId = record.id;
-      const realId = result.rows[0].id as string | number;
-      const modelStore = (this.deps.store as unknown as { get(name: string): Map<unknown, unknown> }).get(modelName);
+    for (const create of prepared) {
+      const columnsWithCreate = new Set([...chunkColumns, ...Object.keys(create.row)]);
 
-      modelStore.delete(pendingId);
-      record.__data.id = realId;
-      record.id = realId;
-      modelStore.set(realId, record);
-
-      // Update the response data with the real ID
-      if (response?.data) {
-        response.data.id = realId;
+      if (chunk.length > 0 && (chunk.length + 1) * columnsWithCreate.size > POSTGRES_MAX_BIND_PARAMETERS) {
+        chunks.push(chunk);
+        chunk = [];
+        chunkColumns = new Set(Object.keys(create.row));
+      } else {
+        chunkColumns = columnsWithCreate;
       }
 
-      delete record.__data.__pendingSqlId;
+      chunk.push(create);
     }
+
+    if (chunk.length > 0) chunks.push(chunk);
+    return chunks;
+  }
+
+  private async _insertCreates(schema: ModelSchema, creates: PreparedCreate[]): Promise<void> {
+    if (creates.length === 1) return this._insertCreatesOneByOne(schema, creates);
+
+    const { sql, values } = this.deps.buildInsertMany(schema.table, creates.map(({ row }) => row));
+    let result: { rows: Record<string, unknown>[] };
+
+    try {
+      result = await this.requirePool().query(sql, values);
+    } catch {
+      return this._insertCreatesOneByOne(schema, creates);
+    }
+
+    creates.forEach((create, index) => {
+      this._adoptGeneratedId(create, result.rows[index]);
+      create.write.resolve();
+    });
+  }
+
+  private async _insertCreatesOneByOne(schema: ModelSchema, creates: PreparedCreate[]): Promise<void> {
+    for (const create of creates) {
+      try {
+        const { sql, values } = this.deps.buildInsert(schema.table, create.row);
+        const result = await this.requirePool().query(sql, values);
+        this._adoptGeneratedId(create, result.rows[0]);
+        create.write.resolve();
+      } catch (error) {
+        create.write.reject(error);
+      }
+    }
+  }
+
+  private _adoptGeneratedId({ modelName, record, isPendingId, write }: PreparedCreate, returnedRow: Record<string, unknown> | undefined): void {
+    if (!isPendingId || !returnedRow) return;
+
+    const pendingId = record.id;
+    const realId = returnedRow.id as string | number;
+    const modelStore = (this.deps.store as unknown as { get(name: string): Map<unknown, unknown> }).get(modelName);
+
+    modelStore.delete(pendingId);
+    record.__data.id = realId;
+    record.id = realId;
+    modelStore.set(realId, record);
+
+    if (write.response?.data) write.response.data.id = realId;
+
+    delete record.__data.__pendingSqlId;
   }
 
   private async _persistUpdate(modelName: string, context: PersistContext, _response: PersistResponse): Promise<void> {

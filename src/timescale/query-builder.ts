@@ -1,5 +1,4 @@
-// Re-export all base PostgreSQL query builders
-export { validateIdentifier, buildInsert, buildUpdate, buildDelete, buildSelect } from '../postgres/query-builder.js';
+export { validateIdentifier, buildInsert, buildInsertMany, buildUpdate, buildDelete, buildSelect } from '../postgres/query-builder.js';
 
 import { validateIdentifier } from '../postgres/query-builder.js';
 
