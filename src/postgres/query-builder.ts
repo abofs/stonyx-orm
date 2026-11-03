@@ -37,6 +37,27 @@ export function buildInsert(table: string, data: Record<string, unknown>): Query
   return { sql, values };
 }
 
+export function buildInsertMany(table: string, rows: Record<string, unknown>[]): QueryResult {
+  validateIdentifier(table, 'table name');
+
+  const columns = [...new Set(rows.flatMap(row => Object.keys(row)))];
+  columns.forEach(column => validateIdentifier(column, 'column name'));
+
+  const values: unknown[] = [];
+  const tuples = rows.map(row => {
+    const cells = columns.map(column => {
+      if (!Object.hasOwn(row, column)) return 'DEFAULT';
+      values.push(row[column]);
+      return `$${values.length}`;
+    });
+    return `(${cells.join(', ')})`;
+  });
+
+  const sql = `INSERT INTO "${table}" (${columns.map(column => `"${column}"`).join(', ')}) VALUES ${tuples.join(', ')} RETURNING "id"`;
+
+  return { sql, values };
+}
+
 export function buildUpdate(table: string, id: unknown, data: Record<string, unknown>): QueryResult {
   validateIdentifier(table, 'table name');
 
