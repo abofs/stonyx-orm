@@ -285,7 +285,7 @@ const KNOWN_COERCION_SITES = {
   // these normalises a RESPONSE id (`response?.data?.id`), not a URL id.
   'src/orm-request.ts:524': 'create-response path duplicate — split out of #270; #282 closed unfixed in the 2026-09 backlog reset, currently untracked',
   'src/postgres/postgres-db.ts:669': 'persist path duplicate — split out of #270; #282 closed unfixed in the 2026-09 backlog reset, currently untracked',
-  'src/mysql/mysql-db.ts:450': 'persist path duplicate — split out of #270; #282 closed unfixed in the 2026-09 backlog reset, currently untracked',
+  'src/mysql/mysql-db.ts:591': 'persist path duplicate — split out of #270; #282 closed unfixed in the 2026-09 backlog reset, currently untracked',
 
   // Not a copy of the normaliser, and — the load-bearing half — NOT ON ANY
   // REQUEST PATH: `src/cli.ts` is its only importer in `src/`, so no route, no

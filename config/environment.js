@@ -19,6 +19,8 @@ const {
   MYSQL_DATABASE,
   MYSQL_CONNECTION_LIMIT,
   MYSQL_MIGRATIONS_DIR,
+  MYSQL_WRITE_BATCH_SIZE,
+  MYSQL_WRITE_QUEUE_LIMIT,
   PG_HOST,
   PG_PORT,
   PG_USER,
@@ -70,6 +72,8 @@ export default {
     connectionLimit: parseInt(MYSQL_CONNECTION_LIMIT ?? '10'),
     migrationsDir: MYSQL_MIGRATIONS_DIR ?? 'migrations',
     migrationsTable: '__migrations',
+    writeBatchSize: parseInt(MYSQL_WRITE_BATCH_SIZE ?? '500'),
+    writeQueueLimit: parseInt(MYSQL_WRITE_QUEUE_LIMIT ?? '10000'),
   } : undefined,
   postgres: PG_HOST ? {
     host: PG_HOST ?? 'localhost',

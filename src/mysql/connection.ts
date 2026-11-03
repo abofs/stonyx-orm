@@ -10,6 +10,8 @@ interface MysqlConfig {
   migrationsTable?: string;
   migrationsDir?: string;
   autoMigrate?: boolean;
+  writeBatchSize?: number;
+  writeQueueLimit?: number;
 }
 
 let pool: Pool | null = null;
